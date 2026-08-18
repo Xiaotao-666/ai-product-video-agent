@@ -26,6 +26,26 @@ class WebErrorResponse(BaseModel):
     error: WebErrorDetail
 
 
+class WebApiError(Exception):
+    """An expected API failure whose client representation is explicitly safe."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        error_type: str,
+        code: str,
+        message: str,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(code)
+        self.status_code = status_code
+        self.error_type = error_type
+        self.code = code
+        self.safe_message = message
+        self.retryable = retryable
+
+
 def request_correlation_id(request: Request) -> str:
     return getattr(request.state, "correlation_id", "req_unavailable")
 
@@ -95,6 +115,20 @@ async def validation_exception_handler(
     )
 
 
+async def api_exception_handler(
+    request: Request,
+    exception: WebApiError,
+) -> JSONResponse:
+    return error_response(
+        request,
+        status_code=exception.status_code,
+        error_type=exception.error_type,
+        code=exception.code,
+        message=exception.safe_message,
+        retryable=exception.retryable,
+    )
+
+
 async def unexpected_exception_handler(
     request: Request,
     exception: Exception,
@@ -110,4 +144,5 @@ async def unexpected_exception_handler(
 def register_exception_handlers(application: FastAPI) -> None:
     application.add_exception_handler(StarletteHTTPException, http_exception_handler)
     application.add_exception_handler(RequestValidationError, validation_exception_handler)
+    application.add_exception_handler(WebApiError, api_exception_handler)
     application.add_exception_handler(Exception, unexpected_exception_handler)
