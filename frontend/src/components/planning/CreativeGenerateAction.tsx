@@ -15,6 +15,7 @@ const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 interface CreativeGenerateActionProps {
   projectId: string;
   availableActions: AvailableAction[];
+  hasCreative: boolean | null;
   onTerminalRefresh: () => Promise<void>;
 }
 
@@ -37,11 +38,16 @@ function actionError(caught: unknown): ActionError {
   };
 }
 
-function taskStatusCopy(task: TaskRecord | null, submitting: boolean): string {
+function taskStatusCopy(
+  task: TaskRecord | null,
+  submitting: boolean,
+  hasCreative: boolean | null,
+): string {
   if (submitting) return "正在提交创意生成任务…";
-  if (!task) return "未开始";
-  if (task.status === "QUEUED") return "排队中…";
-  if (task.status === "RUNNING") return "正在生成创意…";
+  if (task?.status === "QUEUED") return "排队中…";
+  if (task?.status === "RUNNING") return "正在生成创意…";
+  if (hasCreative) return "已生成";
+  if (!task) return hasCreative === false ? "未开始" : "正在确认状态…";
   if (task.status === "SUCCEEDED") return "生成成功";
   if (task.status === "FAILED") return "生成失败";
   if (task.status === "INTERRUPTED") return "任务中断";
@@ -67,6 +73,7 @@ function safeErrorCopy(error: ActionError): string {
 export function CreativeGenerateAction({
   projectId,
   availableActions,
+  hasCreative,
   onTerminalRefresh,
 }: CreativeGenerateActionProps) {
   const [task, setTask] = useState<TaskRecord | null>(null);
@@ -186,7 +193,7 @@ export function CreativeGenerateAction({
 
   const showGenerateButton =
     canGenerate && task?.status !== "SUCCEEDED" && !active;
-  const statusCopy = taskStatusCopy(task, submitting);
+  const statusCopy = taskStatusCopy(task, submitting, hasCreative);
 
   return (
     <section
@@ -203,14 +210,14 @@ export function CreativeGenerateAction({
         </span>
       </div>
 
-      {task?.status === "FAILED" && (
+      {task?.status === "FAILED" && !hasCreative && (
         <div className="creative-action-message creative-action-error" role="alert">
           <strong>创意生成失败。</strong>
           <span>{task.error?.message ?? "请刷新项目状态后重试。"}</span>
           <small>错误编号：{task.correlation_id}</small>
         </div>
       )}
-      {task?.status === "INTERRUPTED" && (
+      {task?.status === "INTERRUPTED" && !hasCreative && (
         <div className="creative-action-message" role="status">
           <strong>上次生成任务被中断。</strong>
           <span>已重新检查 Creative 与 Workflow，请根据当前项目状态继续。</span>
@@ -233,7 +240,10 @@ export function CreativeGenerateAction({
           {submitting ? "正在提交…" : "生成创意"}
         </button>
       )}
-      {!canGenerate && !active && task?.status !== "SUCCEEDED" && (
+      {!canGenerate &&
+        !active &&
+        hasCreative === false &&
+        task?.status !== "SUCCEEDED" && (
         <p className="stage-empty-copy">当前项目状态不允许生成创意。</p>
       )}
     </section>

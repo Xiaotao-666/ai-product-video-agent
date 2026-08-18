@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock
+from typing import Iterator
 
 from web_backend.middleware import select_correlation_id
 from web_backend.models.tasks import (
@@ -97,6 +99,21 @@ class TaskService:
             project_id=canonical_project_id,
             tasks=self._repository.list_for_project(canonical_project_id),
         )
+
+    def active_for_project(self, project_id: str) -> TaskRecord | None:
+        """Return an active task without creating runtime storage."""
+
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        return self._repository.find_active_for_project(canonical_project_id)
+
+    @contextmanager
+    def prevent_task_submission(self) -> Iterator[None]:
+        """Keep a short synchronous action atomic with task submission."""
+
+        with self._submission_guard:
+            yield
 
     def recover_interrupted_tasks(self) -> list[TaskRecord]:
         return self._repository.interrupt_active_tasks()

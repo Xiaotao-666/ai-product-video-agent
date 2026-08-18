@@ -26,6 +26,7 @@ interface PlanningStageContentProps {
   projectId: string;
   stageKey: StageKey;
   creativeRefresh?: CreativeRefreshSnapshot | null;
+  onCreativeLoaded?: (response: CreativeContentResponse) => void;
 }
 
 export interface CreativeRefreshSnapshot {
@@ -305,6 +306,7 @@ export function PlanningStageContent({
   projectId,
   stageKey,
   creativeRefresh = null,
+  onCreativeLoaded,
 }: PlanningStageContentProps) {
   const planningStageKey = isPlanningStageKey(stageKey) ? stageKey : null;
   const [state, setState] = useState<ContentState>("loading");
@@ -324,6 +326,9 @@ export function PlanningStageContent({
           code: "INVALID_RESPONSE",
         });
       }
+      if (planningStageKey === "creative") {
+        onCreativeLoaded?.(result as CreativeContentResponse);
+      }
       setResponse(result);
       setState("success");
     } catch (caught) {
@@ -333,7 +338,7 @@ export function PlanningStageContent({
       });
       setState("error");
     }
-  }, [planningStageKey, projectId]);
+  }, [onCreativeLoaded, planningStageKey, projectId]);
 
   useEffect(() => {
     if (planningStageKey) void loadContent();
@@ -344,11 +349,12 @@ export function PlanningStageContent({
       planningStageKey === "creative" &&
       creativeRefresh?.response.project_id === projectId
     ) {
+      onCreativeLoaded?.(creativeRefresh.response);
       setResponse(creativeRefresh.response);
       setError(null);
       setState("success");
     }
-  }, [creativeRefresh, planningStageKey, projectId]);
+  }, [creativeRefresh, onCreativeLoaded, planningStageKey, projectId]);
 
   if (!planningStageKey) return null;
 

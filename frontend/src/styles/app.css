@@ -2253,6 +2253,48 @@
   color: #77838d;
 }
 
+.creative-approve-copy {
+  max-width: 720px;
+  margin: 0 0 18px;
+  color: #5f6c76;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.creative-approval-confirmation {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  background: #fffdf5;
+  border: 1px solid #e8ddba;
+  border-radius: 9px;
+}
+
+.creative-approval-confirmation p {
+  margin: 0;
+  color: #68747d;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.creative-approval-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.creative-approval-success {
+  border-color: #dce8bf;
+  background: #f5f9ec;
+}
+
+.creative-storyboard-link {
+  justify-self: start;
+  margin-top: 7px;
+  text-decoration: none;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;

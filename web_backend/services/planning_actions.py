@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
-from web_backend.models.projects import AvailableAction
+from web_backend.locking import (
+    DEFAULT_PROJECT_LOCK_MANAGER,
+    ProjectLockBusy,
+    ProjectLockManager,
+)
+from web_backend.models.projects import (
+    AvailableAction,
+    ProjectWorkflowResponse,
+)
 from web_backend.models.tasks import (
     TaskError,
     TaskOperation,
     TaskRecord,
     TaskResultReference,
 )
-from web_backend.repositories.project_repository import ProjectRepository
+from web_backend.repositories.project_repository import (
+    ProjectDataCorrupt,
+    ProjectRepository,
+)
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.task_runner import TaskExecutionFailure
 from web_backend.services.tasks import TaskService
@@ -34,17 +45,19 @@ def _task_failure(code: str, message: str, *, retryable: bool = False) -> None:
 
 
 class CreativeActionService:
-    """Validate and enqueue the one supported Creative generation action."""
+    """Own the supported Creative generate and approve Web actions."""
 
     def __init__(
         self,
         project_repository: ProjectRepository,
         task_service: TaskService,
         capability_service: CapabilityService,
+        project_lock_manager: ProjectLockManager = DEFAULT_PROJECT_LOCK_MANAGER,
     ) -> None:
         self._project_repository = project_repository
         self._task_service = task_service
         self._capability_service = capability_service
+        self._project_lock_manager = project_lock_manager
 
     def submit_generate(
         self,
@@ -66,10 +79,72 @@ class CreativeActionService:
             callable_=lambda: self._run_generate(canonical_project_id),
         )
 
+    def approve(self, project_id: str) -> ProjectWorkflowResponse:
+        """Synchronously approve Creative under the per-project write lock."""
+
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        with self._task_service.prevent_task_submission():
+            self._require_no_active_task(canonical_project_id)
+            self._require_approve_allowed(canonical_project_id)
+
+            try:
+                with self._project_lock_manager.project_write(canonical_project_id):
+                    # Both checks intentionally repeat inside the lock. State
+                    # may have changed after preflight; task submission stays
+                    # blocked until this short transaction finishes.
+                    self._require_no_active_task(canonical_project_id)
+                    self._require_approve_allowed(canonical_project_id)
+
+                    from creative_workflow import (
+                        CreativeApprovalError,
+                        approve_creative_stage,
+                    )
+                    from project_manager import create_project_paths
+                    from project_state import ProjectCheckpoint, ProjectStateError
+
+                    try:
+                        paths = create_project_paths(
+                            self._project_repository.resolve_project_dir(
+                                canonical_project_id
+                            ),
+                            ensure_directories=False,
+                        )
+                        checkpoint = ProjectCheckpoint.load(paths)
+                        approve_creative_stage(checkpoint)
+                    except CreativeApprovalError as error:
+                        raise ActionNotAllowed(
+                            "Creative approval is not allowed"
+                        ) from error
+                    except ProjectStateError as error:
+                        raise ProjectDataCorrupt(
+                            "project checkpoint is unreadable"
+                        ) from error
+
+                    return self._project_repository.get_workflow(
+                        canonical_project_id
+                    )
+            except ProjectLockBusy as error:
+                from web_backend.services.projects import ProjectBusy
+
+                raise ProjectBusy("project write lock is busy") from error
+
     def _require_generate_allowed(self, project_id: str) -> None:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.GENERATE_CREATIVE not in workflow.available_actions:
             raise ActionNotAllowed("Creative generation is not allowed")
+
+    def _require_approve_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.APPROVE_CREATIVE not in workflow.available_actions:
+            raise ActionNotAllowed("Creative approval is not allowed")
+
+    def _require_no_active_task(self, project_id: str) -> None:
+        if self._task_service.active_for_project(project_id) is not None:
+            from web_backend.services.projects import ProjectBusy
+
+            raise ProjectBusy("project already has an active Web task")
 
     def _deepseek_available(self) -> bool:
         return self._capability_service.get_capabilities().planning.deepseek.available

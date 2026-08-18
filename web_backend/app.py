@@ -91,6 +91,7 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.project_repository,
         application.state.task_service,
         application.state.capability_service,
+        lock_manager,
     )
     application.state.local_resources_initialized = True
 

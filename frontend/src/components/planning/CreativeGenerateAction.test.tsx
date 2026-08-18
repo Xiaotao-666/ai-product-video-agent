@@ -7,7 +7,12 @@ import {
   getProjectTasks,
   getTask,
 } from "../../api/client";
-import type { TaskOperation, TaskRecord, TaskStatus } from "../../api/types";
+import type {
+  AvailableAction,
+  TaskOperation,
+  TaskRecord,
+  TaskStatus,
+} from "../../api/types";
 import { CreativeGenerateAction } from "./CreativeGenerateAction";
 
 
@@ -69,19 +74,29 @@ async function advancePoll(): Promise<void> {
 }
 
 function renderAction(
-  availableActions: ("GENERATE_CREATIVE" | "APPROVE_CREATIVE")[] = [
-    "GENERATE_CREATIVE",
-  ],
+  availableActions: AvailableAction[] = ["GENERATE_CREATIVE"],
+  hasCreative: boolean | null = false,
 ) {
   const onTerminalRefresh = vi.fn().mockResolvedValue(undefined);
   const view = render(
     <CreativeGenerateAction
       projectId={projectId}
       availableActions={availableActions}
+      hasCreative={hasCreative}
       onTerminalRefresh={onTerminalRefresh}
     />,
   );
-  return { ...view, onTerminalRefresh };
+  const rerenderCreative = (nextHasCreative: boolean | null) => {
+    view.rerender(
+      <CreativeGenerateAction
+        projectId={projectId}
+        availableActions={availableActions}
+        hasCreative={nextHasCreative}
+        onTerminalRefresh={onTerminalRefresh}
+      />,
+    );
+  };
+  return { ...view, onTerminalRefresh, rerenderCreative };
 }
 
 describe("CreativeGenerateAction", () => {
@@ -113,6 +128,22 @@ describe("CreativeGenerateAction", () => {
     expect(screen.queryByRole("button", { name: "生成创意" })).not.toBeInTheDocument();
     expect(screen.getByText("当前项目状态不允许生成创意。")).toBeInTheDocument();
   });
+
+  it.each([
+    ["WAITING_REVIEW", ["APPROVE_CREATIVE"] satisfies AvailableAction[]],
+    ["APPROVED", ["GENERATE_STORYBOARD"] satisfies AvailableAction[]],
+  ])(
+    "uses persisted Creative content for %s instead of available actions",
+    async (_reviewState, actions) => {
+      renderAction(actions, true);
+      await flush();
+      expect(screen.getByText("已生成")).toBeInTheDocument();
+      expect(screen.queryByText("未开始")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("当前项目状态不允许生成创意。"),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("submits the correct project and displays QUEUED", async () => {
     mockGenerate.mockResolvedValue({ data: record("QUEUED"), correlationId: "req_post" });
@@ -182,6 +213,20 @@ describe("CreativeGenerateAction", () => {
     expect(mockTask).toHaveBeenCalledTimes(1);
   });
 
+  it("shows persisted Generated after a SUCCEEDED refresh", async () => {
+    mockGenerate.mockResolvedValue({ data: record("QUEUED"), correlationId: null });
+    mockTask.mockResolvedValue({ data: record("SUCCEEDED"), correlationId: null });
+    const { rerenderCreative } = renderAction();
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "生成创意" }));
+    await flush();
+    await advancePoll();
+    await flush();
+    rerenderCreative(true);
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(screen.queryByText("未开始")).not.toBeInTheDocument();
+  });
+
   it("stops polling on FAILED and displays only safe task error fields", async () => {
     mockGenerate.mockResolvedValue({ data: record("QUEUED"), correlationId: null });
     mockTask.mockResolvedValue({ data: record("FAILED"), correlationId: null });
@@ -209,6 +254,36 @@ describe("CreativeGenerateAction", () => {
     expect(screen.getByText("上次生成任务被中断。")).toBeInTheDocument();
     expect(onTerminalRefresh).toHaveBeenCalledTimes(1);
     expect(mockGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers persisted Creative over an INTERRUPTED task record", async () => {
+    mockGenerate.mockResolvedValue({ data: record("QUEUED"), correlationId: null });
+    mockTask.mockResolvedValue({ data: record("INTERRUPTED"), correlationId: null });
+    const { rerenderCreative } = renderAction();
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "生成创意" }));
+    await flush();
+    await advancePoll();
+    await flush();
+    rerenderCreative(true);
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(screen.queryByText("任务中断")).not.toBeInTheDocument();
+    expect(screen.queryByText("上次生成任务被中断。")).not.toBeInTheDocument();
+  });
+
+  it("prefers persisted Creative over a FAILED task record", async () => {
+    mockGenerate.mockResolvedValue({ data: record("QUEUED"), correlationId: null });
+    mockTask.mockResolvedValue({ data: record("FAILED"), correlationId: null });
+    const { rerenderCreative } = renderAction();
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "生成创意" }));
+    await flush();
+    await advancePoll();
+    await flush();
+    rerenderCreative(true);
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(screen.queryByText("生成失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("创意生成失败。")).not.toBeInTheDocument();
   });
 
   it("recovers an active Creative task after page refresh and resumes polling", async () => {

@@ -1689,6 +1689,22 @@ export async function generateCreative(
   };
 }
 
+export async function approveCreative(
+  projectId: string,
+): Promise<ApiResult<ProjectWorkflowResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/creative/approve`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseProjectWorkflow(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
 export async function createProject(
   project: CreateProjectRequest,
 ): Promise<ApiResult<CreateProjectResponse>> {

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from web_backend.dependencies import get_creative_action_service
 from web_backend.errors import registered_api_error
+from web_backend.models.projects import ProjectWorkflowResponse
 from web_backend.models.tasks import TaskRecord
 from web_backend.repositories.project_repository import (
     InvalidProjectId,
@@ -73,3 +74,25 @@ def generate_creative(
 
     response.headers["Location"] = f"/api/tasks/{task.task_id}"
     return task
+
+
+@router.post(
+    "/projects/{project_id}/planning/creative/approve",
+    response_model=ProjectWorkflowResponse,
+    status_code=200,
+)
+def approve_creative(
+    project_id: str,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> ProjectWorkflowResponse:
+    try:
+        return service.approve(project_id)
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useParams } from "react-router-dom";
 
 import {
@@ -17,6 +17,7 @@ import { PostProductionStageContent } from "../components/PostProductionStageCon
 import { PlanningStageContent } from "../components/planning/PlanningStageContent";
 import type { CreativeRefreshSnapshot } from "../components/planning/PlanningStageContent";
 import { CreativeGenerateAction } from "../components/planning/CreativeGenerateAction";
+import { CreativeApproveAction } from "../components/planning/CreativeApproveAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -37,11 +38,13 @@ import {
 type StagePageState = "loading" | "success" | "error";
 
 interface StagePageData {
+  routeKey: string;
   detail: ProjectDetail;
   workflow: ProjectWorkflowResponse;
 }
 
 interface StagePageError {
+  routeKey: string;
   code: string;
   correlationId: string | null;
 }
@@ -84,21 +87,28 @@ export function ProjectStagePage() {
     stageKey: string;
   }>();
   const validStageKey = isStageKey(stageKey) ? stageKey : null;
+  const routeKey =
+    projectId && validStageKey ? `${projectId}:${validStageKey}` : null;
   const definition = getStageDefinition(stageKey);
   const [state, setState] = useState<StagePageState>("loading");
   const [data, setData] = useState<StagePageData | null>(null);
   const [loadError, setLoadError] = useState<StagePageError | null>(null);
   const [creativeRefresh, setCreativeRefresh] =
     useState<CreativeRefreshSnapshot | null>(null);
+  const [hasCreative, setHasCreative] = useState<boolean | null>(null);
+  const loadRequest = useRef(0);
 
   const loadStage = useCallback(async () => {
     if (!projectId || !validStageKey) {
       return;
     }
+    const requestedRouteKey = `${projectId}:${validStageKey}`;
+    const requestId = ++loadRequest.current;
     setState("loading");
     setData(null);
     setLoadError(null);
     setCreativeRefresh(null);
+    setHasCreative(null);
 
     try {
       const [detailResult, workflowResult] = await Promise.all([
@@ -111,13 +121,17 @@ export function ProjectStagePage() {
           code: "INVALID_RESPONSE",
         });
       }
+      if (requestId !== loadRequest.current) return;
       setData({
+        routeKey: requestedRouteKey,
         detail: detailResult.data,
         workflow: workflowResult.data,
       });
       setState("success");
     } catch (error) {
+      if (requestId !== loadRequest.current) return;
       setLoadError({
+        routeKey: requestedRouteKey,
         code: error instanceof ApiClientError ? error.code : "UNKNOWN_ERROR",
         correlationId:
           error instanceof ApiClientError ? error.correlationId : null,
@@ -130,9 +144,21 @@ export function ProjectStagePage() {
     if (validStageKey) {
       void loadStage();
     }
+    return () => {
+      loadRequest.current += 1;
+    };
   }, [loadStage, validStageKey]);
 
-  const refreshAfterCreativeTask = useCallback(async () => {
+  const handleCreativeLoaded = useCallback(
+    (response: CreativeContentResponse) => {
+      if (response.project_id === projectId) {
+        setHasCreative(response.content !== null);
+      }
+    },
+    [projectId],
+  );
+
+  const refreshCreativeState = useCallback(async () => {
     if (!projectId || validStageKey !== "creative") return;
     const [detailResult, workflowResult, creativeResult] = await Promise.all([
       getProject(projectId),
@@ -150,9 +176,11 @@ export function ProjectStagePage() {
       });
     }
     setData({
+      routeKey: `${projectId}:creative`,
       detail: detailResult.data,
       workflow: workflowResult.data,
     });
+    setHasCreative(creativeResult.data.content !== null);
     setCreativeRefresh((current) => ({
       revision: (current?.revision ?? 0) + 1,
       response: creativeResult.data as CreativeContentResponse,
@@ -175,7 +203,11 @@ export function ProjectStagePage() {
     );
   }
 
-  if (state === "loading") {
+  if (
+    state === "loading" ||
+    (state === "success" && data?.routeKey !== routeKey) ||
+    (state === "error" && loadError?.routeKey !== routeKey)
+  ) {
     return (
       <main className="main-content stage-page" aria-busy="true">
         <section className="workspace-loading" aria-label="正在加载项目阶段">
@@ -220,6 +252,10 @@ export function ProjectStagePage() {
   const presentation = stagePresentation(workflow, validStageKey);
   const status = statusPresentation(presentation.status);
   const stageActions = actionsForStage(workflow, validStageKey);
+  const readOnlyStageActions =
+    validStageKey === "creative"
+      ? stageActions.filter((action) => action !== "APPROVE_CREATIVE")
+      : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
 
   return (
@@ -276,25 +312,37 @@ export function ProjectStagePage() {
       </section>
 
       <PlanningStageContent
+        key={`planning:${detail.project_id}:${validStageKey}`}
         projectId={detail.project_id}
         stageKey={validStageKey}
         creativeRefresh={creativeRefresh}
+        onCreativeLoaded={handleCreativeLoaded}
       />
 
       {validStageKey === "creative" && (
-        <CreativeGenerateAction
-          projectId={detail.project_id}
-          availableActions={workflow.available_actions}
-          onTerminalRefresh={refreshAfterCreativeTask}
-        />
+        <>
+          <CreativeGenerateAction
+            projectId={detail.project_id}
+            availableActions={workflow.available_actions}
+            hasCreative={hasCreative}
+            onTerminalRefresh={refreshCreativeState}
+          />
+          <CreativeApproveAction
+            projectId={detail.project_id}
+            availableActions={workflow.available_actions}
+            onApprovedRefresh={refreshCreativeState}
+          />
+        </>
       )}
 
       <ShotsStageContent
+        key={`shots:${detail.project_id}:${validStageKey}`}
         projectId={detail.project_id}
         stageKey={validStageKey}
       />
 
       <PostProductionStageContent
+        key={`post-production:${detail.project_id}:${validStageKey}`}
         projectId={detail.project_id}
         stageKey={validStageKey}
       />
@@ -304,9 +352,9 @@ export function ProjectStagePage() {
           <p className="page-kicker">READ-ONLY ACTIONS</p>
           <h2 id="stage-actions-title">当前可进行操作</h2>
         </div>
-        {stageActions.length > 0 ? (
+        {readOnlyStageActions.length > 0 ? (
           <ul className="stage-action-list">
-            {stageActions.map((action) => (
+            {readOnlyStageActions.map((action) => (
               <li key={action}>{AVAILABLE_ACTION_LABELS[action]}</li>
             ))}
           </ul>
@@ -315,7 +363,7 @@ export function ProjectStagePage() {
         )}
         <p className="stage-readonly-note">
           {validStageKey === "creative"
-            ? "审核、修改与重新生成仍为只读提示，本阶段不会执行任何操作。"
+            ? "修改与重新生成仍为只读提示；Creative 审核通过是本阶段唯一新增写操作。"
             : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>

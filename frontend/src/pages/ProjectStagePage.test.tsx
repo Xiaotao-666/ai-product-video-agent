@@ -1,9 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  approveCreative,
   generateCreative,
   getAssembly,
   getCreativeContent,
@@ -20,6 +26,7 @@ import {
   getTask,
 } from "../api/client";
 import type {
+  CreativeContentResponse,
   ProjectDetail,
   ProjectWorkflowResponse,
   WorkflowState,
@@ -44,6 +51,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getVoice: vi.fn(),
     generateCreative: vi.fn(),
     getTask: vi.fn(),
+    approveCreative: vi.fn(),
   };
 });
 
@@ -61,6 +69,39 @@ const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockGetVoice = vi.mocked(getVoice);
 const mockGenerateCreative = vi.mocked(generateCreative);
 const mockGetTask = vi.mocked(getTask);
+const mockApproveCreative = vi.mocked(approveCreative);
+
+function creativeContentResponse(
+  status = "APPROVED",
+): CreativeContentResponse {
+  return {
+    project_id: "LEE柠檬",
+    status,
+    content: {
+      creative_concept: "明亮柠檬世界",
+      target_audience: "年轻消费者",
+      key_message: "自然清爽",
+      visual_direction: "高明度黄色品牌视觉",
+      narrative_arc: "产品亮相到品牌收束",
+      narration_plan: {
+        enabled: false,
+        tone: null,
+        full_script: null,
+        target_duration_seconds: null,
+      },
+      subtitle_strategy: {
+        enabled: false,
+        tone: null,
+        density: null,
+        max_lines: null,
+        preferred_position: null,
+        principles: [],
+      },
+      global_constraints: { must: [], must_not: [] },
+      av_timeline_constraints: { forbidden_windows: [] },
+    },
+  };
+}
 
 function workflow(
   overrides: Partial<ProjectWorkflowResponse> = {},
@@ -136,6 +177,7 @@ function resolveStage(currentWorkflow = workflow(), currentDetail = detail(curre
 function renderStage(path = "/projects/LEE%E6%9F%A0%E6%AA%AC/stages/shots") {
   return render(
     <MemoryRouter initialEntries={[path]}>
+      <RouteLocation />
       <Routes>
         <Route
           path="/projects/:projectId/stages/:stageKey"
@@ -149,6 +191,11 @@ function renderStage(path = "/projects/LEE%E6%9F%A0%E6%AA%AC/stages/shots") {
       </Routes>
     </MemoryRouter>,
   );
+}
+
+function RouteLocation() {
+  const location = useLocation();
+  return <output data-testid="route-location">{location.pathname}</output>;
 }
 
 function summarySection(): HTMLElement {
@@ -176,6 +223,7 @@ describe("ProjectStagePage", () => {
     mockGetVoice.mockReset();
     mockGenerateCreative.mockReset();
     mockGetTask.mockReset();
+    mockApproveCreative.mockReset();
     mockGetProjectTasks.mockResolvedValue({
       data: { project_id: "LEE柠檬", tasks: [] },
       correlationId: "req_tasks",
@@ -234,7 +282,7 @@ describe("ProjectStagePage", () => {
       correlationId: "req_export",
     });
     mockGetCreativeContent.mockResolvedValue({
-      data: { project_id: "LEE柠檬", status: "APPROVED", content: null },
+      data: creativeContentResponse(),
       correlationId: "req_creative",
     });
     mockGetStoryboardContent.mockResolvedValue({
@@ -338,6 +386,10 @@ describe("ProjectStagePage", () => {
       available_actions: ["GENERATE_CREATIVE"],
     });
     currentWorkflow.stages.creative.status = "NOT_STARTED";
+    mockGetCreativeContent.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },
+      correlationId: "req_creative_empty",
+    });
     resolveStage(currentWorkflow, detail(currentWorkflow));
     renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
     expect(
@@ -402,7 +454,7 @@ describe("ProjectStagePage", () => {
     expect(within(summarySection()).getByText("是")).toBeInTheDocument();
   });
 
-  it("filters available actions to the current Stage and keeps them read-only", async () => {
+  it("makes only Creative Approve executable and keeps revise/regenerate read-only", async () => {
     const currentWorkflow = workflow({
       workflow_phase: "CREATIVE_REVIEW",
       available_actions: [
@@ -414,11 +466,121 @@ describe("ProjectStagePage", () => {
     resolveStage(currentWorkflow, detail(currentWorkflow));
     renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
     await screen.findByRole("heading", { name: "创意策划" });
-    expect(screen.getByText("审核创意")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
+    expect(screen.queryByText("审核创意")).not.toBeInTheDocument();
     expect(screen.getByText("修改创意")).toBeInTheDocument();
     expect(screen.getByText("重新生成创意")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /创意/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/不会执行任何操作/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "修改创意" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新生成创意" })).not.toBeInTheDocument();
+    expect(screen.getByText(/唯一新增写操作/)).toBeInTheDocument();
+  });
+
+  it("re-fetches Project, Workflow, and Creative after approval", async () => {
+    const waiting = workflow({
+      workflow_phase: "CREATIVE_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_CREATIVE",
+        "REVISE_CREATIVE",
+        "REGENERATE_CREATIVE",
+      ],
+    });
+    waiting.stages.creative.status = "WAITING_REVIEW";
+    waiting.stages.storyboard.status = "NOT_STARTED";
+    const approved = workflow({
+      workflow_phase: "STORYBOARD",
+      status: "APPROVED",
+      available_actions: ["GENERATE_STORYBOARD"],
+    });
+    approved.stages.creative.status = "APPROVED";
+    approved.stages.storyboard.status = "NOT_STARTED";
+
+    mockGetProject
+      .mockResolvedValueOnce({ data: detail(waiting), correlationId: "req_initial" })
+      .mockResolvedValue({ data: detail(approved), correlationId: "req_refreshed" });
+    mockGetProjectWorkflow
+      .mockResolvedValueOnce({ data: waiting, correlationId: "req_initial" })
+      .mockResolvedValue({ data: approved, correlationId: "req_refreshed" });
+    mockGetCreativeContent
+      .mockResolvedValueOnce({
+        data: creativeContentResponse("WAITING_REVIEW"),
+        correlationId: "req_initial_creative",
+      })
+      .mockResolvedValue({
+        data: creativeContentResponse("APPROVED"),
+        correlationId: "req_refreshed_creative",
+      });
+    mockApproveCreative.mockResolvedValue({
+      data: approved,
+      correlationId: "req_approve",
+    });
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
+    fireEvent.click(await screen.findByRole("button", { name: "审核通过" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认通过" }));
+
+    const storyboardLink = await screen.findByRole("link", {
+      name: "前往 Storyboard",
+    });
+    expect(storyboardLink).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockGetProject).toHaveBeenCalledTimes(2);
+      expect(mockGetProjectWorkflow).toHaveBeenCalledTimes(2);
+      expect(mockGetCreativeContent).toHaveBeenCalledTimes(2);
+    });
+    expect(mockApproveCreative).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(screen.getByText("Creative 已审核通过。")).toBeInTheDocument();
+
+    fireEvent.click(storyboardLink);
+    expect(screen.getByText("正在加载项目阶段…")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "分镜规划" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("route-location")).toHaveTextContent(
+      "/stages/storyboard",
+    );
+  });
+
+  it("switches continuously through every Workflow Stage without a blank render", async () => {
+    const stages = [
+      ["creative", "创意策划"],
+      ["storyboard", "分镜规划"],
+      ["video-prompt", "视频提示词"],
+      ["shots", "镜头"],
+      ["assembly", "视频合片"],
+      ["voice", "配音"],
+      ["subtitle", "字幕"],
+      ["music", "音乐"],
+      ["export", "最终导出"],
+      ["creative", "创意策划"],
+    ] as const;
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
+    expect(
+      await screen.findByRole("heading", { name: "创意策划" }),
+    ).toBeInTheDocument();
+
+    for (const [key, label] of stages.slice(1)) {
+      const navigation = screen.getByRole("navigation", {
+        name: "Workflow stages",
+      });
+      fireEvent.click(within(navigation).getByRole("link", { name: new RegExp(label) }));
+      expect(screen.getByRole("main")).toBeInTheDocument();
+      expect(document.body.textContent?.trim().length).toBeGreaterThan(0);
+      expect(
+        await screen.findByRole("heading", { name: label }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("route-location")).toHaveTextContent(
+        `/stages/${key}`,
+      );
+      const activeLink = within(
+        screen.getByRole("navigation", { name: "Workflow stages" }),
+      ).getByRole("link", { name: new RegExp(label) });
+      expect(activeLink).toHaveClass("stage-nav-link-active");
+      expect(activeLink).toHaveAttribute("aria-current", "page");
+    }
   });
 
   it("handles an invalid Stage locally without requesting Backend", () => {

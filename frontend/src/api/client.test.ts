@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  approveCreative,
   createProject,
   generateCreative,
   getAssembly,
@@ -1063,6 +1064,36 @@ describe("API client", () => {
     expect(result.correlationId).toBe("req_generate");
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/generate",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("approves Creative with POST and validates the returned workflow", async () => {
+    const approvedWorkflow = {
+      ...projectWorkflowPayload,
+      workflow_phase: "STORYBOARD",
+      status: "APPROVED",
+      stages: {
+        ...workflowStagesPayload,
+        creative: { status: "APPROVED" },
+        storyboard: { status: "NOT_STARTED" },
+      },
+      available_actions: ["GENERATE_STORYBOARD"],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(approvedWorkflow, 200, {
+        "X-Correlation-ID": "req_approve",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await approveCreative("LEE柠檬");
+
+    expect(result.data.workflow_phase).toBe("STORYBOARD");
+    expect(result.data.available_actions).toEqual(["GENERATE_STORYBOARD"]);
+    expect(result.correlationId).toBe("req_approve");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/approve",
       expect.objectContaining({ method: "POST" }),
     );
   });

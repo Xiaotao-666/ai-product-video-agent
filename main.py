@@ -11,7 +11,7 @@ from typing import Any, Mapping, TypeVar
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
-from creative_workflow import generate_creative_stage
+from creative_workflow import approve_creative_stage, generate_creative_stage
 from evaluation import EvaluationRecorder
 from project_manager import ProjectDirectoryError, ProjectPaths, ask_project_paths
 from project_migration import detect_project_schema, migrate_project_to_v2
@@ -520,9 +520,7 @@ def run_pipeline(
             on_waiting=lambda: checkpoint.advance_to(
                 ProjectStage.CREATIVE_REVIEW, StageStatus.WAITING_REVIEW
             ),
-            on_approved=lambda: checkpoint.update_stage(
-                ProjectStage.CREATIVE_REVIEW, StageStatus.APPROVED
-            ),
+            on_approved=lambda: approve_creative_stage(checkpoint),
             on_cancel=lambda: checkpoint.cancel(ProjectStage.CREATIVE_REVIEW),
         )
 

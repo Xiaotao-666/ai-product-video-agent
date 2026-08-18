@@ -176,6 +176,7 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/workflow",
                 "/api/projects/{project_id}/planning/creative",
                 "/api/projects/{project_id}/planning/creative/generate",
+                "/api/projects/{project_id}/planning/creative/approve",
                 "/api/projects/{project_id}/planning/storyboard",
                 "/api/projects/{project_id}/planning/video-prompts",
                 "/api/projects/{project_id}/shots",

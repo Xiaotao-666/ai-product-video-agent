@@ -472,7 +472,11 @@ class ProjectPaths:
         )
 
 
-def create_project_paths(project_path: str | Path) -> ProjectPaths:
+def create_project_paths(
+    project_path: str | Path,
+    *,
+    ensure_directories: bool = True,
+) -> ProjectPaths:
     raw_path = str(project_path).strip().strip('"')
     if not raw_path:
         raise ProjectDirectoryError("项目保存目录不能为空。")
@@ -514,14 +518,15 @@ def create_project_paths(project_path: str | Path) -> ProjectPaths:
         error_logs_dir=logs_dir / "errors",
         api_logs_dir=logs_dir / "api",
     )
-    try:
-        for directory in paths.managed_directories():
-            paths.ensure_within_project(directory)
-            directory.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise ProjectDirectoryError(
-            f"无法创建或使用项目目录 {selected_project_path}：{exc}"
-        ) from exc
+    if ensure_directories:
+        try:
+            for directory in paths.managed_directories():
+                paths.ensure_within_project(directory)
+                directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ProjectDirectoryError(
+                f"无法创建或使用项目目录 {selected_project_path}：{exc}"
+            ) from exc
     return paths
 
 

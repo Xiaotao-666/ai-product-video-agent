@@ -12,6 +12,31 @@ from storyboard import CreativeBrief, generate_creative_brief
 from task_logger import TaskLogger
 
 
+class CreativeApprovalError(RuntimeError):
+    """Raised when Core Creative state cannot be approved safely."""
+
+
+def approve_creative_stage(checkpoint: ProjectCheckpoint) -> None:
+    """Approve the persisted Creative review without starting Storyboard.
+
+    CLI and Web both use this callable so the durable checkpoint transition
+    remains owned by Core. Review interaction records remain the caller's
+    responsibility because CLI records an interactive task while Web approval
+    is a short synchronous action with no task record.
+    """
+
+    if (
+        checkpoint.stage_status(ProjectStage.CREATIVE) != StageStatus.COMPLETED
+        or checkpoint.stage_status(ProjectStage.CREATIVE_REVIEW)
+        != StageStatus.WAITING_REVIEW
+    ):
+        raise CreativeApprovalError("Creative is not waiting for review")
+    checkpoint.update_stage(
+        ProjectStage.CREATIVE_REVIEW,
+        StageStatus.APPROVED,
+    )
+
+
 def generate_creative_stage(
     paths: ProjectPaths,
     request: ProductVideoRequest,

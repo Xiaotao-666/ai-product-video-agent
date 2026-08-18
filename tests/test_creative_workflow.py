@@ -110,6 +110,82 @@ class CreativeWorkflowExtractionTests(unittest.TestCase):
                 )
         shared.assert_called_once()
 
+    def test_04_shared_approve_persists_review_and_resumes_at_storyboard(self):
+        from creative_workflow import approve_creative_stage
+        from project_state import ProjectStage, StageStatus
+
+        self.checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.COMPLETED)
+        self.checkpoint.advance_to(
+            ProjectStage.CREATIVE_REVIEW,
+            StageStatus.WAITING_REVIEW,
+        )
+        approve_creative_stage(self.checkpoint)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.CREATIVE_REVIEW),
+            StageStatus.APPROVED,
+        )
+        self.assertEqual(self.checkpoint.next_stage(), ProjectStage.STORYBOARD)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD),
+            StageStatus.NOT_STARTED,
+        )
+
+    def test_05_shared_approve_rejects_invalid_and_repeated_state(self):
+        from creative_workflow import CreativeApprovalError, approve_creative_stage
+        from project_state import ProjectStage, StageStatus
+
+        with self.assertRaises(CreativeApprovalError):
+            approve_creative_stage(self.checkpoint)
+
+        self.checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.COMPLETED)
+        self.checkpoint.advance_to(
+            ProjectStage.CREATIVE_REVIEW,
+            StageStatus.WAITING_REVIEW,
+        )
+        approve_creative_stage(self.checkpoint)
+        with self.assertRaises(CreativeApprovalError):
+            approve_creative_stage(self.checkpoint)
+
+    def test_06_cli_review_callback_uses_shared_approve_callable(self):
+        import main
+        from project_state import ProjectStage, StageStatus
+
+        class SharedApproveReached(RuntimeError):
+            pass
+
+        self.checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.COMPLETED)
+        self.checkpoint.advance_to(
+            ProjectStage.CREATIVE_REVIEW,
+            StageStatus.WAITING_REVIEW,
+        )
+        self.paths.save_json(
+            self.paths.creative_brief_path(),
+            self.brief().model_dump(),
+        )
+
+        def approve_from_gate(*_args, **kwargs):
+            kwargs["on_approved"]()
+            self.fail("CLI should stop at the patched shared approve callable")
+
+        with (
+            patch.object(main, "human_review_gate", side_effect=approve_from_gate),
+            patch.object(
+                main,
+                "approve_creative_stage",
+                side_effect=SharedApproveReached,
+            ) as shared,
+        ):
+            with self.assertRaises(SharedApproveReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        shared.assert_called_once_with(self.checkpoint)
+
 
 if __name__ == "__main__":
     unittest.main()
