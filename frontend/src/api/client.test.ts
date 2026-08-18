@@ -4,10 +4,13 @@ import {
   ApiClientError,
   createProject,
   getCapabilities,
+  getCreativeContent,
   getHealth,
   getProject,
   getProjects,
   getProjectWorkflow,
+  getStoryboardContent,
+  getVideoPrompts,
 } from "./client";
 
 function responseOf(
@@ -116,6 +119,84 @@ const projectDetailPayload = {
   },
   final_export: workflowStagesPayload.export,
   updated_at: "2026-08-18T14:30:00+08:00",
+};
+
+const creativeContentPayload = {
+  project_id: "LEE柠檬",
+  status: "APPROVED",
+  content: {
+    creative_concept: "明亮柠檬世界",
+    target_audience: "年轻消费者",
+    key_message: "新鲜看得见",
+    visual_direction: "黄色插画",
+    narrative_arc: "品牌收束",
+    narration_plan: {
+      enabled: true,
+      tone: "年轻活泼",
+      full_script: "新鲜看得见，酸甜刚刚好。",
+      target_duration_seconds: 12,
+    },
+    subtitle_strategy: {
+      enabled: true,
+      tone: "简洁明快",
+      density: "low",
+      max_lines: 1,
+      preferred_position: "bottom_center",
+      principles: ["不遮挡产品"],
+    },
+    global_constraints: { must: [], must_not: ["people"] },
+    av_timeline_constraints: {
+      forbidden_windows: [{ start: 0, end: 3, tracks: ["voiceover"] }],
+    },
+  },
+};
+
+const storyboardContentPayload = {
+  project_id: "LEE柠檬",
+  status: "APPROVED",
+  content: {
+    total_duration_seconds: 6,
+    shots: [
+      {
+        shot_id: 1,
+        duration_seconds: 6,
+        purpose: "开场",
+        visual: "柠檬轮廓",
+        camera: "平稳推近",
+        voiceover_cues: [
+          { text: "新鲜", start_offset: 1, end_offset: 2, position: null },
+        ],
+        subtitle_cues: [
+          {
+            text: "LEE柠檬",
+            start_offset: 2,
+            end_offset: 4,
+            position: "bottom_center",
+          },
+        ],
+        video_constraints: {
+          reserve_subtitle_space: true,
+          subtitle_safe_area: "bottom_center",
+        },
+      },
+    ],
+  },
+};
+
+const videoPromptsContentPayload = {
+  project_id: "LEE柠檬",
+  status: "APPROVED",
+  content: {
+    shots: [
+      {
+        shot_id: 1,
+        prompt_version: 2,
+        prompt_source: "ai_revision",
+        visual_prompt_core: "bright lemon core",
+        prompt_text: "approved final prompt",
+      },
+    ],
+  },
 };
 
 describe("API client", () => {
@@ -439,6 +520,138 @@ describe("API client", () => {
       code: "INVALID_RESPONSE",
       correlationId: "req_malformed_workspace",
     });
+  });
+
+  it("gets and validates Creative content with an encoded project ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(
+        {
+          ...creativeContentPayload,
+          provider_task_id: "hidden",
+          content: {
+            ...creativeContentPayload.content,
+            debug_path: "D:\\private\\raw.json",
+          },
+        },
+        200,
+        { "X-Correlation-ID": "req_creative" },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await getCreativeContent("LEE柠檬");
+    expect(result.data.content?.creative_concept).toBe("明亮柠檬世界");
+    expect(result.data.content?.narration_plan.full_script).toContain("酸甜");
+    expect(result.data).not.toHaveProperty("provider_task_id");
+    expect(result.data.content).not.toHaveProperty("debug_path");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative",
+      ),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("gets and validates Storyboard shots, cues, and constraints", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(responseOf(storyboardContentPayload)),
+    );
+    const result = await getStoryboardContent("LEE柠檬");
+    const shot = result.data.content?.shots[0];
+    expect(shot?.duration_seconds).toBe(6);
+    expect(shot?.voiceover_cues[0]?.start_offset).toBe(1);
+    expect(shot?.subtitle_cues[0]?.position).toBe("bottom_center");
+    expect(shot?.video_constraints.reserve_subtitle_space).toBe(true);
+  });
+
+  it("gets and validates official Video Prompt versions and text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          ...videoPromptsContentPayload,
+          content: {
+            shots: [
+              {
+                ...videoPromptsContentPayload.content.shots[0],
+                provider_task_id: "must-not-escape",
+                file_id: "hidden-file",
+                candidate_state: "hidden",
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    const result = await getVideoPrompts("LEE柠檬");
+    const shot = result.data.content?.shots[0];
+    expect(shot).toEqual(videoPromptsContentPayload.content.shots[0]);
+    expect(shot).not.toHaveProperty("provider_task_id");
+    expect(shot).not.toHaveProperty("file_id");
+    expect(shot).not.toHaveProperty("candidate_state");
+  });
+
+  it.each([
+    ["Creative", getCreativeContent, "/planning/creative"],
+    ["Storyboard", getStoryboardContent, "/planning/storyboard"],
+    ["Video Prompt", getVideoPrompts, "/planning/video-prompts"],
+  ])("accepts a null %s content response", async (_name, call, path) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf({ project_id: "project-1", status: "NOT_STARTED", content: null }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await call("project-1");
+    expect(result.data.content).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(path),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("rejects malformed Planning DTOs without exposing raw fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          project_id: "LEE柠檬",
+          status: "APPROVED",
+          content: {
+            shots: [{ local_path: "D:\\private", provider_secret: "hidden" }],
+          },
+        }),
+      ),
+    );
+    const error = await getStoryboardContent("LEE柠檬").catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect((error as Error).message).not.toContain("D:\\private");
+    expect((error as Error).message).not.toContain("provider_secret");
+  });
+
+  it("hides a path or credential marker inside projected Planning text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          ...creativeContentPayload,
+          content: {
+            ...creativeContentPayload.content,
+            visual_direction: "file://D:/private/raw.txt",
+            narration_plan: {
+              ...creativeContentPayload.content.narration_plan,
+              full_script: "API_KEY=hidden",
+            },
+          },
+        }),
+      ),
+    );
+    const result = await getCreativeContent("LEE柠檬");
+    expect(result.data.content?.visual_direction).toBe("[敏感内容已隐藏]");
+    expect(result.data.content?.narration_plan.full_script).toBe(
+      "[敏感内容已隐藏]",
+    );
   });
 
   it("creates a project with POST JSON and preserves correlation ID", async () => {

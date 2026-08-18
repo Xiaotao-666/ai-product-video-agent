@@ -6,10 +6,13 @@ import App from "./App";
 import {
   createProject,
   getCapabilities,
+  getCreativeContent,
   getHealth,
   getProject,
   getProjects,
   getProjectWorkflow,
+  getStoryboardContent,
+  getVideoPrompts,
 } from "./api/client";
 import type {
   CapabilitiesResponse,
@@ -17,20 +20,30 @@ import type {
   ProjectWorkflowResponse,
 } from "./api/types";
 
-vi.mock("./api/client", () => ({
-  getHealth: vi.fn(),
-  getCapabilities: vi.fn(),
-  getProjects: vi.fn(),
-  getProject: vi.fn(),
-  getProjectWorkflow: vi.fn(),
-  createProject: vi.fn(),
-}));
+vi.mock("./api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api/client")>();
+  return {
+    ...actual,
+    getHealth: vi.fn(),
+    getCapabilities: vi.fn(),
+    getProjects: vi.fn(),
+    getProject: vi.fn(),
+    getProjectWorkflow: vi.fn(),
+    getCreativeContent: vi.fn(),
+    getStoryboardContent: vi.fn(),
+    getVideoPrompts: vi.fn(),
+    createProject: vi.fn(),
+  };
+});
 
 const mockGetHealth = vi.mocked(getHealth);
 const mockGetCapabilities = vi.mocked(getCapabilities);
 const mockGetProjects = vi.mocked(getProjects);
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetCreativeContent = vi.mocked(getCreativeContent);
+const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
+const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockCreateProject = vi.mocked(createProject);
 
 function renderSystem() {
@@ -131,6 +144,18 @@ describe("App", () => {
     mockGetProjectWorkflow.mockResolvedValue({
       data: workspaceWorkflow,
       correlationId: "req_workflow",
+    });
+    mockGetCreativeContent.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },
+      correlationId: "req_creative",
+    });
+    mockGetStoryboardContent.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },
+      correlationId: "req_storyboard",
+    });
+    mockGetVideoPrompts.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },
+      correlationId: "req_prompts",
     });
     mockCreateProject.mockResolvedValue({
       data: {

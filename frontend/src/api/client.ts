@@ -6,6 +6,9 @@ import type {
   BackendErrorResponse,
   CapabilitiesResponse,
   ComponentState,
+  CreativeContentResponse,
+  CreativeForbiddenWindow,
+  CreativePlanningContent,
   CreateProjectRequest,
   CreateProjectResponse,
   FinalExportState,
@@ -16,14 +19,22 @@ import type {
   ProjectRequest,
   ProjectSummary,
   ProjectWorkflowResponse,
+  PlanningCue,
   ShotStageState,
   StageState,
+  StoryboardContentResponse,
+  StoryboardPlanningContent,
+  StoryboardShotContent,
+  VideoPromptShotContent,
+  VideoPromptsContentResponse,
   WorkflowPhase,
   WorkflowStages,
   WorkflowState,
 } from "./types";
 
 const CORRELATION_HEADER = "X-Correlation-ID";
+const UNSAFE_CONTENT = /(?:[a-z]:[\\/]|\\\\|file:\/\/|api[_ -]?key|credential(?:_env_name)?|authorization|provider secret|bearer\s+\S+|sk-[A-Za-z0-9_-]{12,})/i;
+const HIDDEN_CONTENT = "[敏感内容已隐藏]";
 const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
   "CREATIVE",
   "CREATIVE_REVIEW",
@@ -430,6 +441,295 @@ function parseCreateProjectResponse(
   };
 }
 
+function parseContentText(
+  value: unknown,
+  correlationId: string | null,
+): string | null {
+  if (!isNullableString(value)) {
+    return invalidResponse("Backend 返回了无法读取的规划内容。", correlationId);
+  }
+  if (typeof value === "string" && UNSAFE_CONTENT.test(value)) {
+    return HIDDEN_CONTENT;
+  }
+  return value;
+}
+
+function parseContentTextList(
+  value: unknown,
+  correlationId: string | null,
+): string[] {
+  if (!Array.isArray(value) || !value.every(isNullableString)) {
+    return invalidResponse("Backend 返回了无法读取的规划内容。", correlationId);
+  }
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => (UNSAFE_CONTENT.test(item) ? HIDDEN_CONTENT : item));
+}
+
+function parseCreativeWindow(
+  value: unknown,
+  correlationId: string | null,
+): CreativeForbiddenWindow {
+  if (
+    !isRecord(value) ||
+    !isNullableNumber(value.start) ||
+    !isNullableNumber(value.end)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的创意内容。", correlationId);
+  }
+  return {
+    start: value.start,
+    end: value.end,
+    tracks: parseContentTextList(value.tracks, correlationId),
+  };
+}
+
+function parseCreativeContent(
+  value: unknown,
+  correlationId: string | null,
+): CreativePlanningContent {
+  if (!isRecord(value)) {
+    return invalidResponse("Backend 返回了无法读取的创意内容。", correlationId);
+  }
+  const narration = value.narration_plan;
+  const subtitles = value.subtitle_strategy;
+  const constraints = value.global_constraints;
+  const timeline = value.av_timeline_constraints;
+  if (
+    !isRecord(narration) ||
+    typeof narration.enabled !== "boolean" ||
+    !isNullableNumber(narration.target_duration_seconds) ||
+    !isRecord(subtitles) ||
+    typeof subtitles.enabled !== "boolean" ||
+    (subtitles.max_lines !== null &&
+      (typeof subtitles.max_lines !== "number" ||
+        !Number.isInteger(subtitles.max_lines))) ||
+    !isRecord(constraints) ||
+    !isRecord(timeline) ||
+    !Array.isArray(timeline.forbidden_windows)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的创意内容。", correlationId);
+  }
+  return {
+    creative_concept: parseContentText(value.creative_concept, correlationId),
+    target_audience: parseContentText(value.target_audience, correlationId),
+    key_message: parseContentText(value.key_message, correlationId),
+    visual_direction: parseContentText(value.visual_direction, correlationId),
+    narrative_arc: parseContentText(value.narrative_arc, correlationId),
+    narration_plan: {
+      enabled: narration.enabled,
+      tone: parseContentText(narration.tone, correlationId),
+      full_script: parseContentText(narration.full_script, correlationId),
+      target_duration_seconds: narration.target_duration_seconds,
+    },
+    subtitle_strategy: {
+      enabled: subtitles.enabled,
+      tone: parseContentText(subtitles.tone, correlationId),
+      density: parseContentText(subtitles.density, correlationId),
+      max_lines: subtitles.max_lines,
+      preferred_position: parseContentText(
+        subtitles.preferred_position,
+        correlationId,
+      ),
+      principles: parseContentTextList(subtitles.principles, correlationId),
+    },
+    global_constraints: {
+      must: parseContentTextList(constraints.must, correlationId),
+      must_not: parseContentTextList(constraints.must_not, correlationId),
+    },
+    av_timeline_constraints: {
+      forbidden_windows: timeline.forbidden_windows.map((window) =>
+        parseCreativeWindow(window, correlationId),
+      ),
+    },
+  };
+}
+
+function parseCreativeResponse(
+  value: unknown,
+  correlationId: string | null,
+): CreativeContentResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    (value.content !== null && !isRecord(value.content))
+  ) {
+    return invalidResponse("Backend 返回了无法读取的创意内容。", correlationId);
+  }
+  return {
+    project_id: value.project_id,
+    status: value.status,
+    content:
+      value.content === null
+        ? null
+        : parseCreativeContent(value.content, correlationId),
+  };
+}
+
+function parseCue(value: unknown, correlationId: string | null): PlanningCue {
+  if (
+    !isRecord(value) ||
+    !isNullableNumber(value.start_offset) ||
+    !isNullableNumber(value.end_offset)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的分镜内容。", correlationId);
+  }
+  return {
+    text: parseContentText(value.text, correlationId),
+    start_offset: value.start_offset,
+    end_offset: value.end_offset,
+    position: parseContentText(value.position, correlationId),
+  };
+}
+
+function parseStoryboardShot(
+  value: unknown,
+  correlationId: string | null,
+): StoryboardShotContent {
+  if (
+    !isRecord(value) ||
+    !isNullableNumber(value.shot_id) ||
+    !isNullableNumber(value.duration_seconds) ||
+    !Array.isArray(value.voiceover_cues) ||
+    !Array.isArray(value.subtitle_cues) ||
+    !isRecord(value.video_constraints) ||
+    typeof value.video_constraints.reserve_subtitle_space !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的分镜内容。", correlationId);
+  }
+  return {
+    shot_id: value.shot_id,
+    duration_seconds: value.duration_seconds,
+    purpose: parseContentText(value.purpose, correlationId),
+    visual: parseContentText(value.visual, correlationId),
+    camera: parseContentText(value.camera, correlationId),
+    voiceover_cues: value.voiceover_cues.map((cue) =>
+      parseCue(cue, correlationId),
+    ),
+    subtitle_cues: value.subtitle_cues.map((cue) =>
+      parseCue(cue, correlationId),
+    ),
+    video_constraints: {
+      reserve_subtitle_space:
+        value.video_constraints.reserve_subtitle_space,
+      subtitle_safe_area: parseContentText(
+        value.video_constraints.subtitle_safe_area,
+        correlationId,
+      ),
+    },
+  };
+}
+
+function parseStoryboardContent(
+  value: unknown,
+  correlationId: string | null,
+): StoryboardPlanningContent {
+  if (
+    !isRecord(value) ||
+    !isNullableNumber(value.total_duration_seconds) ||
+    !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的分镜内容。", correlationId);
+  }
+  return {
+    total_duration_seconds: value.total_duration_seconds,
+    shots: value.shots.map((shot) =>
+      parseStoryboardShot(shot, correlationId),
+    ),
+  };
+}
+
+function parseStoryboardResponse(
+  value: unknown,
+  correlationId: string | null,
+): StoryboardContentResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    (value.content !== null && !isRecord(value.content))
+  ) {
+    return invalidResponse("Backend 返回了无法读取的分镜内容。", correlationId);
+  }
+  return {
+    project_id: value.project_id,
+    status: value.status,
+    content:
+      value.content === null
+        ? null
+        : parseStoryboardContent(value.content, correlationId),
+  };
+}
+
+function parseVideoPromptShot(
+  value: unknown,
+  correlationId: string | null,
+): VideoPromptShotContent {
+  if (
+    !isRecord(value) ||
+    !isNullableNumber(value.shot_id) ||
+    !isNullableNumber(value.prompt_version)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的视频提示词。", correlationId);
+  }
+  return {
+    shot_id: value.shot_id,
+    prompt_version: value.prompt_version,
+    prompt_source: parseContentText(value.prompt_source, correlationId),
+    visual_prompt_core: parseContentText(
+      value.visual_prompt_core,
+      correlationId,
+    ),
+    prompt_text: parseContentText(value.prompt_text, correlationId),
+  };
+}
+
+function parseVideoPromptsResponse(
+  value: unknown,
+  correlationId: string | null,
+): VideoPromptsContentResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string"
+  ) {
+    return invalidResponse(
+      "Backend 返回了无法读取的视频提示词。",
+      correlationId,
+    );
+  }
+  if (value.content === null) {
+    return {
+      project_id: value.project_id,
+      status: value.status,
+      content: null,
+    };
+  }
+  if (!isRecord(value.content)) {
+    return invalidResponse(
+      "Backend 返回了无法读取的视频提示词。",
+      correlationId,
+    );
+  }
+  const shots = value.content.shots;
+  if (!Array.isArray(shots)) {
+    return invalidResponse(
+      "Backend 返回了无法读取的视频提示词。",
+      correlationId,
+    );
+  }
+  return {
+    project_id: value.project_id,
+    status: value.status,
+    content: {
+      shots: shots.map((shot: unknown) =>
+        parseVideoPromptShot(shot, correlationId),
+      ),
+    },
+  };
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -530,6 +830,42 @@ export async function getProjectWorkflow(
   );
   return {
     data: parseProjectWorkflow(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getCreativeContent(
+  projectId: string,
+): Promise<ApiResult<CreativeContentResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/creative`,
+  );
+  return {
+    data: parseCreativeResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getStoryboardContent(
+  projectId: string,
+): Promise<ApiResult<StoryboardContentResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/storyboard`,
+  );
+  return {
+    data: parseStoryboardResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getVideoPrompts(
+  projectId: string,
+): Promise<ApiResult<VideoPromptsContentResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/video-prompts`,
+  );
+  return {
+    data: parseVideoPromptsResponse(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

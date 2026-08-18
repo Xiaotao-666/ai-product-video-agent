@@ -169,6 +169,101 @@ export interface ProjectWorkflowResponse extends WorkflowState {
   updated_at: string;
 }
 
+export interface CreativeNarrationPlan {
+  enabled: boolean;
+  tone: string | null;
+  full_script: string | null;
+  target_duration_seconds: number | null;
+}
+
+export interface CreativeSubtitleStrategy {
+  enabled: boolean;
+  tone: string | null;
+  density: string | null;
+  max_lines: number | null;
+  preferred_position: string | null;
+  principles: string[];
+}
+
+export interface CreativeGlobalConstraints {
+  must: string[];
+  must_not: string[];
+}
+
+export interface CreativeForbiddenWindow {
+  start: number | null;
+  end: number | null;
+  tracks: string[];
+}
+
+export interface CreativePlanningContent {
+  creative_concept: string | null;
+  target_audience: string | null;
+  key_message: string | null;
+  visual_direction: string | null;
+  narrative_arc: string | null;
+  narration_plan: CreativeNarrationPlan;
+  subtitle_strategy: CreativeSubtitleStrategy;
+  global_constraints: CreativeGlobalConstraints;
+  av_timeline_constraints: {
+    forbidden_windows: CreativeForbiddenWindow[];
+  };
+}
+
+export interface CreativeContentResponse {
+  project_id: string;
+  status: string;
+  content: CreativePlanningContent | null;
+}
+
+export interface PlanningCue {
+  text: string | null;
+  start_offset: number | null;
+  end_offset: number | null;
+  position: string | null;
+}
+
+export interface StoryboardVideoConstraints {
+  reserve_subtitle_space: boolean;
+  subtitle_safe_area: string | null;
+}
+
+export interface StoryboardShotContent {
+  shot_id: number | null;
+  duration_seconds: number | null;
+  purpose: string | null;
+  visual: string | null;
+  camera: string | null;
+  voiceover_cues: PlanningCue[];
+  subtitle_cues: PlanningCue[];
+  video_constraints: StoryboardVideoConstraints;
+}
+
+export interface StoryboardPlanningContent {
+  total_duration_seconds: number | null;
+  shots: StoryboardShotContent[];
+}
+
+export interface StoryboardContentResponse {
+  project_id: string;
+  status: string;
+  content: StoryboardPlanningContent | null;
+}
+
+export interface VideoPromptShotContent {
+  shot_id: number | null;
+  prompt_version: number | null;
+  prompt_source: string | null;
+  visual_prompt_core: string | null;
+  prompt_text: string | null;
+}
+
+export interface VideoPromptsContentResponse {
+  project_id: string;
+  status: string;
+  content: { shots: VideoPromptShotContent[] } | null;
+}
+
 export interface CreateProjectRequest {
   product_name: string;
   product_description: string;

@@ -11,6 +11,7 @@ import type {
   ProjectWorkflowResponse,
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { PlanningStageContent } from "../components/planning/PlanningStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
   formatProjectDate,
@@ -237,6 +238,11 @@ export function ProjectStagePage() {
         </dl>
         <p className="stage-content-note">{definition.contentNote}</p>
       </section>
+
+      <PlanningStageContent
+        projectId={detail.project_id}
+        stageKey={validStageKey}
+      />
 
       <section className="stage-section" aria-labelledby="stage-actions-title">
         <div className="stage-section-heading">

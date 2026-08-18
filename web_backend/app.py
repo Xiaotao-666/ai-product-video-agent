@@ -13,6 +13,9 @@ from web_backend.errors import register_exception_handlers
 from web_backend.locking import DEFAULT_PROJECT_LOCK_MANAGER, ProjectLockManager
 from web_backend.middleware import CorrelationIdMiddleware
 from web_backend.repositories.project_repository import ProjectRepository
+from web_backend.repositories.planning_content_repository import (
+    PlanningContentRepository,
+)
 from web_backend.routers.capabilities import router as capabilities_router
 from web_backend.routers.health import router as health_router
 from web_backend.routers.projects import router as projects_router
@@ -40,6 +43,9 @@ def _initialize_local_resources(application: FastAPI) -> None:
     settings = application.state.settings
     lock_manager = application.state.project_lock_manager
     application.state.project_repository = ProjectRepository(settings.projects_root)
+    application.state.planning_content_repository = PlanningContentRepository(
+        application.state.project_repository
+    )
     application.state.project_service = ProjectService(
         settings.projects_root,
         lock_manager,

@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  getCreativeContent,
   getProject,
   getProjectWorkflow,
+  getStoryboardContent,
+  getVideoPrompts,
 } from "../api/client";
 import type {
   ProjectDetail,
@@ -18,13 +21,19 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    getCreativeContent: vi.fn(),
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
+    getStoryboardContent: vi.fn(),
+    getVideoPrompts: vi.fn(),
   };
 });
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetCreativeContent = vi.mocked(getCreativeContent);
+const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
+const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 
 function workflow(
   overrides: Partial<ProjectWorkflowResponse> = {},
@@ -128,6 +137,21 @@ describe("ProjectStagePage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
     mockGetProjectWorkflow.mockReset();
+    mockGetCreativeContent.mockReset();
+    mockGetStoryboardContent.mockReset();
+    mockGetVideoPrompts.mockReset();
+    mockGetCreativeContent.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "APPROVED", content: null },
+      correlationId: "req_creative",
+    });
+    mockGetStoryboardContent.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "APPROVED", content: null },
+      correlationId: "req_storyboard",
+    });
+    mockGetVideoPrompts.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "APPROVED", content: null },
+      correlationId: "req_prompts",
+    });
     resolveStage();
   });
 
@@ -192,14 +216,16 @@ describe("ProjectStagePage", () => {
       await screen.findByRole("heading", { name: "创意策划" }),
     ).toBeInTheDocument();
     expect(within(summarySection()).getAllByText("未开始").length).toBeGreaterThan(0);
-    expect(screen.getByText(/详细内容将在后续工作流阶段接入/)).toBeInTheDocument();
+    expect(await screen.findByText("创意策划尚未生成。")).toBeInTheDocument();
   });
 
   it("shows Creative status without inventing Creative content", async () => {
     renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
     await screen.findByRole("heading", { name: "创意策划" });
     expect(within(summarySection()).getAllByText("已审核").length).toBeGreaterThan(0);
-    expect(screen.getByText(/详细内容将在后续工作流阶段接入/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/已持久化的正式创意内容/),
+    ).toBeInTheDocument();
   });
 
   it("shows the real Shots approved and total summary", async () => {

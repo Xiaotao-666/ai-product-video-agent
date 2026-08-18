@@ -6,7 +6,16 @@ from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, Response
 
-from web_backend.dependencies import get_project_repository, get_project_service
+from web_backend.dependencies import (
+    get_planning_content_repository,
+    get_project_repository,
+    get_project_service,
+)
+from web_backend.models.planning import (
+    CreativeContentResponse,
+    StoryboardContentResponse,
+    VideoPromptsContentResponse,
+)
 from web_backend.errors import registered_api_error
 from web_backend.models.projects import (
     ProjectDetail,
@@ -30,6 +39,9 @@ from web_backend.repositories.project_repository import (
     ProjectNotFound,
     ProjectRepository,
     ProjectRepositoryError,
+)
+from web_backend.repositories.planning_content_repository import (
+    PlanningContentRepository,
 )
 
 
@@ -108,5 +120,53 @@ async def get_project_workflow(
 ) -> ProjectWorkflowResponse:
     try:
         return repository.get_workflow(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/planning/creative",
+    response_model=CreativeContentResponse,
+)
+async def get_project_creative_content(
+    project_id: str,
+    repository: Annotated[
+        PlanningContentRepository, Depends(get_planning_content_repository)
+    ],
+) -> CreativeContentResponse:
+    try:
+        return repository.get_creative(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/planning/storyboard",
+    response_model=StoryboardContentResponse,
+)
+async def get_project_storyboard_content(
+    project_id: str,
+    repository: Annotated[
+        PlanningContentRepository, Depends(get_planning_content_repository)
+    ],
+) -> StoryboardContentResponse:
+    try:
+        return repository.get_storyboard(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/planning/video-prompts",
+    response_model=VideoPromptsContentResponse,
+)
+async def get_project_video_prompts_content(
+    project_id: str,
+    repository: Annotated[
+        PlanningContentRepository, Depends(get_planning_content_repository)
+    ],
+) -> VideoPromptsContentResponse:
+    try:
+        return repository.get_video_prompts(project_id)
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
