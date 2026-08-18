@@ -39,3 +39,48 @@ export interface ApiResult<T> {
   data: T;
   correlationId: string | null;
 }
+
+export type WorkflowPhase =
+  | "CREATIVE"
+  | "CREATIVE_REVIEW"
+  | "STORYBOARD"
+  | "STORYBOARD_REVIEW"
+  | "VIDEO_PROMPT"
+  | "VIDEO_PROMPT_REVIEW"
+  | "VIDEO_GENERATION"
+  | "SHOT_REVIEW"
+  | "ASSEMBLY"
+  | "ASSEMBLY_REQUIRED"
+  | "POST_PRODUCTION"
+  | "FINAL_EXPORT"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED"
+  | "ERROR";
+
+export interface AssemblyState {
+  status: string;
+  needs_update: boolean;
+  version: number | null;
+}
+
+export interface FinalExportState {
+  status: string;
+  version: number | null;
+  created_at: string | null;
+  stale: boolean;
+}
+
+export interface ProjectSummary {
+  project_id: string;
+  name: string;
+  workflow_phase: WorkflowPhase;
+  status: string;
+  updated_at: string;
+  assembly: AssemblyState;
+  final_export: FinalExportState;
+}
+
+export interface ProjectListResponse {
+  projects: ProjectSummary[];
+}

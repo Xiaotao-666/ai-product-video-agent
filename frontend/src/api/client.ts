@@ -4,9 +4,30 @@ import type {
   BackendErrorResponse,
   CapabilitiesResponse,
   HealthResponse,
+  ProjectListResponse,
+  ProjectSummary,
+  WorkflowPhase,
 } from "./types";
 
 const CORRELATION_HEADER = "X-Correlation-ID";
+const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
+  "CREATIVE",
+  "CREATIVE_REVIEW",
+  "STORYBOARD",
+  "STORYBOARD_REVIEW",
+  "VIDEO_PROMPT",
+  "VIDEO_PROMPT_REVIEW",
+  "VIDEO_GENERATION",
+  "SHOT_REVIEW",
+  "ASSEMBLY",
+  "ASSEMBLY_REQUIRED",
+  "POST_PRODUCTION",
+  "FINAL_EXPORT",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "ERROR",
+]);
 
 export class ApiClientError extends Error {
   readonly status: number | null;
@@ -42,6 +63,72 @@ function isBackendError(value: unknown): value is BackendErrorResponse {
       "message" in error &&
       "correlation_id" in error,
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isWorkflowPhase(value: unknown): value is WorkflowPhase {
+  return typeof value === "string" && WORKFLOW_PHASES.has(value);
+}
+
+function isAssemblyState(value: unknown): boolean {
+  return Boolean(
+    isRecord(value) &&
+      typeof value.status === "string" &&
+      typeof value.needs_update === "boolean" &&
+      isNullableNumber(value.version),
+  );
+}
+
+function isFinalExportState(value: unknown): boolean {
+  return Boolean(
+    isRecord(value) &&
+      typeof value.status === "string" &&
+      isNullableNumber(value.version) &&
+      isNullableString(value.created_at) &&
+      typeof value.stale === "boolean",
+  );
+}
+
+function isProjectSummary(value: unknown): value is ProjectSummary {
+  return Boolean(
+    isRecord(value) &&
+      typeof value.project_id === "string" &&
+      typeof value.name === "string" &&
+      isWorkflowPhase(value.workflow_phase) &&
+      typeof value.status === "string" &&
+      typeof value.updated_at === "string" &&
+      isAssemblyState(value.assembly) &&
+      isFinalExportState(value.final_export),
+  );
+}
+
+function parseProjectList(
+  value: unknown,
+  correlationId: string | null,
+): ProjectListResponse {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProjectSummary)
+  ) {
+    throw new ApiClientError({
+      message: "Backend 返回了无法读取的项目列表。",
+      code: "INVALID_RESPONSE",
+      correlationId,
+    });
+  }
+  return { projects: value.projects };
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -103,4 +190,12 @@ export function getHealth(): Promise<ApiResult<HealthResponse>> {
 
 export function getCapabilities(): Promise<ApiResult<CapabilitiesResponse>> {
   return get<CapabilitiesResponse>("/api/capabilities");
+}
+
+export async function getProjects(): Promise<ApiResult<ProjectListResponse>> {
+  const result = await get<unknown>("/api/projects");
+  return {
+    data: parseProjectList(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
 }
