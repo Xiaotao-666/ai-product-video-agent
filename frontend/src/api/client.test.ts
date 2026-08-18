@@ -9,6 +9,9 @@ import {
   getProject,
   getProjects,
   getProjectWorkflow,
+  getShot,
+  getShots,
+  getShotVideoUrl,
   getStoryboardContent,
   getVideoPrompts,
 } from "./client";
@@ -651,6 +654,150 @@ describe("API client", () => {
     expect(result.data.content?.visual_direction).toBe("[敏感内容已隐藏]");
     expect(result.data.content?.narration_plan.full_script).toBe(
       "[敏感内容已隐藏]",
+    );
+  });
+
+  it("gets and safely projects the Shot list", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf({
+        project_id: "LEE柠檬",
+        status: "COMPLETED",
+        shots: [
+          {
+            shot_id: "shot_01",
+            status: "APPROVED",
+            official_version: 2,
+            pending_review_version: 3,
+            version_count: 3,
+            generation_count: 3,
+            local_path: "D:\\private\\shot.json",
+            provider_task_id: "hidden",
+            candidate_state: "hidden",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getShots("LEE柠檬");
+
+    expect(result.data.shots[0]).toEqual({
+      shot_id: "shot_01",
+      status: "APPROVED",
+      official_version: 2,
+      pending_review_version: 3,
+      version_count: 3,
+      generation_count: 3,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("gets Shot Detail with explicit roles and bound Prompt versions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          project_id: "LEE柠檬",
+          shot_id: "shot_01",
+          status: "APPROVED",
+          official_version: 2,
+          pending_review_version: 3,
+          version_count: 2,
+          generation_count: 3,
+          versions: [
+            {
+              version: 3,
+              role: "PENDING_REVIEW",
+              review_status: "WAITING_REVIEW",
+              created_at: "2026-08-18T12:03:00+08:00",
+              prompt: {
+                version: 4,
+                source: "ai_revision",
+                visual_prompt_core: null,
+                final_prompt: "bound prompt four",
+                task_id: "hidden",
+              },
+              generation: {
+                model: "MiniMax-H3",
+                visual_input_mode: "FIRST_FRAME",
+                credential_env_name: "MINIMAX_API_KEY",
+              },
+              video_available: true,
+            },
+            {
+              version: 2,
+              role: "OFFICIAL",
+              review_status: "APPROVED",
+              created_at: null,
+              prompt: {
+                version: 2,
+                source: "ai_revision",
+                visual_prompt_core: "official core",
+                final_prompt: "official final prompt",
+              },
+              generation: {
+                model: "MiniMax-H3",
+                visual_input_mode: "REFERENCE_ASSET",
+              },
+              video_available: true,
+            },
+          ],
+          provider_task_id: "hidden",
+          candidate_state: "hidden",
+        }),
+      ),
+    );
+
+    const result = await getShot("LEE柠檬", "shot_01");
+
+    expect(result.data.versions[0]).toMatchObject({
+      version: 3,
+      role: "PENDING_REVIEW",
+      prompt: { version: 4, final_prompt: "bound prompt four" },
+    });
+    expect(result.data).not.toHaveProperty("provider_task_id");
+    expect(result.data.versions[0].prompt).not.toHaveProperty("task_id");
+    expect(result.data.versions[0].generation).not.toHaveProperty(
+      "credential_env_name",
+    );
+  });
+
+  it("rejects malformed or inconsistent Shot DTOs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          project_id: "LEE柠檬",
+          shot_id: "../shot_01",
+          status: "APPROVED",
+          official_version: 2,
+          pending_review_version: null,
+          version_count: 1,
+          generation_count: 1,
+          versions: [],
+          local_path: "D:\\private",
+        }),
+      ),
+    );
+
+    await expect(getShot("LEE柠檬", "shot_01")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
+  it("constructs an encoded Backend video URL without downloading the MP4", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(getShotVideoUrl("LEE柠檬", "shot_01", 2)).toBe(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots/shot_01/versions/2/video",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(() => getShotVideoUrl("LEE柠檬", "shot_01", 0)).toThrow(
+      ApiClientError,
     );
   });
 

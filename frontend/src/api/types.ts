@@ -264,6 +264,62 @@ export interface VideoPromptsContentResponse {
   content: { shots: VideoPromptShotContent[] } | null;
 }
 
+export type ShotVersionRole = "OFFICIAL" | "PENDING_REVIEW" | "HISTORY";
+
+export type ShotVisualInputMode =
+  | "NONE"
+  | "FIRST_FRAME"
+  | "REFERENCE_ASSET"
+  | "UNKNOWN";
+
+export interface ShotSummary {
+  shot_id: string;
+  status: string;
+  official_version: number | null;
+  pending_review_version: number | null;
+  version_count: number;
+  generation_count: number;
+}
+
+export interface ShotListResponse {
+  project_id: string;
+  status: string;
+  shots: ShotSummary[];
+}
+
+export interface ShotPromptSummary {
+  version: number | null;
+  source: string | null;
+  visual_prompt_core: string | null;
+  final_prompt: string | null;
+}
+
+export interface ShotGenerationSummary {
+  model: string | null;
+  visual_input_mode: ShotVisualInputMode;
+}
+
+export interface ShotVersion {
+  version: number;
+  role: ShotVersionRole;
+  review_status: string;
+  created_at: string | null;
+  prompt: ShotPromptSummary;
+  generation: ShotGenerationSummary;
+  video_available: boolean;
+}
+
+export interface ShotDetail {
+  project_id: string;
+  shot_id: string;
+  status: string;
+  official_version: number | null;
+  pending_review_version: number | null;
+  version_count: number;
+  generation_count: number;
+  versions: ShotVersion[];
+}
+
 export interface CreateProjectRequest {
   product_name: string;
   product_description: string;

@@ -12,6 +12,7 @@ import type {
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { PlanningStageContent } from "../components/planning/PlanningStageContent";
+import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
   formatProjectDate,
@@ -240,6 +241,11 @@ export function ProjectStagePage() {
       </section>
 
       <PlanningStageContent
+        projectId={detail.project_id}
+        stageKey={validStageKey}
+      />
+
+      <ShotsStageContent
         projectId={detail.project_id}
         stageKey={validStageKey}
       />

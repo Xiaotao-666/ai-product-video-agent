@@ -106,6 +106,21 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "PROJECT_CREATE_FAILED": ErrorDefinition(
         500, "PROJECT_ERROR", "PROJECT_CREATE_FAILED", "项目创建失败。"
     ),
+    "INVALID_SHOT_ID": ErrorDefinition(
+        422, "SHOT_ERROR", "INVALID_SHOT_ID", "镜头标识无效。"
+    ),
+    "SHOT_NOT_FOUND": ErrorDefinition(
+        404, "SHOT_ERROR", "SHOT_NOT_FOUND", "镜头不存在或已被删除。"
+    ),
+    "SHOT_DATA_CORRUPT": ErrorDefinition(
+        422, "SHOT_ERROR", "SHOT_DATA_CORRUPT", "镜头数据无法读取。"
+    ),
+    "INVALID_SHOT_VERSION": ErrorDefinition(
+        422, "SHOT_ERROR", "INVALID_SHOT_VERSION", "镜头版本无效。"
+    ),
+    "VIDEO_NOT_FOUND": ErrorDefinition(
+        404, "SHOT_ERROR", "VIDEO_NOT_FOUND", "视频文件不可用。"
+    ),
 }
 
 

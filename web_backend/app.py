@@ -16,6 +16,7 @@ from web_backend.repositories.project_repository import ProjectRepository
 from web_backend.repositories.planning_content_repository import (
     PlanningContentRepository,
 )
+from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.routers.capabilities import router as capabilities_router
 from web_backend.routers.health import router as health_router
 from web_backend.routers.projects import router as projects_router
@@ -44,6 +45,9 @@ def _initialize_local_resources(application: FastAPI) -> None:
     lock_manager = application.state.project_lock_manager
     application.state.project_repository = ProjectRepository(settings.projects_root)
     application.state.planning_content_repository = PlanningContentRepository(
+        application.state.project_repository
+    )
+    application.state.shot_repository = ShotRepository(
         application.state.project_repository
     )
     application.state.project_service = ProjectService(

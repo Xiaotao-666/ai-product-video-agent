@@ -31,7 +31,7 @@ export const STAGE_DEFINITIONS = [
     label: "镜头",
     order: 4,
     description: "汇总镜头生成与审核进度。",
-    contentNote: "镜头列表与媒体内容将在后续工作流阶段接入。",
+    contentNote: "下方展示已持久化镜头、正式版本与历史版本入口。",
   },
   {
     key: "assembly",
@@ -148,6 +148,10 @@ export function projectWorkspacePath(projectId: string): string {
 
 export function projectStagePath(projectId: string, key: StageKey): string {
   return `${projectWorkspacePath(projectId)}/stages/${key}`;
+}
+
+export function projectShotPath(projectId: string, shotId: string): string {
+  return `${projectStagePath(projectId, "shots")}/${encodeURIComponent(shotId)}`;
 }
 
 export function actionsForStage(

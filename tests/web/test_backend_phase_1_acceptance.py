@@ -177,6 +177,9 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/planning/creative",
                 "/api/projects/{project_id}/planning/storyboard",
                 "/api/projects/{project_id}/planning/video-prompts",
+                "/api/projects/{project_id}/shots",
+                "/api/projects/{project_id}/shots/{shot_id}",
+                "/api/projects/{project_id}/shots/{shot_id}/versions/{version}/video",
             },
         )
         self.assertNotIn("/api/actions", schema["paths"])

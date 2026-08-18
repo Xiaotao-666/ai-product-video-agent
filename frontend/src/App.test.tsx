@@ -11,6 +11,8 @@ import {
   getProject,
   getProjects,
   getProjectWorkflow,
+  getShot,
+  getShots,
   getStoryboardContent,
   getVideoPrompts,
 } from "./api/client";
@@ -29,6 +31,8 @@ vi.mock("./api/client", async (importOriginal) => {
     getProjects: vi.fn(),
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
+    getShot: vi.fn(),
+    getShots: vi.fn(),
     getCreativeContent: vi.fn(),
     getStoryboardContent: vi.fn(),
     getVideoPrompts: vi.fn(),
@@ -41,6 +45,8 @@ const mockGetCapabilities = vi.mocked(getCapabilities);
 const mockGetProjects = vi.mocked(getProjects);
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetShot = vi.mocked(getShot);
+const mockGetShots = vi.mocked(getShots);
 const mockGetCreativeContent = vi.mocked(getCreativeContent);
 const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
@@ -144,6 +150,23 @@ describe("App", () => {
     mockGetProjectWorkflow.mockResolvedValue({
       data: workspaceWorkflow,
       correlationId: "req_workflow",
+    });
+    mockGetShots.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", shots: [] },
+      correlationId: "req_shots",
+    });
+    mockGetShot.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        shot_id: "shot_01",
+        status: "NOT_STARTED",
+        official_version: null,
+        pending_review_version: null,
+        version_count: 0,
+        generation_count: 0,
+        versions: [],
+      },
+      correlationId: "req_shot",
     });
     mockGetCreativeContent.mockResolvedValue({
       data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },

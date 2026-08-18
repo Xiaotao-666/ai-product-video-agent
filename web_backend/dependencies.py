@@ -9,6 +9,7 @@ from web_backend.repositories.project_repository import ProjectRepository
 from web_backend.repositories.planning_content_repository import (
     PlanningContentRepository,
 )
+from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.projects import ProjectService
 from web_backend.settings import BackendSettings
@@ -24,6 +25,10 @@ def get_project_repository(request: Request) -> ProjectRepository:
 
 def get_planning_content_repository(request: Request) -> PlanningContentRepository:
     return request.app.state.planning_content_repository
+
+
+def get_shot_repository(request: Request) -> ShotRepository:
+    return request.app.state.shot_repository
 
 
 def get_project_service(request: Request) -> ProjectService:

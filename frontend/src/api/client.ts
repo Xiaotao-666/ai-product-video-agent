@@ -20,7 +20,15 @@ import type {
   ProjectSummary,
   ProjectWorkflowResponse,
   PlanningCue,
+  ShotDetail,
+  ShotGenerationSummary,
+  ShotListResponse,
+  ShotPromptSummary,
   ShotStageState,
+  ShotSummary,
+  ShotVersion,
+  ShotVersionRole,
+  ShotVisualInputMode,
   StageState,
   StoryboardContentResponse,
   StoryboardPlanningContent,
@@ -35,6 +43,18 @@ import type {
 const CORRELATION_HEADER = "X-Correlation-ID";
 const UNSAFE_CONTENT = /(?:[a-z]:[\\/]|\\\\|file:\/\/|api[_ -]?key|credential(?:_env_name)?|authorization|provider secret|bearer\s+\S+|sk-[A-Za-z0-9_-]{12,})/i;
 const HIDDEN_CONTENT = "[敏感内容已隐藏]";
+const SHOT_ID_PATTERN = /^shot_(?:0[1-9]|[1-9][0-9]*)$/;
+const SHOT_VERSION_ROLES: ReadonlySet<string> = new Set([
+  "OFFICIAL",
+  "PENDING_REVIEW",
+  "HISTORY",
+]);
+const SHOT_VISUAL_INPUT_MODES: ReadonlySet<string> = new Set([
+  "NONE",
+  "FIRST_FRAME",
+  "REFERENCE_ASSET",
+  "UNKNOWN",
+]);
 const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
   "CREATIVE",
   "CREATIVE_REVIEW",
@@ -122,6 +142,18 @@ function isNullableNumber(value: unknown): value is number | null {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isNullablePositiveInteger(value: unknown): value is number | null {
+  return value === null || isPositiveInteger(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isWorkflowPhase(value: unknown): value is WorkflowPhase {
@@ -730,6 +762,157 @@ function parseVideoPromptsResponse(
   };
 }
 
+function parseShotId(value: unknown, correlationId: string | null): string {
+  if (
+    typeof value !== "string" ||
+    !SHOT_ID_PATTERN.test(value) ||
+    UNSAFE_CONTENT.test(value)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头标识。", correlationId);
+  }
+  return value;
+}
+
+function parseShotSummary(
+  value: unknown,
+  correlationId: string | null,
+): ShotSummary {
+  if (
+    !isRecord(value) ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.official_version) ||
+    !isNullablePositiveInteger(value.pending_review_version) ||
+    !isNonNegativeInteger(value.version_count) ||
+    !isNonNegativeInteger(value.generation_count)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头摘要。", correlationId);
+  }
+  return {
+    shot_id: parseShotId(value.shot_id, correlationId),
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    official_version: value.official_version,
+    pending_review_version: value.pending_review_version,
+    version_count: value.version_count,
+    generation_count: value.generation_count,
+  };
+}
+
+function parseShotListResponse(
+  value: unknown,
+  correlationId: string | null,
+): ShotListResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头列表。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    shots: value.shots.map((shot) => parseShotSummary(shot, correlationId)),
+  };
+}
+
+function parseShotPrompt(
+  value: unknown,
+  correlationId: string | null,
+): ShotPromptSummary {
+  if (!isRecord(value) || !isNullablePositiveInteger(value.version)) {
+    return invalidResponse("Backend 返回了无法读取的镜头 Prompt。", correlationId);
+  }
+  return {
+    version: value.version,
+    source: parseContentText(value.source, correlationId),
+    visual_prompt_core: parseContentText(
+      value.visual_prompt_core,
+      correlationId,
+    ),
+    final_prompt: parseContentText(value.final_prompt, correlationId),
+  };
+}
+
+function parseShotGeneration(
+  value: unknown,
+  correlationId: string | null,
+): ShotGenerationSummary {
+  if (
+    !isRecord(value) ||
+    !isNullableString(value.model) ||
+    typeof value.visual_input_mode !== "string" ||
+    !SHOT_VISUAL_INPUT_MODES.has(value.visual_input_mode)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头生成信息。", correlationId);
+  }
+  return {
+    model: parseContentText(value.model, correlationId),
+    visual_input_mode: value.visual_input_mode as ShotVisualInputMode,
+  };
+}
+
+function parseShotVersion(
+  value: unknown,
+  correlationId: string | null,
+): ShotVersion {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.version) ||
+    typeof value.role !== "string" ||
+    !SHOT_VERSION_ROLES.has(value.role) ||
+    typeof value.review_status !== "string" ||
+    !isNullableString(value.created_at) ||
+    typeof value.video_available !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头版本。", correlationId);
+  }
+  return {
+    version: value.version,
+    role: value.role as ShotVersionRole,
+    review_status:
+      parseContentText(value.review_status, correlationId) ?? "UNKNOWN",
+    created_at: parseContentText(value.created_at, correlationId),
+    prompt: parseShotPrompt(value.prompt, correlationId),
+    generation: parseShotGeneration(value.generation, correlationId),
+    video_available: value.video_available,
+  };
+}
+
+function parseShotDetailResponse(
+  value: unknown,
+  correlationId: string | null,
+): ShotDetail {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.official_version) ||
+    !isNullablePositiveInteger(value.pending_review_version) ||
+    !isNonNegativeInteger(value.version_count) ||
+    !isNonNegativeInteger(value.generation_count) ||
+    !Array.isArray(value.versions)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头详情。", correlationId);
+  }
+  const versions = value.versions.map((version) =>
+    parseShotVersion(version, correlationId),
+  );
+  if (value.version_count !== versions.length) {
+    return invalidResponse("Backend 返回了不一致的镜头版本。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    shot_id: parseShotId(value.shot_id, correlationId),
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    official_version: value.official_version,
+    pending_review_version: value.pending_review_version,
+    version_count: value.version_count,
+    generation_count: value.generation_count,
+    versions,
+  };
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -868,6 +1051,45 @@ export async function getVideoPrompts(
     data: parseVideoPromptsResponse(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
+}
+
+export async function getShots(
+  projectId: string,
+): Promise<ApiResult<ShotListResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/shots`,
+  );
+  return {
+    data: parseShotListResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getShot(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<ShotDetail>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}`,
+  );
+  return {
+    data: parseShotDetailResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getShotVideoUrl(
+  projectId: string,
+  shotId: string,
+  version: number,
+): string {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({
+      message: "镜头版本无效。",
+      code: "INVALID_SHOT_VERSION",
+    });
+  }
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/versions/${encodeURIComponent(String(version))}/video`;
 }
 
 export async function createProject(

@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, Response
+from fastapi.responses import FileResponse
 
 from web_backend.dependencies import (
     get_planning_content_repository,
     get_project_repository,
     get_project_service,
+    get_shot_repository,
 )
 from web_backend.models.planning import (
     CreativeContentResponse,
@@ -24,6 +26,7 @@ from web_backend.models.projects import (
     ProjectListResponse,
     ProjectWorkflowResponse,
 )
+from web_backend.models.shots import ShotDetail, ShotListResponse
 from web_backend.services.projects import (
     InvalidProjectName,
     InvalidProjectRequest,
@@ -43,6 +46,14 @@ from web_backend.repositories.project_repository import (
 from web_backend.repositories.planning_content_repository import (
     PlanningContentRepository,
 )
+from web_backend.repositories.shot_repository import (
+    InvalidShotId,
+    InvalidShotVersion,
+    ShotDataCorrupt,
+    ShotNotFound,
+    ShotRepository,
+    VideoNotFound,
+)
 
 
 router = APIRouter(tags=["projects"])
@@ -58,6 +69,11 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {
     InvalidProjectRequest: "INVALID_PROJECT_REQUEST",
     ProjectBusy: "PROJECT_BUSY",
     ProjectCreateFailed: "PROJECT_CREATE_FAILED",
+    InvalidShotId: "INVALID_SHOT_ID",
+    ShotNotFound: "SHOT_NOT_FOUND",
+    ShotDataCorrupt: "SHOT_DATA_CORRUPT",
+    InvalidShotVersion: "INVALID_SHOT_VERSION",
+    VideoNotFound: "VIDEO_NOT_FOUND",
 }
 
 
@@ -170,3 +186,53 @@ async def get_project_video_prompts_content(
         return repository.get_video_prompts(project_id)
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/shots",
+    response_model=ShotListResponse,
+)
+async def get_project_shots(
+    project_id: str,
+    repository: Annotated[ShotRepository, Depends(get_shot_repository)],
+) -> ShotListResponse:
+    try:
+        return repository.list_shots(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/shots/{shot_id}",
+    response_model=ShotDetail,
+)
+async def get_project_shot(
+    project_id: str,
+    shot_id: str,
+    repository: Annotated[ShotRepository, Depends(get_shot_repository)],
+) -> ShotDetail:
+    try:
+        return repository.get_shot(project_id, shot_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/shots/{shot_id}/versions/{version}/video",
+    response_class=FileResponse,
+)
+async def get_project_shot_video(
+    project_id: str,
+    shot_id: str,
+    version: str,
+    repository: Annotated[ShotRepository, Depends(get_shot_repository)],
+) -> FileResponse:
+    try:
+        path = repository.resolve_video(project_id, shot_id, version)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+    )

@@ -7,6 +7,7 @@ import {
   getCreativeContent,
   getProject,
   getProjectWorkflow,
+  getShots,
   getStoryboardContent,
   getVideoPrompts,
 } from "../api/client";
@@ -24,6 +25,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getCreativeContent: vi.fn(),
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
+    getShots: vi.fn(),
     getStoryboardContent: vi.fn(),
     getVideoPrompts: vi.fn(),
   };
@@ -31,6 +33,7 @@ vi.mock("../api/client", async (importOriginal) => {
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetShots = vi.mocked(getShots);
 const mockGetCreativeContent = vi.mocked(getCreativeContent);
 const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
@@ -137,6 +140,7 @@ describe("ProjectStagePage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
     mockGetProjectWorkflow.mockReset();
+    mockGetShots.mockReset();
     mockGetCreativeContent.mockReset();
     mockGetStoryboardContent.mockReset();
     mockGetVideoPrompts.mockReset();
@@ -151,6 +155,39 @@ describe("ProjectStagePage", () => {
     mockGetVideoPrompts.mockResolvedValue({
       data: { project_id: "LEE柠檬", status: "APPROVED", content: null },
       correlationId: "req_prompts",
+    });
+    mockGetShots.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        status: "COMPLETED",
+        shots: [
+          {
+            shot_id: "shot_01",
+            status: "APPROVED",
+            official_version: 2,
+            pending_review_version: null,
+            version_count: 2,
+            generation_count: 2,
+          },
+          {
+            shot_id: "shot_02",
+            status: "APPROVED",
+            official_version: 1,
+            pending_review_version: null,
+            version_count: 1,
+            generation_count: 1,
+          },
+          {
+            shot_id: "shot_03",
+            status: "APPROVED",
+            official_version: 1,
+            pending_review_version: null,
+            version_count: 1,
+            generation_count: 1,
+          },
+        ],
+      },
+      correlationId: "req_shots",
     });
     resolveStage();
   });
@@ -183,7 +220,9 @@ describe("ProjectStagePage", () => {
   it("keeps the active Stage in the URL and marks its NavLink active", async () => {
     renderStage();
     await screen.findByRole("heading", { name: "镜头" });
-    const shotsLink = screen.getByRole("link", { name: /镜头/ });
+    const shotsLink = within(
+      screen.getByRole("navigation", { name: "Workflow stages" }),
+    ).getByRole("link", { name: /镜头/ });
     expect(shotsLink).toHaveClass("stage-nav-link-active");
     expect(shotsLink).toHaveAttribute("aria-current", "page");
     expect(shotsLink).toHaveAttribute(

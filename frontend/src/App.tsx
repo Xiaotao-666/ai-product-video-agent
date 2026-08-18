@@ -5,6 +5,7 @@ import { CreateProjectPage } from "./pages/CreateProjectPage";
 import { ProjectStagePage } from "./pages/ProjectStagePage";
 import { ProjectWorkspacePage } from "./pages/ProjectWorkspacePage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { ShotDetailPage } from "./pages/ShotDetailPage";
 import { SystemStatusPage } from "./pages/SystemStatusPage";
 import "./styles/app.css";
 
@@ -16,6 +17,10 @@ export default function App() {
         <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/projects/new" element={<CreateProjectPage />} />
+        <Route
+          path="/projects/:projectId/stages/shots/:shotId"
+          element={<ShotDetailPage />}
+        />
         <Route
           path="/projects/:projectId/stages/:stageKey"
           element={<ProjectStagePage />}
