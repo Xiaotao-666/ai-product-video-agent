@@ -6,11 +6,7 @@ import {
   getProject,
   getProjectWorkflow,
 } from "../api/client";
-import type {
-  ComponentState,
-  ProjectDetail,
-  ProjectWorkflowResponse,
-} from "../api/types";
+import type { ProjectDetail, ProjectWorkflowResponse } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { WorkflowStageItem } from "../components/WorkflowStageItem";
 import {
@@ -19,6 +15,11 @@ import {
   statusPresentation,
   WORKFLOW_PHASE_LABELS,
 } from "../projectPresentation";
+import {
+  projectStagePath,
+  stagePresentation,
+  STAGE_DEFINITIONS,
+} from "../stageDefinitions";
 
 type WorkspaceState = "loading" | "success" | "error";
 
@@ -34,14 +35,6 @@ interface WorkspaceError {
 
 function displayText(value: string | null): string {
   return value && value.trim() ? value : "未填写";
-}
-
-function versionSuffix(version: number | null): string {
-  return version === null ? "" : ` · v${version}`;
-}
-
-function componentSummary(component: ComponentState): string {
-  return `${statusPresentation(component.status).label}${versionSuffix(component.version)}`;
 }
 
 function errorCopy(code: string): { title: string; message: string } {
@@ -187,7 +180,6 @@ export function ProjectWorkspacePage() {
 
   const { detail, workflow } = data;
   const request = detail.request;
-  const stages = workflow.stages;
   const projectStatus = headerStatus(workflow);
   const requestItems = [
     { label: "产品名称", value: displayText(request.product_name) },
@@ -211,60 +203,15 @@ export function ProjectWorkspacePage() {
       wide: true,
     },
   ];
-  const stageItems = [
-    {
-      name: "创意策划",
-      status: stages.creative.status,
-      summary: statusPresentation(stages.creative.status).label,
-    },
-    {
-      name: "分镜规划",
-      status: stages.storyboard.status,
-      summary: statusPresentation(stages.storyboard.status).label,
-    },
-    {
-      name: "视频提示词",
-      status: stages.video_prompt.status,
-      summary: statusPresentation(stages.video_prompt.status).label,
-    },
-    {
-      name: "镜头",
-      status: stages.shots.status,
-      summary:
-        stages.shots.total > 0
-          ? `${stages.shots.approved} / ${stages.shots.total} 已审核`
-          : statusPresentation(stages.shots.status).label,
-    },
-    {
-      name: "视频合片",
-      status: stages.assembly.needs_update ? "STALE" : stages.assembly.status,
-      summary: stages.assembly.needs_update
-        ? `需要重新合片${versionSuffix(stages.assembly.version)}`
-        : `${statusPresentation(stages.assembly.status).label}${versionSuffix(stages.assembly.version)}`,
-    },
-    {
-      name: "配音",
-      status: stages.voice.status,
-      summary: componentSummary(stages.voice),
-    },
-    {
-      name: "字幕",
-      status: stages.subtitle.status,
-      summary: componentSummary(stages.subtitle),
-    },
-    {
-      name: "音乐",
-      status: stages.music.status,
-      summary: componentSummary(stages.music),
-    },
-    {
-      name: "最终导出",
-      status: stages.export.stale ? "STALE" : stages.export.status,
-      summary: stages.export.stale
-        ? `需要重新导出${versionSuffix(stages.export.version)}`
-        : `${statusPresentation(stages.export.status).label}${versionSuffix(stages.export.version)}`,
-    },
-  ];
+  const stageItems = STAGE_DEFINITIONS.map((definition) => {
+    const presentation = stagePresentation(workflow, definition.key);
+    return {
+      name: definition.label,
+      status: presentation.status,
+      summary: presentation.summary,
+      to: projectStagePath(detail.project_id, definition.key),
+    };
+  });
 
   return (
     <main className="main-content workspace-page">

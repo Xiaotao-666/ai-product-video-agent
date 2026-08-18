@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -228,9 +228,12 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Projects" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
-      "nav-item-active",
-    );
+    const primaryNavigation = screen.getByRole("navigation", {
+      name: "Primary navigation",
+    });
+    expect(
+      within(primaryNavigation).getByRole("link", { name: "Projects" }),
+    ).toHaveClass("nav-item-active");
   });
 
   it("renders /projects/new and keeps Projects navigation active", () => {
@@ -263,6 +266,29 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
       "nav-item-active",
     );
+    expect(screen.getByRole("link", { name: /System Status/ })).not.toHaveClass(
+      "nav-item-active",
+    );
+  });
+
+  it("renders a Stage deep link and keeps Projects navigation active", async () => {
+    render(
+      <MemoryRouter
+        initialEntries={["/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative"]}
+      >
+        <App />
+      </MemoryRouter>,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "创意策划" }),
+    ).toBeInTheDocument();
+    expect(mockGetProject).toHaveBeenCalledWith("LEE柠檬");
+    const primaryNavigation = screen.getByRole("navigation", {
+      name: "Primary navigation",
+    });
+    expect(
+      within(primaryNavigation).getByRole("link", { name: "Projects" }),
+    ).toHaveClass("nav-item-active");
     expect(screen.getByRole("link", { name: /System Status/ })).not.toHaveClass(
       "nav-item-active",
     );

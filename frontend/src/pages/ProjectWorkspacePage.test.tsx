@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -25,6 +25,11 @@ vi.mock("../api/client", async (importOriginal) => {
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+
+function StageRouteProbe() {
+  const { projectId, stageKey } = useParams();
+  return <h1>Stage {stageKey} for {projectId}</h1>;
+}
 
 function workflow(
   overrides: Partial<ProjectWorkflowResponse> = {},
@@ -104,6 +109,10 @@ function renderWorkspace(path = "/projects/LEE%E6%9F%A0%E6%AA%AC") {
         <Route
           path="/projects/:projectId"
           element={<ProjectWorkspacePage />}
+        />
+        <Route
+          path="/projects/:projectId/stages/:stageKey"
+          element={<StageRouteProbe />}
         />
         <Route path="/projects" element={<h1>Projects Test Route</h1>} />
       </Routes>
@@ -376,5 +385,30 @@ describe("ProjectWorkspacePage", () => {
         within(stageCard("字幕")).getAllByText("未知状态").length,
       ).toBeGreaterThan(0);
     });
+  });
+
+  it.each([
+    ["创意策划", "creative"],
+    ["分镜规划", "storyboard"],
+    ["视频提示词", "video-prompt"],
+    ["镜头", "shots"],
+    ["视频合片", "assembly"],
+    ["配音", "voice"],
+    ["字幕", "subtitle"],
+    ["音乐", "music"],
+    ["最终导出", "export"],
+  ])("opens %s at the canonical Stage URL", async (label, key) => {
+    renderWorkspace();
+    const link = await screen.findByRole("link", { name: new RegExp(label) });
+    expect(link).toHaveAttribute(
+      "href",
+      `/projects/LEE%E6%9F%A0%E6%AA%AC/stages/${key}`,
+    );
+    fireEvent.click(link);
+    expect(
+      await screen.findByRole("heading", {
+        name: `Stage ${key} for LEE柠檬`,
+      }),
+    ).toBeInTheDocument();
   });
 });
