@@ -1,8 +1,9 @@
 # Web Backend Phase 1
 
-This directory contains the local FastAPI foundation for the AI Product Video
-Agent. It does not provide generation, review, assembly, export, or frontend
-actions yet.
+This directory contains the local FastAPI backend for the AI Product Video
+Agent. Creative generation is the only currently executable planning action;
+review, storyboard generation, video generation, assembly, and export actions
+remain unavailable.
 
 ## Local start
 
@@ -33,11 +34,15 @@ GET  /api/projects
 POST /api/projects
 GET  /api/projects/{project_id}
 GET  /api/projects/{project_id}/workflow
+POST /api/projects/{project_id}/planning/creative/generate
 ```
 
-The workflow endpoint reports deterministic `available_actions`, but Phase 1
-does not expose endpoints that execute those actions. Capabilities contain only
-availability booleans and never return credential material or local paths.
+The workflow endpoint reports deterministic `available_actions`. The Creative
+generate endpoint accepts only projects whose current actions include
+`GENERATE_CREATIVE`, returns a durable task with HTTP 202, and performs the
+same check again after the worker acquires the project write lock. Capabilities
+contain only availability booleans and never return credential material or
+local paths.
 
 The default development CORS origins are:
 
@@ -71,3 +76,16 @@ automatically replayed. The runner does not retry business callables.
 
 The current implementation remains limited to one Uvicorn worker. The CLI and
 Web backend must not write the same project concurrently.
+
+## Creative generation task
+
+`POST /api/projects/{project_id}/planning/creative/generate` is the only
+business task submission endpoint. It uses the shared Core Creative callable,
+so Core remains responsible for the DeepSeek prompt, structured-output retry,
+`creative_brief.json`, and `project.json` review state. The Web task runner
+does not retry provider calls. A successful task stores only a small Creative
+resource reference; clients reload Creative and Workflow through the GET APIs.
+
+The Backend loads the same repository `.env` file as the CLI during server
+startup. Capability preflight checks only whether DeepSeek is configured and
+never returns the credential. Automated tests mock the Core Provider call.

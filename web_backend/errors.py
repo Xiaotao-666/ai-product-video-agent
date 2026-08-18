@@ -106,6 +106,26 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "PROJECT_CREATE_FAILED": ErrorDefinition(
         500, "PROJECT_ERROR", "PROJECT_CREATE_FAILED", "项目创建失败。"
     ),
+    "ACTION_NOT_ALLOWED": ErrorDefinition(
+        409,
+        "ACTION_ERROR",
+        "ACTION_NOT_ALLOWED",
+        "当前项目状态不允许执行此操作。",
+    ),
+    "CAPABILITY_UNAVAILABLE": ErrorDefinition(
+        503,
+        "CAPABILITY_ERROR",
+        "CAPABILITY_UNAVAILABLE",
+        "创意生成服务尚未配置。",
+        retryable=True,
+    ),
+    "TASK_RUNNER_UNAVAILABLE": ErrorDefinition(
+        503,
+        "TASK_ERROR",
+        "TASK_RUNNER_UNAVAILABLE",
+        "任务执行器当前不可用。",
+        retryable=True,
+    ),
     "INVALID_SHOT_ID": ErrorDefinition(
         422, "SHOT_ERROR", "INVALID_SHOT_ID", "镜头标识无效。"
     ),

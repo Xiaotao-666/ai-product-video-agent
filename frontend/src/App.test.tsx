@@ -5,16 +5,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import {
   createProject,
+  generateCreative,
   getCapabilities,
   getCreativeContent,
   getHealth,
   getProject,
   getProjects,
   getProjectWorkflow,
+  getProjectTasks,
   getShot,
   getShots,
   getStoryboardContent,
   getVideoPrompts,
+  getTask,
 } from "./api/client";
 import type {
   CapabilitiesResponse,
@@ -31,12 +34,15 @@ vi.mock("./api/client", async (importOriginal) => {
     getProjects: vi.fn(),
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
+    getProjectTasks: vi.fn(),
     getShot: vi.fn(),
     getShots: vi.fn(),
     getCreativeContent: vi.fn(),
     getStoryboardContent: vi.fn(),
     getVideoPrompts: vi.fn(),
     createProject: vi.fn(),
+    generateCreative: vi.fn(),
+    getTask: vi.fn(),
   };
 });
 
@@ -45,12 +51,15 @@ const mockGetCapabilities = vi.mocked(getCapabilities);
 const mockGetProjects = vi.mocked(getProjects);
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetProjectTasks = vi.mocked(getProjectTasks);
 const mockGetShot = vi.mocked(getShot);
 const mockGetShots = vi.mocked(getShots);
 const mockGetCreativeContent = vi.mocked(getCreativeContent);
 const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockCreateProject = vi.mocked(createProject);
+const mockGenerateCreative = vi.mocked(generateCreative);
+const mockGetTask = vi.mocked(getTask);
 
 function renderSystem() {
   return render(
@@ -151,6 +160,12 @@ describe("App", () => {
       data: workspaceWorkflow,
       correlationId: "req_workflow",
     });
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [] },
+      correlationId: "req_tasks",
+    });
+    mockGenerateCreative.mockReset();
+    mockGetTask.mockReset();
     mockGetShots.mockResolvedValue({
       data: { project_id: "LEE柠檬", status: "NOT_STARTED", shots: [] },
       correlationId: "req_shots",

@@ -3,16 +3,20 @@ import { Link, NavLink, useParams } from "react-router-dom";
 
 import {
   ApiClientError,
+  getCreativeContent,
   getProject,
   getProjectWorkflow,
 } from "../api/client";
 import type {
+  CreativeContentResponse,
   ProjectDetail,
   ProjectWorkflowResponse,
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { PostProductionStageContent } from "../components/PostProductionStageContent";
 import { PlanningStageContent } from "../components/planning/PlanningStageContent";
+import type { CreativeRefreshSnapshot } from "../components/planning/PlanningStageContent";
+import { CreativeGenerateAction } from "../components/planning/CreativeGenerateAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -84,6 +88,8 @@ export function ProjectStagePage() {
   const [state, setState] = useState<StagePageState>("loading");
   const [data, setData] = useState<StagePageData | null>(null);
   const [loadError, setLoadError] = useState<StagePageError | null>(null);
+  const [creativeRefresh, setCreativeRefresh] =
+    useState<CreativeRefreshSnapshot | null>(null);
 
   const loadStage = useCallback(async () => {
     if (!projectId || !validStageKey) {
@@ -92,6 +98,7 @@ export function ProjectStagePage() {
     setState("loading");
     setData(null);
     setLoadError(null);
+    setCreativeRefresh(null);
 
     try {
       const [detailResult, workflowResult] = await Promise.all([
@@ -124,6 +131,33 @@ export function ProjectStagePage() {
       void loadStage();
     }
   }, [loadStage, validStageKey]);
+
+  const refreshAfterCreativeTask = useCallback(async () => {
+    if (!projectId || validStageKey !== "creative") return;
+    const [detailResult, workflowResult, creativeResult] = await Promise.all([
+      getProject(projectId),
+      getProjectWorkflow(projectId),
+      getCreativeContent(projectId),
+    ]);
+    const canonicalProjectId = detailResult.data.project_id;
+    if (
+      workflowResult.data.project_id !== canonicalProjectId ||
+      creativeResult.data.project_id !== canonicalProjectId
+    ) {
+      throw new ApiClientError({
+        message: "Creative refresh responses did not match.",
+        code: "INVALID_RESPONSE",
+      });
+    }
+    setData({
+      detail: detailResult.data,
+      workflow: workflowResult.data,
+    });
+    setCreativeRefresh((current) => ({
+      revision: (current?.revision ?? 0) + 1,
+      response: creativeResult.data as CreativeContentResponse,
+    }));
+  }, [projectId, validStageKey]);
 
   if (!definition || !validStageKey) {
     const overviewPath = projectId ? projectWorkspacePath(projectId) : "/projects";
@@ -244,7 +278,16 @@ export function ProjectStagePage() {
       <PlanningStageContent
         projectId={detail.project_id}
         stageKey={validStageKey}
+        creativeRefresh={creativeRefresh}
       />
+
+      {validStageKey === "creative" && (
+        <CreativeGenerateAction
+          projectId={detail.project_id}
+          availableActions={workflow.available_actions}
+          onTerminalRefresh={refreshAfterCreativeTask}
+        />
+      )}
 
       <ShotsStageContent
         projectId={detail.project_id}
@@ -270,7 +313,11 @@ export function ProjectStagePage() {
         ) : (
           <p className="stage-empty-copy">当前阶段没有可进行操作。</p>
         )}
-        <p className="stage-readonly-note">仅展示操作提示，本页面不会执行任何操作。</p>
+        <p className="stage-readonly-note">
+          {validStageKey === "creative"
+            ? "审核、修改与重新生成仍为只读提示，本阶段不会执行任何操作。"
+            : "仅展示操作提示，本页面不会执行任何操作。"}
+        </p>
       </section>
 
       <section className="stage-section" aria-labelledby="stage-navigation-title">

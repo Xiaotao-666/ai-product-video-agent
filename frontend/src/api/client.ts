@@ -1673,6 +1673,22 @@ export async function getProjectTasks(
   };
 }
 
+export async function generateCreative(
+  projectId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/creative/generate`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
 export async function createProject(
   project: CreateProjectRequest,
 ): Promise<ApiResult<CreateProjectResponse>> {

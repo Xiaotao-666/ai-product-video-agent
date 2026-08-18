@@ -20,7 +20,7 @@ def _configured(environment: Mapping[str, str], *names: str) -> bool:
 
 
 class CapabilityService:
-    """Inspect configuration presence and tool discovery without invoking either."""
+    """Inspect local capability configuration without invoking a provider."""
 
     def __init__(
         self,
@@ -30,6 +30,11 @@ class CapabilityService:
         self._environment = environment if environment is not None else os.environ
         self._which = which or shutil.which
 
+    def deepseek_api_key(self) -> str:
+        """Return the planning credential for an internal action adapter only."""
+
+        return str(self._environment.get("DEEPSEEK_API_KEY", "")).strip()
+
     def get_capabilities(self) -> CapabilitiesResponse:
         available = CapabilityAvailability
         ffmpeg_available = bool(self._which("ffmpeg"))
@@ -37,7 +42,7 @@ class CapabilityService:
         return CapabilitiesResponse(
             planning=PlanningCapabilities(
                 deepseek=available(
-                    available=_configured(self._environment, "DEEPSEEK_API_KEY")
+                    available=bool(self.deepseek_api_key())
                 )
             ),
             video=VideoCapabilities(

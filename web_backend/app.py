@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,9 +25,11 @@ from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.repositories.task_repository import TaskRepository
 from web_backend.routers.capabilities import router as capabilities_router
 from web_backend.routers.health import router as health_router
+from web_backend.routers.planning_actions import router as planning_actions_router
 from web_backend.routers.projects import router as projects_router
 from web_backend.routers.tasks import router as tasks_router
 from web_backend.services.capabilities import CapabilityService
+from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
@@ -33,6 +37,7 @@ from web_backend.settings import BackendSettings
 
 
 lifecycle_logger = logging.getLogger("uvicorn.error.web_lifecycle")
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -82,11 +87,19 @@ def _initialize_local_resources(application: FastAPI) -> None:
         lock_manager,
     )
     application.state.capability_service = CapabilityService()
+    application.state.creative_action_service = CreativeActionService(
+        application.state.project_repository,
+        application.state.task_service,
+        application.state.capability_service,
+    )
     application.state.local_resources_initialized = True
 
 
 @asynccontextmanager
 async def backend_lifespan(application: FastAPI):
+    # Match the CLI credential source without exposing values through settings
+    # or capability responses. Loading configuration performs no provider call.
+    load_dotenv(REPOSITORY_ROOT / ".env")
     _initialize_local_resources(application)
     interrupted = application.state.task_service.recover_interrupted_tasks()
     if interrupted:
@@ -140,6 +153,7 @@ def create_app(
     application.include_router(health_router, prefix="/api")
     application.include_router(capabilities_router, prefix="/api")
     application.include_router(projects_router, prefix="/api")
+    application.include_router(planning_actions_router, prefix="/api")
     application.include_router(tasks_router, prefix="/api")
     return application
 

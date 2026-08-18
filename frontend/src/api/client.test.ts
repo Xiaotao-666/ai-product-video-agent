@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   createProject,
+  generateCreative,
   getAssembly,
   getAssemblyVideoUrl,
   getCapabilities,
@@ -1039,6 +1040,31 @@ describe("API client", () => {
 
     expect(result.data).toEqual(taskPayload);
     expect(result.correlationId).toBe("req_task_get");
+  });
+
+  it("submits Creative generation with POST and accepts a 202 task", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "CREATIVE_GENERATE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(queuedTask, 202, { "X-Correlation-ID": "req_generate" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateCreative("LEE柠檬");
+
+    expect(result.data).toEqual(queuedTask);
+    expect(result.correlationId).toBe("req_generate");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/generate",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("maps task not found without exposing backend internals", async () => {

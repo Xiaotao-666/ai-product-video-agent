@@ -11,6 +11,7 @@ from typing import Any, Mapping, TypeVar
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
+from creative_workflow import generate_creative_stage
 from evaluation import EvaluationRecorder
 from project_manager import ProjectDirectoryError, ProjectPaths, ask_project_paths
 from project_migration import detect_project_schema, migrate_project_to_v2
@@ -454,30 +455,15 @@ def run_pipeline(
     if checkpoint.stage_status(ProjectStage.CREATIVE) == StageStatus.COMPLETED:
         brief = load_artifact(paths.creative_brief_path(), CreativeBrief, "Creative")
     else:
-        checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.RUNNING)
-        task_logger.set_stage("creative")
-        brief = _record_prompt_evaluation(
-            evaluation_recorder,
-            "creative",
-            generate_creative_brief(
-                request,
-                deepseek_key,
-                task_logger,
-                **_visual_kwargs(
-                    visual_analysis_result,
-                    visual_constraints,
-                    reference_asset_context,
-                ),
-            ),
+        brief = generate_creative_stage(
+            paths,
             request,
-            visual_analysis_result,
-            visual_constraints,
-            reference_asset_context,
+            checkpoint,
+            deepseek_key,
+            task_logger,
+            evaluation_recorder=evaluation_recorder,
+            reference_asset_context=reference_asset_context,
         )
-        paths.save_json(paths.creative_brief_path(), brief.model_dump())
-        checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.COMPLETED)
-        checkpoint.advance_to(ProjectStage.CREATIVE_REVIEW, StageStatus.WAITING_REVIEW)
-        task_logger.event("CREATIVE_GENERATED", "创意方案生成成功")
 
     if checkpoint.stage_status(ProjectStage.CREATIVE_REVIEW) != StageStatus.APPROVED:
         brief = human_review_gate(

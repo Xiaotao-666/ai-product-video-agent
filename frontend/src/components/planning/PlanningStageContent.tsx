@@ -25,6 +25,12 @@ type ContentState = "loading" | "success" | "error";
 interface PlanningStageContentProps {
   projectId: string;
   stageKey: StageKey;
+  creativeRefresh?: CreativeRefreshSnapshot | null;
+}
+
+export interface CreativeRefreshSnapshot {
+  revision: number;
+  response: CreativeContentResponse;
 }
 
 interface ContentError {
@@ -295,7 +301,11 @@ function loadingCopy(stageKey: PlanningStageKey): string {
   return "正在加载视频提示词…";
 }
 
-export function PlanningStageContent({ projectId, stageKey }: PlanningStageContentProps) {
+export function PlanningStageContent({
+  projectId,
+  stageKey,
+  creativeRefresh = null,
+}: PlanningStageContentProps) {
   const planningStageKey = isPlanningStageKey(stageKey) ? stageKey : null;
   const [state, setState] = useState<ContentState>("loading");
   const [response, setResponse] = useState<PlanningResponse | null>(null);
@@ -328,6 +338,17 @@ export function PlanningStageContent({ projectId, stageKey }: PlanningStageConte
   useEffect(() => {
     if (planningStageKey) void loadContent();
   }, [loadContent, planningStageKey]);
+
+  useEffect(() => {
+    if (
+      planningStageKey === "creative" &&
+      creativeRefresh?.response.project_id === projectId
+    ) {
+      setResponse(creativeRefresh.response);
+      setError(null);
+      setState("success");
+    }
+  }, [creativeRefresh, planningStageKey, projectId]);
 
   if (!planningStageKey) return null;
 

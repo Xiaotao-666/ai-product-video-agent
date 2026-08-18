@@ -15,6 +15,7 @@ from web_backend.repositories.postproduction_repository import (
 from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.repositories.task_repository import TaskRepository
 from web_backend.services.capabilities import CapabilityService
+from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
@@ -63,3 +64,7 @@ def get_task_runner(request: Request) -> TaskRunner:
 
 def get_task_service(request: Request) -> TaskService:
     return request.app.state.task_service
+
+
+def get_creative_action_service(request: Request) -> CreativeActionService:
+    return request.app.state.creative_action_service

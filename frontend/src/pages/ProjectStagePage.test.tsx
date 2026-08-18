@@ -4,17 +4,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  generateCreative,
   getAssembly,
   getCreativeContent,
   getExport,
   getMusic,
   getProject,
   getProjectWorkflow,
+  getProjectTasks,
   getShots,
   getStoryboardContent,
   getSubtitle,
   getVideoPrompts,
   getVoice,
+  getTask,
 } from "../api/client";
 import type {
   ProjectDetail,
@@ -33,16 +36,20 @@ vi.mock("../api/client", async (importOriginal) => {
     getMusic: vi.fn(),
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
+    getProjectTasks: vi.fn(),
     getShots: vi.fn(),
     getStoryboardContent: vi.fn(),
     getSubtitle: vi.fn(),
     getVideoPrompts: vi.fn(),
     getVoice: vi.fn(),
+    generateCreative: vi.fn(),
+    getTask: vi.fn(),
   };
 });
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetProjectTasks = vi.mocked(getProjectTasks);
 const mockGetAssembly = vi.mocked(getAssembly);
 const mockGetExport = vi.mocked(getExport);
 const mockGetMusic = vi.mocked(getMusic);
@@ -52,6 +59,8 @@ const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
 const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockGetVoice = vi.mocked(getVoice);
+const mockGenerateCreative = vi.mocked(generateCreative);
+const mockGetTask = vi.mocked(getTask);
 
 function workflow(
   overrides: Partial<ProjectWorkflowResponse> = {},
@@ -155,6 +164,7 @@ describe("ProjectStagePage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
     mockGetProjectWorkflow.mockReset();
+    mockGetProjectTasks.mockReset();
     mockGetAssembly.mockReset();
     mockGetExport.mockReset();
     mockGetMusic.mockReset();
@@ -164,6 +174,12 @@ describe("ProjectStagePage", () => {
     mockGetSubtitle.mockReset();
     mockGetVideoPrompts.mockReset();
     mockGetVoice.mockReset();
+    mockGenerateCreative.mockReset();
+    mockGetTask.mockReset();
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [] },
+      correlationId: "req_tasks",
+    });
     mockGetAssembly.mockResolvedValue({
       data: {
         project_id: "LEE柠檬",
