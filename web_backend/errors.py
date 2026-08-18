@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -46,6 +47,79 @@ class WebApiError(Exception):
         self.retryable = retryable
 
 
+@dataclass(frozen=True)
+class ErrorDefinition:
+    status_code: int
+    error_type: str
+    code: str
+    message: str
+    retryable: bool = False
+
+
+ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
+    "ROUTE_NOT_FOUND": ErrorDefinition(
+        404, "NOT_FOUND", "ROUTE_NOT_FOUND", "请求的资源不存在。"
+    ),
+    "HTTP_REQUEST_ERROR": ErrorDefinition(
+        400, "HTTP_ERROR", "HTTP_REQUEST_ERROR", "请求无法处理。"
+    ),
+    "INVALID_REQUEST": ErrorDefinition(
+        422, "VALIDATION_ERROR", "INVALID_REQUEST", "请求参数无效。"
+    ),
+    "UNEXPECTED_ERROR": ErrorDefinition(
+        500, "INTERNAL_ERROR", "UNEXPECTED_ERROR", "请求处理失败。"
+    ),
+    "INVALID_PROJECT_ID": ErrorDefinition(
+        422, "PROJECT_ERROR", "INVALID_PROJECT_ID", "项目标识无效。"
+    ),
+    "PROJECT_NOT_FOUND": ErrorDefinition(
+        404, "PROJECT_ERROR", "PROJECT_NOT_FOUND", "项目不存在。"
+    ),
+    "PROJECT_DATA_CORRUPT": ErrorDefinition(
+        422, "PROJECT_ERROR", "PROJECT_DATA_CORRUPT", "项目数据无法读取。"
+    ),
+    "PROJECT_DATA_UNSUPPORTED": ErrorDefinition(
+        422,
+        "PROJECT_ERROR",
+        "PROJECT_DATA_UNSUPPORTED",
+        "项目数据版本暂不支持。",
+    ),
+    "INVALID_PROJECT_NAME": ErrorDefinition(
+        422, "VALIDATION_ERROR", "INVALID_PROJECT_NAME", "项目名称无效。"
+    ),
+    "INVALID_VIDEO_DURATION": ErrorDefinition(
+        422,
+        "VALIDATION_ERROR",
+        "INVALID_VIDEO_DURATION",
+        "视频总时长必须由支持的镜头时长组合构成。",
+    ),
+    "INVALID_PROJECT_REQUEST": ErrorDefinition(
+        422, "VALIDATION_ERROR", "INVALID_PROJECT_REQUEST", "产品需求无效。"
+    ),
+    "PROJECT_BUSY": ErrorDefinition(
+        409,
+        "PROJECT_ERROR",
+        "PROJECT_BUSY",
+        "项目当前正在执行其他操作，请稍后重试。",
+        retryable=True,
+    ),
+    "PROJECT_CREATE_FAILED": ErrorDefinition(
+        500, "PROJECT_ERROR", "PROJECT_CREATE_FAILED", "项目创建失败。"
+    ),
+}
+
+
+def registered_api_error(code: str) -> WebApiError:
+    definition = ERROR_DEFINITIONS[code]
+    return WebApiError(
+        status_code=definition.status_code,
+        error_type=definition.error_type,
+        code=definition.code,
+        message=definition.message,
+        retryable=definition.retryable,
+    )
+
+
 def request_correlation_id(request: Request) -> str:
     return getattr(request.state, "correlation_id", "req_unavailable")
 
@@ -71,14 +145,25 @@ def error_response(
     return JSONResponse(status_code=status_code, content=payload.model_dump())
 
 
-def unexpected_error_response(request: Request) -> JSONResponse:
+def registered_error_response(
+    request: Request,
+    code: str,
+    *,
+    status_code: int | None = None,
+) -> JSONResponse:
+    definition = ERROR_DEFINITIONS[code]
     return error_response(
         request,
-        status_code=500,
-        error_type="INTERNAL_ERROR",
-        code="UNEXPECTED_ERROR",
-        message="请求处理失败。",
+        status_code=status_code or definition.status_code,
+        error_type=definition.error_type,
+        code=definition.code,
+        message=definition.message,
+        retryable=definition.retryable,
     )
+
+
+def unexpected_error_response(request: Request) -> JSONResponse:
+    return registered_error_response(request, "UNEXPECTED_ERROR")
 
 
 async def http_exception_handler(
@@ -86,19 +171,11 @@ async def http_exception_handler(
     exception: StarletteHTTPException,
 ) -> JSONResponse:
     if exception.status_code == 404:
-        return error_response(
-            request,
-            status_code=404,
-            error_type="NOT_FOUND",
-            code="ROUTE_NOT_FOUND",
-            message="请求的资源不存在。",
-        )
-    return error_response(
+        return registered_error_response(request, "ROUTE_NOT_FOUND")
+    return registered_error_response(
         request,
+        "HTTP_REQUEST_ERROR",
         status_code=exception.status_code,
-        error_type="HTTP_ERROR",
-        code="HTTP_REQUEST_ERROR",
-        message="请求无法处理。",
     )
 
 
@@ -106,13 +183,7 @@ async def validation_exception_handler(
     request: Request,
     _exception: RequestValidationError,
 ) -> JSONResponse:
-    return error_response(
-        request,
-        status_code=422,
-        error_type="VALIDATION_ERROR",
-        code="INVALID_REQUEST",
-        message="请求参数无效。",
-    )
+    return registered_error_response(request, "INVALID_REQUEST")
 
 
 async def api_exception_handler(

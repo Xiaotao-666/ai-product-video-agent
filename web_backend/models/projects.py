@@ -30,6 +30,29 @@ class WorkflowPhase(StrEnum):
     ERROR = "ERROR"
 
 
+class AvailableAction(StrEnum):
+    GENERATE_CREATIVE = "GENERATE_CREATIVE"
+    APPROVE_CREATIVE = "APPROVE_CREATIVE"
+    REVISE_CREATIVE = "REVISE_CREATIVE"
+    REGENERATE_CREATIVE = "REGENERATE_CREATIVE"
+    GENERATE_STORYBOARD = "GENERATE_STORYBOARD"
+    APPROVE_STORYBOARD = "APPROVE_STORYBOARD"
+    REVISE_STORYBOARD = "REVISE_STORYBOARD"
+    REGENERATE_STORYBOARD = "REGENERATE_STORYBOARD"
+    GENERATE_VIDEO_PROMPTS = "GENERATE_VIDEO_PROMPTS"
+    APPROVE_VIDEO_PROMPTS = "APPROVE_VIDEO_PROMPTS"
+    REVISE_VIDEO_PROMPTS = "REVISE_VIDEO_PROMPTS"
+    REGENERATE_VIDEO_PROMPTS = "REGENERATE_VIDEO_PROMPTS"
+    GENERATE_SHOTS = "GENERATE_SHOTS"
+    REVIEW_SHOTS = "REVIEW_SHOTS"
+    MANAGE_SHOT_VERSIONS = "MANAGE_SHOT_VERSIONS"
+    ASSEMBLE = "ASSEMBLE"
+    GENERATE_VOICE = "GENERATE_VOICE"
+    GENERATE_SUBTITLE = "GENERATE_SUBTITLE"
+    SET_MUSIC = "SET_MUSIC"
+    FINAL_EXPORT = "FINAL_EXPORT"
+
+
 class StageState(ResponseModel):
     status: str
 
@@ -69,6 +92,7 @@ class WorkflowState(ResponseModel):
     workflow_phase: WorkflowPhase
     status: str
     stages: WorkflowStages
+    available_actions: list[AvailableAction]
 
 
 class ProjectRequest(ResponseModel):
@@ -139,3 +163,5 @@ class ProjectWorkflowResponse(ResponseModel):
     workflow_phase: WorkflowPhase
     status: str
     stages: WorkflowStages
+    available_actions: list[AvailableAction]
+    updated_at: str

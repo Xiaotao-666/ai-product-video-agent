@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from web_backend.models.projects import (
+    AvailableAction,
     AssemblyState,
     ComponentState,
     FinalExportState,
@@ -31,6 +32,42 @@ _KNOWN_STATUS = {
     "FINAL_COMPLETED",
 }
 _DONE = {"APPROVED", "COMPLETED"}
+
+
+_PHASE_ACTIONS: dict[WorkflowPhase, tuple[AvailableAction, ...]] = {
+    WorkflowPhase.CREATIVE: (AvailableAction.GENERATE_CREATIVE,),
+    WorkflowPhase.CREATIVE_REVIEW: (
+        AvailableAction.APPROVE_CREATIVE,
+        AvailableAction.REVISE_CREATIVE,
+        AvailableAction.REGENERATE_CREATIVE,
+    ),
+    WorkflowPhase.STORYBOARD: (AvailableAction.GENERATE_STORYBOARD,),
+    WorkflowPhase.STORYBOARD_REVIEW: (
+        AvailableAction.APPROVE_STORYBOARD,
+        AvailableAction.REVISE_STORYBOARD,
+        AvailableAction.REGENERATE_STORYBOARD,
+    ),
+    WorkflowPhase.VIDEO_PROMPT: (AvailableAction.GENERATE_VIDEO_PROMPTS,),
+    WorkflowPhase.VIDEO_PROMPT_REVIEW: (
+        AvailableAction.APPROVE_VIDEO_PROMPTS,
+        AvailableAction.REVISE_VIDEO_PROMPTS,
+        AvailableAction.REGENERATE_VIDEO_PROMPTS,
+    ),
+    WorkflowPhase.VIDEO_GENERATION: (AvailableAction.GENERATE_SHOTS,),
+    WorkflowPhase.SHOT_REVIEW: (
+        AvailableAction.REVIEW_SHOTS,
+        AvailableAction.MANAGE_SHOT_VERSIONS,
+    ),
+    WorkflowPhase.ASSEMBLY: (
+        AvailableAction.ASSEMBLE,
+        AvailableAction.MANAGE_SHOT_VERSIONS,
+    ),
+    WorkflowPhase.ASSEMBLY_REQUIRED: (
+        AvailableAction.ASSEMBLE,
+        AvailableAction.MANAGE_SHOT_VERSIONS,
+    ),
+    WorkflowPhase.FINAL_EXPORT: (AvailableAction.FINAL_EXPORT,),
+}
 
 
 @dataclass(frozen=True)
@@ -280,8 +317,22 @@ def derive_workflow(
     else:
         phase = WorkflowPhase.POST_PRODUCTION
 
+    if phase is WorkflowPhase.POST_PRODUCTION:
+        available_actions = [
+            action
+            for component, action in (
+                (voice, AvailableAction.GENERATE_VOICE),
+                (subtitle, AvailableAction.GENERATE_SUBTITLE),
+                (music, AvailableAction.SET_MUSIC),
+            )
+            if component.status != "COMPLETED"
+        ]
+    else:
+        available_actions = list(_PHASE_ACTIONS.get(phase, ()))
+
     return WorkflowState(
         workflow_phase=phase,
         status=project_status,
         stages=stages,
+        available_actions=available_actions,
     )

@@ -261,11 +261,14 @@ class ProjectRepository:
         record = self._resolve_record(project_id)
         data = self._require_data(record)
         workflow = derive_workflow(data, self._load_manifests(record))
+        updated_at, _ = _safe_timestamp(data, record.project_file)
         return ProjectWorkflowResponse(
             project_id=record.api_id,
             workflow_phase=workflow.workflow_phase,
             status=workflow.status,
             stages=workflow.stages,
+            available_actions=workflow.available_actions,
+            updated_at=updated_at,
         )
 
     def resolve_project_dir(self, project_id: str) -> Path:

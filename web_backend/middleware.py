@@ -16,6 +16,11 @@ from web_backend.errors import error_logger, unexpected_error_response
 
 
 CORRELATION_ID_HEADER = "X-Correlation-ID"
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
 _SAFE_CORRELATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 _SENSITIVE_CORRELATION_ID = re.compile(
     r"(?i)(?:api[_-]?key|authorization|bearer|secret|token)"
@@ -86,6 +91,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             response = unexpected_error_response(request)
 
         response.headers[CORRELATION_ID_HEADER] = correlation_id
+        response.headers.update(SECURITY_HEADERS)
         duration_ms = (perf_counter() - started_at) * 1000
         access_logger.info(
             "timestamp=%s correlation_id=%s method=%s route=%s "
