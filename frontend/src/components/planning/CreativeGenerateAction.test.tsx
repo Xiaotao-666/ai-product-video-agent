@@ -6,6 +6,8 @@ import {
   generateCreative,
   getProjectTasks,
   getTask,
+  regenerateCreative,
+  reviseCreative,
 } from "../../api/client";
 import type {
   AvailableAction,
@@ -23,12 +25,16 @@ vi.mock("../../api/client", async (importOriginal) => {
     generateCreative: vi.fn(),
     getProjectTasks: vi.fn(),
     getTask: vi.fn(),
+    regenerateCreative: vi.fn(),
+    reviseCreative: vi.fn(),
   };
 });
 
 const mockGenerate = vi.mocked(generateCreative);
 const mockProjectTasks = vi.mocked(getProjectTasks);
 const mockTask = vi.mocked(getTask);
+const mockRegenerate = vi.mocked(regenerateCreative);
+const mockRevise = vi.mocked(reviseCreative);
 const projectId = "project-a";
 
 function record(
@@ -78,12 +84,14 @@ function renderAction(
   hasCreative: boolean | null = false,
 ) {
   const onTerminalRefresh = vi.fn().mockResolvedValue(undefined);
+  const onActiveTaskChange = vi.fn();
   const view = render(
     <CreativeGenerateAction
       projectId={projectId}
       availableActions={availableActions}
       hasCreative={hasCreative}
       onTerminalRefresh={onTerminalRefresh}
+      onActiveTaskChange={onActiveTaskChange}
     />,
   );
   const rerenderCreative = (nextHasCreative: boolean | null) => {
@@ -93,10 +101,11 @@ function renderAction(
         availableActions={availableActions}
         hasCreative={nextHasCreative}
         onTerminalRefresh={onTerminalRefresh}
+        onActiveTaskChange={onActiveTaskChange}
       />,
     );
   };
-  return { ...view, onTerminalRefresh, rerenderCreative };
+  return { ...view, onTerminalRefresh, onActiveTaskChange, rerenderCreative };
 }
 
 describe("CreativeGenerateAction", () => {
@@ -105,6 +114,8 @@ describe("CreativeGenerateAction", () => {
     mockGenerate.mockReset();
     mockProjectTasks.mockReset();
     mockTask.mockReset();
+    mockRegenerate.mockReset();
+    mockRevise.mockReset();
     mockProjectTasks.mockResolvedValue({
       data: { project_id: projectId, tasks: [] },
       correlationId: "req_tasks",
@@ -374,12 +385,248 @@ describe("CreativeGenerateAction", () => {
     expect(mockGenerate).not.toHaveBeenCalled();
   });
 
-  it("never renders Approve, Revise, Regenerate, or storage-backed controls", async () => {
-    renderAction(["APPROVE_CREATIVE"]);
+  it("shows distinct Revise and Regenerate actions only while review allows them", async () => {
+    const { rerender } = renderAction(
+      ["APPROVE_CREATIVE", "REVISE_CREATIVE", "REGENERATE_CREATIVE"],
+      true,
+    );
     await flush();
-    for (const name of ["审核创意", "修改创意", "重新生成创意"]) {
-      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
-    }
+    expect(screen.getByRole("button", { name: "修改创意" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成创意" })).toBeInTheDocument();
+
+    rerender(
+      <CreativeGenerateAction
+        projectId={projectId}
+        availableActions={["GENERATE_STORYBOARD"]}
+        hasCreative
+        onTerminalRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "修改创意" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新生成创意" })).not.toBeInTheDocument();
+  });
+
+  it("opens and cancels the lightweight feedback panel without POST", async () => {
+    renderAction(["REVISE_CREATIVE", "REGENERATE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    const feedback = screen.getByRole("textbox", { name: "修改意见" });
+    expect(feedback).toHaveAttribute("maxlength", "4000");
+    expect(screen.getByRole("button", { name: "提交修改" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("textbox", { name: "修改意见" })).not.toBeInTheDocument();
+    expect(mockRevise).not.toHaveBeenCalled();
+  });
+
+  it("trims feedback, submits Revise once, and locks editing immediately", async () => {
+    let resolveSubmit!: (value: Awaited<ReturnType<typeof reviseCreative>>) => void;
+    mockRevise.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSubmit = resolve;
+      }),
+    );
+    renderAction(["REVISE_CREATIVE", "REGENERATE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "修改意见" }), {
+      target: { value: "  保留主题，不要人物  " },
+    });
+    const submit = screen.getByRole("button", { name: "提交修改" });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(mockRevise).toHaveBeenCalledTimes(1);
+    expect(mockRevise).toHaveBeenCalledWith(projectId, "保留主题，不要人物");
+    expect(screen.getByRole("textbox", { name: "修改意见" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "正在提交…" })).toBeDisabled();
+    resolveSubmit({
+      data: record("QUEUED", "CREATIVE_REVISE"),
+      correlationId: "req_revise",
+    });
+    await flush();
+    expect(screen.queryByRole("textbox", { name: "修改意见" })).not.toBeInTheDocument();
+    expect(screen.getByText("修改任务已提交，排队中…")).toBeInTheDocument();
+  });
+
+  it("opens Regenerate confirmation and cancel performs no POST", async () => {
+    renderAction(["REVISE_CREATIVE", "REGENERATE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "重新生成创意" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("确认重新生成 Creative？");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("可随时恢复");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("confirms Regenerate once without sending feedback", async () => {
+    let resolveSubmit!: (value: Awaited<ReturnType<typeof regenerateCreative>>) => void;
+    mockRegenerate.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSubmit = resolve;
+      }),
+    );
+    renderAction(["REVISE_CREATIVE", "REGENERATE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "重新生成创意" }));
+    const confirm = screen.getByRole("button", { name: "确认重新生成" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(mockRegenerate).toHaveBeenCalledTimes(1);
+    expect(mockRegenerate).toHaveBeenCalledWith(projectId);
+    expect(screen.getByRole("button", { name: "正在提交…" })).toBeDisabled();
+    resolveSubmit({
+      data: record("QUEUED", "CREATIVE_REGENERATE"),
+      correlationId: "req_regenerate",
+    });
+    await flush();
+    expect(screen.getByText("重新生成任务已提交，排队中…")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["CREATIVE_REVISE", "正在修改创意…"],
+    ["CREATIVE_REGENERATE", "正在重新生成创意…"],
+  ] satisfies Array<[TaskOperation, string]>) (
+    "recovers an active %s task after refresh with operation-specific copy",
+    async (operation, copy) => {
+      mockProjectTasks.mockResolvedValue({
+        data: { project_id: projectId, tasks: [record("RUNNING", operation)] },
+        correlationId: null,
+      });
+      mockTask.mockResolvedValue({
+        data: record("SUCCEEDED", operation),
+        correlationId: null,
+      });
+      const { onTerminalRefresh, onActiveTaskChange } = renderAction(
+        ["REVISE_CREATIVE", "REGENERATE_CREATIVE"],
+        true,
+      );
+      await flush();
+      expect(screen.getByText(copy)).toBeInTheDocument();
+      expect(screen.getByText("正在生成新的创意方案…")).toBeInTheDocument();
+      expect(onActiveTaskChange).toHaveBeenCalledWith(true);
+      expect(mockRevise).not.toHaveBeenCalled();
+      expect(mockRegenerate).not.toHaveBeenCalled();
+      await advancePoll();
+      await flush();
+      expect(onTerminalRefresh).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("Revise success stops polling and refreshes durable business state", async () => {
+    mockRevise.mockResolvedValue({
+      data: record("QUEUED", "CREATIVE_REVISE"),
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record("SUCCEEDED", "CREATIVE_REVISE"),
+      correlationId: null,
+    });
+    const { onTerminalRefresh } = renderAction(["REVISE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "修改意见" }), {
+      target: { value: "调整为产品微距" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修改" }));
+    await flush();
+    await advancePoll();
+    await flush();
+    expect(screen.getAllByText("创意修改完成。").length).toBeGreaterThan(0);
+    expect(onTerminalRefresh).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(mockTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("Revise failure stops polling while persisted old Creative remains visible", async () => {
+    mockRevise.mockResolvedValue({
+      data: record("QUEUED", "CREATIVE_REVISE"),
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record("FAILED", "CREATIVE_REVISE"),
+      correlationId: null,
+    });
+    renderAction(["REVISE_CREATIVE", "REGENERATE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "修改意见" }), {
+      target: { value: "调整" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修改" }));
+    await flush();
+    await advancePoll();
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(screen.getAllByText("修改创意失败。").length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/\d+%/);
+  });
+
+  it("Interrupted Regenerate refreshes state without automatic resubmission", async () => {
+    mockProjectTasks.mockResolvedValue({
+      data: {
+        project_id: projectId,
+        tasks: [record("RUNNING", "CREATIVE_REGENERATE")],
+      },
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record("INTERRUPTED", "CREATIVE_REGENERATE"),
+      correlationId: null,
+    });
+    const { onTerminalRefresh } = renderAction(
+      ["REVISE_CREATIVE", "REGENERATE_CREATIVE"],
+      true,
+    );
+    await flush();
+    await advancePoll();
+    await flush();
+    expect(screen.getAllByText("重新生成任务已中断。").length).toBeGreaterThan(0);
+    expect(onTerminalRefresh).toHaveBeenCalledTimes(1);
+    expect(mockRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("PROJECT_BUSY Revise attaches to an existing Creative Regenerate task", async () => {
+    mockProjectTasks
+      .mockResolvedValueOnce({ data: { project_id: projectId, tasks: [] }, correlationId: null })
+      .mockResolvedValueOnce({
+        data: {
+          project_id: projectId,
+          tasks: [record("RUNNING", "CREATIVE_REGENERATE")],
+        },
+        correlationId: null,
+      });
+    mockRevise.mockRejectedValue(
+      new ApiClientError({
+        message: "busy",
+        status: 409,
+        code: "PROJECT_BUSY",
+      }),
+    );
+    renderAction(["REVISE_CREATIVE", "REGENERATE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "修改意见" }), {
+      target: { value: "调整" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修改" }));
+    await flush();
+    expect(screen.getByText("正在重新生成创意…")).toBeInTheDocument();
+    expect(screen.queryByText("项目当前正在执行其他任务。")).not.toBeInTheDocument();
+  });
+
+  it("does not use browser storage or put feedback into a URL", async () => {
+    mockRevise.mockResolvedValue({
+      data: record("QUEUED", "CREATIVE_REVISE"),
+      correlationId: null,
+    });
+    renderAction(["REVISE_CREATIVE"], true);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "修改意见" }), {
+      target: { value: "URL中不能出现的反馈" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修改" }));
+    await flush();
     expect(document.body.textContent).not.toMatch(/localStorage|sessionStorage/);
+    expect(window.location.href).not.toContain("URL%E4%B8%AD");
   });
 });

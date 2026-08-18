@@ -45,7 +45,7 @@ def _task_failure(code: str, message: str, *, retryable: bool = False) -> None:
 
 
 class CreativeActionService:
-    """Own the supported Creative generate and approve Web actions."""
+    """Own the supported Creative generation and review Web actions."""
 
     def __init__(
         self,
@@ -77,6 +77,47 @@ class CreativeActionService:
             operation=TaskOperation.CREATIVE_GENERATE,
             correlation_id=correlation_id,
             callable_=lambda: self._run_generate(canonical_project_id),
+        )
+
+    def submit_revise(
+        self,
+        project_id: str,
+        *,
+        feedback: str,
+        correlation_id: str | None,
+    ) -> TaskRecord:
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        self._require_no_active_task(canonical_project_id)
+        self._require_revise_allowed(canonical_project_id)
+        if not self._deepseek_available():
+            raise CapabilityUnavailable("planning provider is not configured")
+        return self._task_service.submit(
+            project_id=canonical_project_id,
+            operation=TaskOperation.CREATIVE_REVISE,
+            correlation_id=correlation_id,
+            callable_=lambda: self._run_revise(canonical_project_id, feedback),
+        )
+
+    def submit_regenerate(
+        self,
+        project_id: str,
+        *,
+        correlation_id: str | None,
+    ) -> TaskRecord:
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        self._require_no_active_task(canonical_project_id)
+        self._require_regenerate_allowed(canonical_project_id)
+        if not self._deepseek_available():
+            raise CapabilityUnavailable("planning provider is not configured")
+        return self._task_service.submit(
+            project_id=canonical_project_id,
+            operation=TaskOperation.CREATIVE_REGENERATE,
+            correlation_id=correlation_id,
+            callable_=lambda: self._run_regenerate(canonical_project_id),
         )
 
     def approve(self, project_id: str) -> ProjectWorkflowResponse:
@@ -139,6 +180,16 @@ class CreativeActionService:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.APPROVE_CREATIVE not in workflow.available_actions:
             raise ActionNotAllowed("Creative approval is not allowed")
+
+    def _require_revise_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.REVISE_CREATIVE not in workflow.available_actions:
+            raise ActionNotAllowed("Creative revision is not allowed")
+
+    def _require_regenerate_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.REGENERATE_CREATIVE not in workflow.available_actions:
+            raise ActionNotAllowed("Creative regeneration is not allowed")
 
     def _require_no_active_task(self, project_id: str) -> None:
         if self._task_service.active_for_project(project_id) is not None:
@@ -216,6 +267,141 @@ class CreativeActionService:
         except Exception as error:
             if checkpoint.status == StageStatus.RUNNING.value:
                 checkpoint.fail(error)
+            logger.error(error, stage="creative")
+            if isinstance(error, PromptGenerationError):
+                _task_failure(
+                    "PROVIDER_REQUEST_FAILED",
+                    "创意生成服务暂时不可用，请稍后重试。",
+                    retryable=True,
+                )
+            if isinstance(error, StoryboardError):
+                _task_failure(
+                    "CREATIVE_OUTPUT_INVALID",
+                    "创意生成结果无法使用。",
+                    retryable=True,
+                )
+            raise
+
+        return TaskResultReference(
+            resource_type="CREATIVE",
+            resource_id=project_id,
+        )
+
+    def _run_revise(
+        self,
+        project_id: str,
+        feedback: str,
+    ) -> TaskResultReference:
+        try:
+            self._require_revise_allowed(project_id)
+        except ActionNotAllowed:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许修改创意。",
+            )
+        return self._run_revision_core(
+            project_id,
+            operation=TaskOperation.CREATIVE_REVISE,
+            feedback=feedback,
+        )
+
+    def _run_regenerate(self, project_id: str) -> TaskResultReference:
+        try:
+            self._require_regenerate_allowed(project_id)
+        except ActionNotAllowed:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许重新生成创意。",
+            )
+        return self._run_revision_core(
+            project_id,
+            operation=TaskOperation.CREATIVE_REGENERATE,
+        )
+
+    def _run_revision_core(
+        self,
+        project_id: str,
+        *,
+        operation: TaskOperation,
+        feedback: str | None = None,
+    ) -> TaskResultReference:
+        deepseek_key = self._capability_service.deepseek_api_key()
+        if not deepseek_key:
+            _task_failure(
+                "CAPABILITY_UNAVAILABLE",
+                "创意生成服务尚未配置。",
+                retryable=True,
+            )
+
+        from pydantic import ValidationError
+
+        from creative_workflow import (
+            CreativeRevisionError,
+            load_creative_brief,
+            regenerate_creative_stage,
+            revise_creative_stage,
+        )
+        from evaluation import EvaluationRecorder
+        from project_manager import create_project_paths
+        from project_state import ProjectCheckpoint, ProjectStateError
+        from prompt_generator import ProductVideoRequest, PromptGenerationError
+        from reference_assets import ReferenceAssetManager
+        from storyboard import StoryboardError
+        from task_logger import TaskLogger
+
+        try:
+            paths = create_project_paths(
+                self._project_repository.resolve_project_dir(project_id)
+            )
+            checkpoint = ProjectCheckpoint.load(paths)
+            request = ProductVideoRequest.model_validate(checkpoint.data["request"])
+            current = load_creative_brief(paths)
+        except (KeyError, ValidationError, ProjectStateError, CreativeRevisionError):
+            _task_failure(
+                "PROJECT_DATA_CORRUPT",
+                "项目数据无法读取。",
+            )
+
+        logger = TaskLogger(paths)
+        logger.register_secret(deepseek_key)
+        reference_manager = ReferenceAssetManager(paths, logger)
+        reference_assets = reference_manager.list_assets()
+        reference_context = {
+            "available": bool(reference_assets),
+            "asset_count": len(reference_assets),
+            "asset_ids": [str(item.get("asset_id")) for item in reference_assets],
+        }
+        evaluation_recorder = EvaluationRecorder(paths)
+
+        try:
+            if operation is TaskOperation.CREATIVE_REVISE:
+                revise_creative_stage(
+                    paths,
+                    request,
+                    checkpoint,
+                    current,
+                    feedback or "",
+                    deepseek_key,
+                    logger,
+                    evaluation_recorder=evaluation_recorder,
+                    reference_asset_context=reference_context,
+                )
+            else:
+                regenerate_creative_stage(
+                    paths,
+                    request,
+                    checkpoint,
+                    deepseek_key,
+                    logger,
+                    evaluation_recorder=evaluation_recorder,
+                    reference_asset_context=reference_context,
+                )
+        except CreativeRevisionError:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许更新创意。",
+            )
+        except Exception as error:
             logger.error(error, stage="creative")
             if isinstance(error, PromptGenerationError):
                 _task_failure(

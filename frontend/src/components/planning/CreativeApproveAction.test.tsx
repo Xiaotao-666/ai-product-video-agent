@@ -45,6 +45,7 @@ function renderAction(
     "REGENERATE_CREATIVE",
   ],
   refresh = vi.fn().mockResolvedValue(undefined),
+  disabled = false,
 ) {
   return {
     refresh,
@@ -54,6 +55,7 @@ function renderAction(
           projectId="project-a"
           availableActions={availableActions}
           onApprovedRefresh={refresh}
+          disabled={disabled}
         />
       </MemoryRouter>,
     ),
@@ -167,6 +169,16 @@ describe("CreativeApproveAction", () => {
     expect(screen.getByText("Creative 已审核通过。")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "前往 Storyboard" })).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/localStorage|sessionStorage/);
+  });
+
+  it("disables approval while a Creative AI task is active", () => {
+    renderAction(undefined, undefined, true);
+    const button = screen.getByRole("button", { name: "审核通过" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/完成前不能审核通过/)).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockApprove).not.toHaveBeenCalled();
   });
 
   it("rejects a mismatched project response safely", async () => {

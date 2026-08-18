@@ -96,6 +96,7 @@ export function ProjectStagePage() {
   const [creativeRefresh, setCreativeRefresh] =
     useState<CreativeRefreshSnapshot | null>(null);
   const [hasCreative, setHasCreative] = useState<boolean | null>(null);
+  const [creativeTaskActive, setCreativeTaskActive] = useState(false);
   const loadRequest = useRef(0);
 
   const loadStage = useCallback(async () => {
@@ -109,6 +110,7 @@ export function ProjectStagePage() {
     setLoadError(null);
     setCreativeRefresh(null);
     setHasCreative(null);
+    setCreativeTaskActive(false);
 
     try {
       const [detailResult, workflowResult] = await Promise.all([
@@ -254,7 +256,14 @@ export function ProjectStagePage() {
   const stageActions = actionsForStage(workflow, validStageKey);
   const readOnlyStageActions =
     validStageKey === "creative"
-      ? stageActions.filter((action) => action !== "APPROVE_CREATIVE")
+      ? stageActions.filter(
+          (action) =>
+            ![
+              "APPROVE_CREATIVE",
+              "REVISE_CREATIVE",
+              "REGENERATE_CREATIVE",
+            ].includes(action),
+        )
       : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
 
@@ -326,11 +335,13 @@ export function ProjectStagePage() {
             availableActions={workflow.available_actions}
             hasCreative={hasCreative}
             onTerminalRefresh={refreshCreativeState}
+            onActiveTaskChange={setCreativeTaskActive}
           />
           <CreativeApproveAction
             projectId={detail.project_id}
             availableActions={workflow.available_actions}
             onApprovedRefresh={refreshCreativeState}
+            disabled={creativeTaskActive}
           />
         </>
       )}
@@ -363,7 +374,7 @@ export function ProjectStagePage() {
         )}
         <p className="stage-readonly-note">
           {validStageKey === "creative"
-            ? "修改与重新生成仍为只读提示；Creative 审核通过是本阶段唯一新增写操作。"
+            ? "Creative 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
             : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>

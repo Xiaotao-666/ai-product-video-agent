@@ -10,6 +10,7 @@ interface CreativeApproveActionProps {
   projectId: string;
   availableActions: AvailableAction[];
   onApprovedRefresh: () => Promise<void>;
+  disabled?: boolean;
 }
 
 interface ActionError {
@@ -48,6 +49,7 @@ export function CreativeApproveAction({
   projectId,
   availableActions,
   onApprovedRefresh,
+  disabled = false,
 }: CreativeApproveActionProps) {
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -67,8 +69,12 @@ export function CreativeApproveAction({
     submissionGuard.current = false;
   }, [projectId]);
 
+  useEffect(() => {
+    if (disabled) setConfirming(false);
+  }, [disabled]);
+
   const submit = async () => {
-    if (submissionGuard.current || !canApprove) return;
+    if (submissionGuard.current || !canApprove || disabled) return;
     submissionGuard.current = true;
     setSubmitting(true);
     setError(null);
@@ -120,7 +126,7 @@ export function CreativeApproveAction({
           <button
             className="primary-button"
             type="button"
-            disabled={submitting}
+            disabled={submitting || disabled}
             onClick={() => {
               setError(null);
               setConfirming(true);
@@ -129,6 +135,12 @@ export function CreativeApproveAction({
             审核通过
           </button>
         </>
+      )}
+
+      {showApprove && disabled && (
+        <p className="stage-empty-copy">
+          Creative 更新任务运行中，完成前不能审核通过。
+        </p>
       )}
 
       {showApprove && confirming && (

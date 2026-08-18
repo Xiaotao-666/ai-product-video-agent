@@ -1,9 +1,9 @@
 # Web Backend Phase 1
 
 This directory contains the local FastAPI backend for the AI Product Video
-Agent. Creative generation is the only currently executable planning action;
-review, storyboard generation, video generation, assembly, and export actions
-remain unavailable.
+Agent. Creative generation, approval, targeted revision, and full regeneration
+are the currently executable planning actions. Storyboard generation, video
+generation, assembly, and export actions remain unavailable.
 
 ## Local start
 
@@ -35,6 +35,9 @@ POST /api/projects
 GET  /api/projects/{project_id}
 GET  /api/projects/{project_id}/workflow
 POST /api/projects/{project_id}/planning/creative/generate
+POST /api/projects/{project_id}/planning/creative/approve
+POST /api/projects/{project_id}/planning/creative/revise
+POST /api/projects/{project_id}/planning/creative/regenerate
 ```
 
 The workflow endpoint reports deterministic `available_actions`. The Creative
@@ -77,14 +80,17 @@ automatically replayed. The runner does not retry business callables.
 The current implementation remains limited to one Uvicorn worker. The CLI and
 Web backend must not write the same project concurrently.
 
-## Creative generation task
+## Creative tasks and approval
 
-`POST /api/projects/{project_id}/planning/creative/generate` is the only
-business task submission endpoint. It uses the shared Core Creative callable,
-so Core remains responsible for the DeepSeek prompt, structured-output retry,
-`creative_brief.json`, and `project.json` review state. The Web task runner
-does not retry provider calls. A successful task stores only a small Creative
-resource reference; clients reload Creative and Workflow through the GET APIs.
+Generate, revise, and regenerate use distinct durable task operations and the
+shared Core Creative callables, so Core remains responsible for DeepSeek
+prompts, structured-output retry, atomic canonical replacement, evaluation
+history, and `project.json` review state. Revise feedback is captured only by
+the in-process worker and Core evaluation history; it is never copied into a
+Web task record. The Web runner does not retry provider calls. A successful
+task stores only a small Creative resource reference; clients reload Creative
+and Workflow through the GET APIs. Approval remains a short synchronous action
+and never starts Storyboard automatically.
 
 The Backend loads the same repository `.env` file as the CLI during server
 startup. Capability preflight checks only whether DeepSeek is configured and

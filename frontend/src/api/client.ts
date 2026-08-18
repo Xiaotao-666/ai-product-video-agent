@@ -90,6 +90,8 @@ const TASK_STATUSES: ReadonlySet<string> = new Set([
 ]);
 const TASK_OPERATIONS: ReadonlySet<string> = new Set([
   "CREATIVE_GENERATE",
+  "CREATIVE_REVISE",
+  "CREATIVE_REGENERATE",
   "STORYBOARD_GENERATE",
   "VIDEO_PROMPT_GENERATE",
   "SHOT_GENERATE",
@@ -1678,6 +1680,43 @@ export async function generateCreative(
 ): Promise<ApiResult<TaskRecord>> {
   const result = await request(
     `/api/projects/${encodeURIComponent(projectId)}/planning/creative/generate`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function reviseCreative(
+  projectId: string,
+  feedback: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/creative/revise`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ feedback }),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function regenerateCreative(
+  projectId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/creative/regenerate`,
     {
       method: "POST",
       headers: { Accept: "application/json" },

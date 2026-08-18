@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from web_backend.dependencies import get_creative_action_service
 from web_backend.errors import registered_api_error
+from web_backend.models.planning import CreativeReviseRequest
 from web_backend.models.projects import ProjectWorkflowResponse
-from web_backend.models.tasks import TaskRecord
+from web_backend.models.tasks import TaskOperation, TaskRecord
 from web_backend.repositories.project_repository import (
     InvalidProjectId,
     ProjectDataCorrupt,
@@ -42,10 +43,37 @@ def _raise_project_error(error: ProjectRepositoryError) -> NoReturn:
     raise registered_api_error(code) from error
 
 
+def _accepted_task_response(operation: TaskOperation) -> dict[int, dict[str, object]]:
+    """Document the operation produced by one task-submission endpoint."""
+
+    return {
+        202: {
+            "description": "Creative task accepted.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "task_id": "task_0123456789abcdef0123456789abcdef",
+                        "project_id": "0123456789abcdef0123456789abcdef",
+                        "operation": operation.value,
+                        "status": "QUEUED",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "started_at": None,
+                        "finished_at": None,
+                        "correlation_id": "req_0123456789abcdef0123456789abcdef",
+                        "error": None,
+                        "result": None,
+                    }
+                }
+            },
+        }
+    }
+
+
 @router.post(
     "/projects/{project_id}/planning/creative/generate",
     response_model=TaskRecord,
     status_code=202,
+    responses=_accepted_task_response(TaskOperation.CREATIVE_GENERATE),
 )
 def generate_creative(
     project_id: str,
@@ -74,6 +102,82 @@ def generate_creative(
 
     response.headers["Location"] = f"/api/tasks/{task.task_id}"
     return task
+
+
+def _submit_task_response(
+    task: TaskRecord,
+    response: Response,
+) -> TaskRecord:
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
+
+
+@router.post(
+    "/projects/{project_id}/planning/creative/revise",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.CREATIVE_REVISE),
+)
+def revise_creative(
+    project_id: str,
+    payload: CreativeReviseRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_revise(
+            project_id,
+            feedback=payload.feedback,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
+
+
+@router.post(
+    "/projects/{project_id}/planning/creative/regenerate",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.CREATIVE_REGENERATE),
+)
+def regenerate_creative(
+    project_id: str,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_regenerate(
+            project_id,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
 
 
 @router.post(

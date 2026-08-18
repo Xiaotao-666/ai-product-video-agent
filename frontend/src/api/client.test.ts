@@ -27,6 +27,8 @@ import {
   getVideoPrompts,
   getVoice,
   getVoiceAudioUrl,
+  regenerateCreative,
+  reviseCreative,
 } from "./client";
 
 function responseOf(
@@ -1065,6 +1067,57 @@ describe("API client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/generate",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("submits trimmed Creative feedback in a JSON body, never the URL", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "CREATIVE_REVISE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await reviseCreative("LEE柠檬", "保留主题，不要人物");
+
+    expect(result.data.operation).toBe("CREATIVE_REVISE");
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/revise",
+    );
+    expect(url).not.toContain("%E4%BF%9D%E7%95%99");
+    expect(options).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ feedback: "保留主题，不要人物" }),
+      }),
+    );
+  });
+
+  it("submits Creative regeneration without a feedback body", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "CREATIVE_REGENERATE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateCreative("LEE柠檬");
+
+    expect(result.data.operation).toBe("CREATIVE_REGENERATE");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/regenerate",
+      expect.not.objectContaining({ body: expect.anything() }),
     );
   });
 

@@ -24,6 +24,8 @@ import {
   getVideoPrompts,
   getVoice,
   getTask,
+  regenerateCreative,
+  reviseCreative,
 } from "../api/client";
 import type {
   CreativeContentResponse,
@@ -52,6 +54,8 @@ vi.mock("../api/client", async (importOriginal) => {
     generateCreative: vi.fn(),
     getTask: vi.fn(),
     approveCreative: vi.fn(),
+    regenerateCreative: vi.fn(),
+    reviseCreative: vi.fn(),
   };
 });
 
@@ -70,15 +74,18 @@ const mockGetVoice = vi.mocked(getVoice);
 const mockGenerateCreative = vi.mocked(generateCreative);
 const mockGetTask = vi.mocked(getTask);
 const mockApproveCreative = vi.mocked(approveCreative);
+const mockRegenerateCreative = vi.mocked(regenerateCreative);
+const mockReviseCreative = vi.mocked(reviseCreative);
 
 function creativeContentResponse(
   status = "APPROVED",
+  concept = "明亮柠檬世界",
 ): CreativeContentResponse {
   return {
     project_id: "LEE柠檬",
     status,
     content: {
-      creative_concept: "明亮柠檬世界",
+      creative_concept: concept,
       target_audience: "年轻消费者",
       key_message: "自然清爽",
       visual_direction: "高明度黄色品牌视觉",
@@ -224,6 +231,8 @@ describe("ProjectStagePage", () => {
     mockGenerateCreative.mockReset();
     mockGetTask.mockReset();
     mockApproveCreative.mockReset();
+    mockRegenerateCreative.mockReset();
+    mockReviseCreative.mockReset();
     mockGetProjectTasks.mockResolvedValue({
       data: { project_id: "LEE柠檬", tasks: [] },
       correlationId: "req_tasks",
@@ -454,7 +463,7 @@ describe("ProjectStagePage", () => {
     expect(within(summarySection()).getByText("是")).toBeInTheDocument();
   });
 
-  it("makes only Creative Approve executable and keeps revise/regenerate read-only", async () => {
+  it("exposes all three explicit Creative review actions while waiting", async () => {
     const currentWorkflow = workflow({
       workflow_phase: "CREATIVE_REVIEW",
       available_actions: [
@@ -468,11 +477,115 @@ describe("ProjectStagePage", () => {
     await screen.findByRole("heading", { name: "创意策划" });
     expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
     expect(screen.queryByText("审核创意")).not.toBeInTheDocument();
-    expect(screen.getByText("修改创意")).toBeInTheDocument();
-    expect(screen.getByText("重新生成创意")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "修改创意" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新生成创意" })).not.toBeInTheDocument();
-    expect(screen.getByText(/唯一新增写操作/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "修改创意" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成创意" })).toBeInTheDocument();
+    expect(screen.getByText(/均以 Backend 当前状态为准/)).toBeInTheDocument();
+  });
+
+  it("refreshes Project, Workflow, and Creative after Revise success", async () => {
+    const waiting = workflow({
+      workflow_phase: "CREATIVE_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_CREATIVE",
+        "REVISE_CREATIVE",
+        "REGENERATE_CREATIVE",
+      ],
+    });
+    waiting.stages.creative.status = "WAITING_REVIEW";
+    waiting.stages.storyboard.status = "NOT_STARTED";
+    mockGetProject
+      .mockResolvedValueOnce({ data: detail(waiting), correlationId: "req_initial" })
+      .mockResolvedValue({ data: detail(waiting), correlationId: "req_refreshed" });
+    mockGetProjectWorkflow
+      .mockResolvedValueOnce({ data: waiting, correlationId: "req_initial" })
+      .mockResolvedValue({ data: waiting, correlationId: "req_refreshed" });
+    mockGetCreativeContent
+      .mockResolvedValueOnce({
+        data: creativeContentResponse("WAITING_REVIEW", "原始 Creative"),
+        correlationId: "req_initial_creative",
+      })
+      .mockResolvedValue({
+        data: creativeContentResponse("WAITING_REVIEW", "焕新后的产品微距创意"),
+        correlationId: "req_refreshed_creative",
+      });
+    mockReviseCreative.mockResolvedValue({
+      data: {
+        task_id: `task_${"b".repeat(32)}`,
+        project_id: "LEE柠檬",
+        operation: "CREATIVE_REVISE",
+        status: "SUCCEEDED",
+        created_at: "2026-08-18T14:30:00Z",
+        started_at: "2026-08-18T14:30:01Z",
+        finished_at: "2026-08-18T14:30:02Z",
+        correlation_id: "req_revise",
+        error: null,
+        result: {
+          resource_type: "CREATIVE",
+          resource_id: "LEE柠檬",
+          version: null,
+        },
+      },
+      correlationId: "req_revise",
+    });
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
+    expect(await screen.findByText("原始 Creative")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "修改创意" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "修改意见" }), {
+      target: { value: "增加产品微距" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修改" }));
+
+    expect(await screen.findByText("焕新后的产品微距创意")).toBeInTheDocument();
+    expect(mockReviseCreative).toHaveBeenCalledWith("LEE柠檬", "增加产品微距");
+    expect(mockGetProject).toHaveBeenCalledTimes(2);
+    expect(mockGetProjectWorkflow).toHaveBeenCalledTimes(2);
+    expect(mockGetCreativeContent).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "修改创意" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成创意" })).toBeInTheDocument();
+    expect(screen.queryByText("自动生成分镜")).not.toBeInTheDocument();
+  });
+
+  it("disables Approve while an active Creative revision task is recovered", async () => {
+    const waiting = workflow({
+      workflow_phase: "CREATIVE_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_CREATIVE",
+        "REVISE_CREATIVE",
+        "REGENERATE_CREATIVE",
+      ],
+    });
+    waiting.stages.creative.status = "WAITING_REVIEW";
+    resolveStage(waiting, detail(waiting));
+    mockGetProjectTasks.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        tasks: [
+          {
+            task_id: `task_${"c".repeat(32)}`,
+            project_id: "LEE柠檬",
+            operation: "CREATIVE_REVISE",
+            status: "RUNNING",
+            created_at: "2026-08-18T14:30:00Z",
+            started_at: "2026-08-18T14:30:01Z",
+            finished_at: null,
+            correlation_id: "req_running",
+            error: null,
+            result: null,
+          },
+        ],
+      },
+      correlationId: "req_tasks",
+    });
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/creative");
+    const approve = await screen.findByRole("button", { name: "审核通过" });
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(screen.getByText(/完成前不能审核通过/)).toBeInTheDocument();
+    expect(mockApproveCreative).not.toHaveBeenCalled();
   });
 
   it("re-fetches Project, Workflow, and Creative after approval", async () => {

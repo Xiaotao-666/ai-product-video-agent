@@ -11,7 +11,12 @@ from typing import Any, Mapping, TypeVar
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
-from creative_workflow import approve_creative_stage, generate_creative_stage
+from creative_workflow import (
+    approve_creative_stage,
+    generate_creative_stage,
+    regenerate_creative_stage,
+    revise_creative_stage,
+)
 from evaluation import EvaluationRecorder
 from project_manager import ProjectDirectoryError, ProjectPaths, ask_project_paths
 from project_migration import detect_project_schema, migrate_project_to_v2
@@ -58,7 +63,6 @@ from storyboard import (
     generate_storyboard,
     generate_video_prompts,
     plan_shot_durations,
-    revise_creative_brief,
     revise_storyboard,
     revise_shot_video_prompt,
     revise_video_prompts,
@@ -472,47 +476,25 @@ def run_pipeline(
             "Creative审核",
             brief,
             recorder,
-            revise=lambda current, comment: _record_prompt_evaluation(
-                evaluation_recorder,
-                "creative",
-                revise_creative_brief(
-                    request,
-                    current,
-                    comment,
-                    deepseek_key,
-                    task_logger,
-                    **_visual_kwargs(
-                        visual_analysis_result,
-                        visual_constraints,
-                        reference_asset_context,
-                    ),
-                ),
+            revise=lambda current, comment: revise_creative_stage(
+                paths,
                 request,
-                visual_analysis_result,
-                visual_constraints,
-                reference_asset_context,
-                operation="revise",
-                current_output=current.model_dump(),
-                user_feedback=comment,
+                checkpoint,
+                current,
+                comment,
+                deepseek_key,
+                task_logger,
+                evaluation_recorder=evaluation_recorder,
+                reference_asset_context=reference_asset_context,
             ),
-            regenerate=lambda: _record_prompt_evaluation(
-                evaluation_recorder,
-                "creative",
-                generate_creative_brief(
-                    request,
-                    deepseek_key,
-                    task_logger,
-                    **_visual_kwargs(
-                        visual_analysis_result,
-                        visual_constraints,
-                        reference_asset_context,
-                    ),
-                ),
+            regenerate=lambda: regenerate_creative_stage(
+                paths,
                 request,
-                visual_analysis_result,
-                visual_constraints,
-                reference_asset_context,
-                operation="regenerate",
+                checkpoint,
+                deepseek_key,
+                task_logger,
+                evaluation_recorder=evaluation_recorder,
+                reference_asset_context=reference_asset_context,
             ),
             persist=lambda value: paths.save_json(
                 paths.creative_brief_path(), value.model_dump()

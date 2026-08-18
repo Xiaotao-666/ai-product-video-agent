@@ -186,6 +186,233 @@ class CreativeWorkflowExtractionTests(unittest.TestCase):
                 )
         shared.assert_called_once_with(self.checkpoint)
 
+    def mark_waiting_review(self) -> None:
+        from project_state import ProjectStage, StageStatus
+
+        self.paths.save_json(
+            self.paths.creative_brief_path(),
+            self.brief().model_dump(),
+        )
+        self.checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.COMPLETED)
+        self.checkpoint.advance_to(
+            ProjectStage.CREATIVE_REVIEW,
+            StageStatus.WAITING_REVIEW,
+        )
+
+    def test_07_shared_revise_uses_current_feedback_and_preserves_review_state(self):
+        from creative_workflow import revise_creative_stage
+        from evaluation import EvaluationRecorder
+
+        self.mark_waiting_review()
+        updated = self.brief().model_copy(
+            update={"creative_concept": "保留主题后的产品微距"}
+        )
+        recorder = EvaluationRecorder(self.paths)
+        with patch(
+            "creative_workflow.revise_creative_brief",
+            return_value=updated,
+        ) as provider:
+            result = revise_creative_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.brief(),
+                "  保留主题，不要人物  ",
+                "mock-key",
+                self.logger,
+                evaluation_recorder=recorder,
+                reference_asset_context={"available": True, "asset_count": 1},
+            )
+        self.assertEqual(result.creative_concept, "保留主题后的产品微距")
+        self.assertIs(provider.call_args.args[0], self.request)
+        self.assertEqual(provider.call_args.args[1], self.brief())
+        self.assertEqual(provider.call_args.args[2], "保留主题，不要人物")
+        self.assertEqual(
+            self.checkpoint.data["stages"]["CREATIVE_REVIEW"]["status"],
+            "WAITING_REVIEW",
+        )
+        history = json.loads(
+            self.paths.evaluation_prompt_path("creative").read_text(encoding="utf-8")
+        )["records"][-1]
+        self.assertEqual(history["operation"], "revise")
+        self.assertEqual(history["input_fields"]["user_feedback"], "保留主题，不要人物")
+        self.assertEqual(
+            history["input_fields"]["current_output"]["creative_concept"],
+            self.brief().creative_concept,
+        )
+
+    def test_08_shared_regenerate_uses_original_request_without_old_creative(self):
+        from creative_workflow import regenerate_creative_stage
+        from evaluation import EvaluationRecorder
+
+        self.mark_waiting_review()
+        replacement = self.brief().model_copy(
+            update={"creative_concept": "基于原始需求的全新方案"}
+        )
+        with patch(
+            "creative_workflow.generate_creative_brief",
+            return_value=replacement,
+        ) as provider:
+            result = regenerate_creative_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                "mock-key",
+                self.logger,
+                evaluation_recorder=EvaluationRecorder(self.paths),
+            )
+        self.assertEqual(result.creative_concept, "基于原始需求的全新方案")
+        self.assertIs(provider.call_args.args[0], self.request)
+        self.assertNotIn("current", provider.call_args.kwargs)
+        history = json.loads(
+            self.paths.evaluation_prompt_path("creative").read_text(encoding="utf-8")
+        )["records"][-1]
+        self.assertEqual(history["operation"], "regenerate")
+        self.assertNotIn("current_output", history["input_fields"])
+        self.assertNotIn("user_feedback", history["input_fields"])
+
+    def test_09_revision_failures_keep_canonical_and_checkpoint_unchanged(self):
+        from creative_workflow import regenerate_creative_stage, revise_creative_stage
+
+        self.mark_waiting_review()
+        canonical_before = self.paths.creative_brief_path().read_bytes()
+        checkpoint_before = self.paths.project_state_path().read_bytes()
+
+        with patch(
+            "creative_workflow.revise_creative_brief",
+            side_effect=RuntimeError("provider failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                revise_creative_stage(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    self.brief(),
+                    "修改意见",
+                    "mock-key",
+                    self.logger,
+                )
+        self.assertEqual(self.paths.creative_brief_path().read_bytes(), canonical_before)
+        self.assertEqual(self.paths.project_state_path().read_bytes(), checkpoint_before)
+
+        with patch(
+            "creative_workflow.generate_creative_brief",
+            side_effect=RuntimeError("provider failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                regenerate_creative_stage(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    self.logger,
+                )
+        self.assertEqual(self.paths.creative_brief_path().read_bytes(), canonical_before)
+        self.assertEqual(self.paths.project_state_path().read_bytes(), checkpoint_before)
+
+    def test_10_revision_requires_waiting_review_and_nonempty_feedback(self):
+        from creative_workflow import CreativeRevisionError, revise_creative_stage
+
+        with self.assertRaises(CreativeRevisionError):
+            revise_creative_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.brief(),
+                "修改",
+                "mock-key",
+                self.logger,
+            )
+        self.mark_waiting_review()
+        with self.assertRaises(CreativeRevisionError):
+            revise_creative_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.brief(),
+                "   ",
+                "mock-key",
+                self.logger,
+            )
+
+    def test_11_cli_revise_and_regenerate_callbacks_use_shared_core_callables(self):
+        import main
+
+        class SharedReached(RuntimeError):
+            pass
+
+        for callback_name, patched_name in (
+            ("revise", "revise_creative_stage"),
+            ("regenerate", "regenerate_creative_stage"),
+        ):
+            with self.subTest(callback=callback_name):
+                self.mark_waiting_review()
+
+                def invoke_callback(*args, **kwargs):
+                    if callback_name == "revise":
+                        kwargs[callback_name](args[3], "修改意见")
+                    else:
+                        kwargs[callback_name]()
+
+                with (
+                    patch.object(main, "human_review_gate", side_effect=invoke_callback),
+                    patch.object(
+                        main,
+                        patched_name,
+                        side_effect=SharedReached,
+                    ) as shared,
+                ):
+                    with self.assertRaises(SharedReached):
+                        main.run_pipeline(
+                            self.paths,
+                            self.request,
+                            self.checkpoint,
+                            "mock-key",
+                            {},
+                            self.logger,
+                        )
+                shared.assert_called_once()
+
+    def test_12_cli_resume_loads_successfully_revised_canonical(self):
+        import main
+        from creative_workflow import revise_creative_stage
+
+        class ReviewReached(RuntimeError):
+            pass
+
+        self.mark_waiting_review()
+        replacement = self.brief().model_copy(
+            update={"creative_concept": "Resume读取的新Creative"}
+        )
+        with patch(
+            "creative_workflow.revise_creative_brief",
+            return_value=replacement,
+        ):
+            revise_creative_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.brief(),
+                "修改意见",
+                "mock-key",
+                self.logger,
+            )
+
+        def inspect_gate(*args, **_kwargs):
+            self.assertEqual(args[3].creative_concept, "Resume读取的新Creative")
+            raise ReviewReached
+
+        with patch.object(main, "human_review_gate", side_effect=inspect_gate):
+            with self.assertRaises(ReviewReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

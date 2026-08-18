@@ -50,6 +50,8 @@ export type TaskStatus =
 
 export type TaskOperation =
   | "CREATIVE_GENERATE"
+  | "CREATIVE_REVISE"
+  | "CREATIVE_REGENERATE"
   | "STORYBOARD_GENERATE"
   | "VIDEO_PROMPT_GENERATE"
   | "SHOT_GENERATE"

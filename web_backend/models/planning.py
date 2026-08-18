@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from web_backend.models.projects import ResponseModel
+
+
+class CreativeReviseRequest(BaseModel):
+    """Bounded revision feedback; unknown fields are never accepted."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    feedback: str = Field(min_length=1, max_length=4000)
 
 
 class CreativeNarrationPlan(ResponseModel):

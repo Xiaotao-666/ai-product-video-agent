@@ -2253,6 +2253,56 @@
   color: #77838d;
 }
 
+.creative-review-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.creative-feedback-panel {
+  display: grid;
+  gap: 9px;
+  max-width: 760px;
+  padding: 18px;
+  background: #f8faf5;
+  border: 1px solid #dde6cf;
+  border-radius: 9px;
+}
+
+.creative-feedback-panel label {
+  color: #34414c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.creative-feedback-panel textarea {
+  width: 100%;
+  min-height: 126px;
+  padding: 12px 13px;
+  color: #24313a;
+  background: #fff;
+  border: 1px solid #ccd6c0;
+  border-radius: 7px;
+  font: inherit;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.creative-feedback-panel textarea:focus {
+  outline: 2px solid rgb(92 117 46 / 25%);
+  border-color: #7f9652;
+}
+
+.creative-feedback-panel > small {
+  justify-self: end;
+  color: #7c8790;
+}
+
+.creative-revision-success {
+  border-color: #dce8bf;
+  background: #f5f9ec;
+}
+
 .creative-approve-copy {
   max-width: 720px;
   margin: 0 0 18px;
