@@ -4,12 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  getAssembly,
   getCreativeContent,
+  getExport,
+  getMusic,
   getProject,
   getProjectWorkflow,
   getShots,
   getStoryboardContent,
+  getSubtitle,
   getVideoPrompts,
+  getVoice,
 } from "../api/client";
 import type {
   ProjectDetail,
@@ -22,21 +27,31 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    getAssembly: vi.fn(),
     getCreativeContent: vi.fn(),
+    getExport: vi.fn(),
+    getMusic: vi.fn(),
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
     getShots: vi.fn(),
     getStoryboardContent: vi.fn(),
+    getSubtitle: vi.fn(),
     getVideoPrompts: vi.fn(),
+    getVoice: vi.fn(),
   };
 });
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetAssembly = vi.mocked(getAssembly);
+const mockGetExport = vi.mocked(getExport);
+const mockGetMusic = vi.mocked(getMusic);
 const mockGetShots = vi.mocked(getShots);
 const mockGetCreativeContent = vi.mocked(getCreativeContent);
 const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
+const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
+const mockGetVoice = vi.mocked(getVoice);
 
 function workflow(
   overrides: Partial<ProjectWorkflowResponse> = {},
@@ -140,10 +155,68 @@ describe("ProjectStagePage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
     mockGetProjectWorkflow.mockReset();
+    mockGetAssembly.mockReset();
+    mockGetExport.mockReset();
+    mockGetMusic.mockReset();
     mockGetShots.mockReset();
     mockGetCreativeContent.mockReset();
     mockGetStoryboardContent.mockReset();
+    mockGetSubtitle.mockReset();
     mockGetVideoPrompts.mockReset();
+    mockGetVoice.mockReset();
+    mockGetAssembly.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        status: "COMPLETED",
+        current_version: 2,
+        needs_update: false,
+        changed_shot_id: null,
+        created_at: "2026-08-18T14:00:00+08:00",
+        total_duration: 18,
+        video_available: true,
+        shots: [],
+      },
+      correlationId: "req_assembly",
+    });
+    mockGetVoice.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", status: "NOT_STARTED", version: null,
+        created_at: null, script: null, script_source: null, model: null,
+        voice: null, language: null, audio_available: false,
+        planned_narration_duration: null, planned_first_voice_start: null,
+        planned_last_voice_end: null, planned_voice_span: null,
+        actual_audio_duration: null, voice_track_start: null,
+        actual_voice_end: null, timing_mode: null, cue_level_alignment: null,
+        script_matches_storyboard: null, calibration_status: "NOT_APPLICABLE",
+      },
+      correlationId: "req_voice",
+    });
+    mockGetSubtitle.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", status: "NOT_STARTED", version: null,
+        source: null, timing_source: null, created_at: null, cue_count: 0,
+        content_available: false, cues: [],
+      },
+      correlationId: "req_subtitle",
+    });
+    mockGetMusic.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", status: "NOT_STARTED", version: null,
+        created_at: null, audio_available: false, format: null,
+        duration_seconds: null, music_mix: null,
+      },
+      correlationId: "req_music",
+    });
+    mockGetExport.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", status: "COMPLETED", version: 3,
+        created_at: "2026-08-18T14:20:00+08:00", stale: false,
+        video_available: true, assembly_version: 2, voice_version: 1,
+        subtitle_version: null, music_version: 2, voice_timing: null,
+        music_mix: null,
+      },
+      correlationId: "req_export",
+    });
     mockGetCreativeContent.mockResolvedValue({
       data: { project_id: "LEE柠檬", status: "APPROVED", content: null },
       correlationId: "req_creative",

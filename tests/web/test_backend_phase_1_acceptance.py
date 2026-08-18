@@ -180,6 +180,15 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/shots",
                 "/api/projects/{project_id}/shots/{shot_id}",
                 "/api/projects/{project_id}/shots/{shot_id}/versions/{version}/video",
+                "/api/projects/{project_id}/assembly",
+                "/api/projects/{project_id}/assembly/video",
+                "/api/projects/{project_id}/post-production/voice",
+                "/api/projects/{project_id}/post-production/voice/audio",
+                "/api/projects/{project_id}/post-production/subtitle",
+                "/api/projects/{project_id}/post-production/music",
+                "/api/projects/{project_id}/post-production/music/audio",
+                "/api/projects/{project_id}/export",
+                "/api/projects/{project_id}/export/video",
             },
         )
         self.assertNotIn("/api/actions", schema["paths"])

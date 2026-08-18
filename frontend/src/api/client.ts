@@ -1,6 +1,8 @@
 import { API_BASE_URL } from "../config";
 import type {
   ApiResult,
+  AssemblyDetail,
+  AssemblyShotVersion,
   AssemblyState,
   AvailableAction,
   BackendErrorResponse,
@@ -11,8 +13,12 @@ import type {
   CreativePlanningContent,
   CreateProjectRequest,
   CreateProjectResponse,
+  ExportDetail,
+  ExportVoiceTimingSummary,
   FinalExportState,
   HealthResponse,
+  MusicDetail,
+  MusicMixDetail,
   PostProductionState,
   ProjectDetail,
   ProjectListResponse,
@@ -33,8 +39,12 @@ import type {
   StoryboardContentResponse,
   StoryboardPlanningContent,
   StoryboardShotContent,
+  SubtitleCue,
+  SubtitleDetail,
   VideoPromptShotContent,
   VideoPromptsContentResponse,
+  VoiceCalibrationStatus,
+  VoiceDetail,
   WorkflowPhase,
   WorkflowStages,
   WorkflowState,
@@ -53,6 +63,14 @@ const SHOT_VISUAL_INPUT_MODES: ReadonlySet<string> = new Set([
   "NONE",
   "FIRST_FRAME",
   "REFERENCE_ASSET",
+  "UNKNOWN",
+]);
+const VOICE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set([
+  "PASS",
+  "WARNING",
+  "OUT_OF_TOLERANCE",
+  "OUT_OF_BOUNDS",
+  "NOT_APPLICABLE",
   "UNKNOWN",
 ]);
 const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
@@ -138,6 +156,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isNullableNonNegativeNumber(value: unknown): value is number | null {
+  return value === null ||
+    (typeof value === "number" && Number.isFinite(value) && value >= 0);
+}
+
+function isNullableBoolean(value: unknown): value is boolean | null {
+  return value === null || typeof value === "boolean";
 }
 
 function isNullableString(value: unknown): value is string | null {
@@ -913,6 +940,308 @@ function parseShotDetailResponse(
   };
 }
 
+function parseAssemblyShotVersion(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyShotVersion {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.shot_id) ||
+    !isPositiveInteger(value.video_version)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的合片镜头版本。", correlationId);
+  }
+  return { shot_id: value.shot_id, video_version: value.video_version };
+}
+
+function parseAssemblyDetail(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyDetail {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.current_version) ||
+    typeof value.needs_update !== "boolean" ||
+    !isNullablePositiveInteger(value.changed_shot_id) ||
+    !isNullableString(value.created_at) ||
+    !isNullableNonNegativeNumber(value.total_duration) ||
+    typeof value.video_available !== "boolean" ||
+    !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的合片详情。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    current_version: value.current_version,
+    needs_update: value.needs_update,
+    changed_shot_id: value.changed_shot_id,
+    created_at: parseContentText(value.created_at, correlationId),
+    total_duration: value.total_duration,
+    video_available: value.video_available,
+    shots: value.shots.map((shot) =>
+      parseAssemblyShotVersion(shot, correlationId),
+    ),
+  };
+}
+
+function parseCalibrationStatus(
+  value: unknown,
+  correlationId: string | null,
+): VoiceCalibrationStatus {
+  if (
+    typeof value !== "string" ||
+    !VOICE_CALIBRATION_STATUSES.has(value)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的校准状态。", correlationId);
+  }
+  return value as VoiceCalibrationStatus;
+}
+
+function parseVoiceDetail(
+  value: unknown,
+  correlationId: string | null,
+): VoiceDetail {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.version) ||
+    !isNullableString(value.created_at) ||
+    !isNullableString(value.script) ||
+    !isNullableString(value.script_source) ||
+    !isNullableString(value.model) ||
+    !isNullableString(value.voice) ||
+    !isNullableString(value.language) ||
+    typeof value.audio_available !== "boolean" ||
+    !isNullableNonNegativeNumber(value.planned_narration_duration) ||
+    !isNullableNonNegativeNumber(value.planned_first_voice_start) ||
+    !isNullableNonNegativeNumber(value.planned_last_voice_end) ||
+    !isNullableNonNegativeNumber(value.planned_voice_span) ||
+    !isNullableNonNegativeNumber(value.actual_audio_duration) ||
+    !isNullableNonNegativeNumber(value.voice_track_start) ||
+    !isNullableNonNegativeNumber(value.actual_voice_end) ||
+    !isNullableString(value.timing_mode) ||
+    !isNullableBoolean(value.cue_level_alignment) ||
+    !isNullableBoolean(value.script_matches_storyboard)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音详情。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    script: parseContentText(value.script, correlationId),
+    script_source: parseContentText(value.script_source, correlationId),
+    model: parseContentText(value.model, correlationId),
+    voice: parseContentText(value.voice, correlationId),
+    language: parseContentText(value.language, correlationId),
+    audio_available: value.audio_available,
+    planned_narration_duration: value.planned_narration_duration,
+    planned_first_voice_start: value.planned_first_voice_start,
+    planned_last_voice_end: value.planned_last_voice_end,
+    planned_voice_span: value.planned_voice_span,
+    actual_audio_duration: value.actual_audio_duration,
+    voice_track_start: value.voice_track_start,
+    actual_voice_end: value.actual_voice_end,
+    timing_mode: parseContentText(value.timing_mode, correlationId),
+    cue_level_alignment: value.cue_level_alignment,
+    script_matches_storyboard: value.script_matches_storyboard,
+    calibration_status: parseCalibrationStatus(
+      value.calibration_status,
+      correlationId,
+    ),
+  };
+}
+
+function parseSubtitleCue(
+  value: unknown,
+  correlationId: string | null,
+): SubtitleCue {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.index) ||
+    typeof value.start !== "string" ||
+    typeof value.end !== "string" ||
+    typeof value.text !== "string"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕 Cue。", correlationId);
+  }
+  return {
+    index: value.index,
+    start: parseContentText(value.start, correlationId) ?? "",
+    end: parseContentText(value.end, correlationId) ?? "",
+    text: parseContentText(value.text, correlationId) ?? "",
+  };
+}
+
+function parseSubtitleDetail(
+  value: unknown,
+  correlationId: string | null,
+): SubtitleDetail {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.version) ||
+    !isNullableString(value.source) ||
+    !isNullableString(value.timing_source) ||
+    !isNullableString(value.created_at) ||
+    !isNonNegativeInteger(value.cue_count) ||
+    typeof value.content_available !== "boolean" ||
+    !Array.isArray(value.cues)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕详情。", correlationId);
+  }
+  const cues = value.cues.map((cue) => parseSubtitleCue(cue, correlationId));
+  if (value.content_available && value.cue_count !== cues.length) {
+    return invalidResponse("Backend 返回了不一致的字幕 Cue。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    version: value.version,
+    source: parseContentText(value.source, correlationId),
+    timing_source: parseContentText(value.timing_source, correlationId),
+    created_at: parseContentText(value.created_at, correlationId),
+    cue_count: value.cue_count,
+    content_available: value.content_available,
+    cues,
+  };
+}
+
+function parseMusicMix(
+  value: unknown,
+  correlationId: string | null,
+): MusicMixDetail | null {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    !isNullableNonNegativeNumber(value.base_volume) ||
+    !isNullableBoolean(value.ducking_enabled) ||
+    !isNullableNonNegativeNumber(value.ducking_ratio) ||
+    !isNullableNonNegativeNumber(value.duck_attack_seconds) ||
+    !isNullableNonNegativeNumber(value.duck_release_seconds) ||
+    !isNullableNonNegativeNumber(value.fade_in_seconds) ||
+    !isNullableNonNegativeNumber(value.fade_out_seconds) ||
+    !isNullableBoolean(value.loop_music) ||
+    !isNullableString(value.ducking_status) ||
+    (typeof value.base_volume === "number" && value.base_volume > 1) ||
+    (typeof value.ducking_ratio === "number" && value.ducking_ratio > 1)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的音乐 Mix。", correlationId);
+  }
+  return {
+    base_volume: value.base_volume,
+    ducking_enabled: value.ducking_enabled,
+    ducking_ratio: value.ducking_ratio,
+    duck_attack_seconds: value.duck_attack_seconds,
+    duck_release_seconds: value.duck_release_seconds,
+    fade_in_seconds: value.fade_in_seconds,
+    fade_out_seconds: value.fade_out_seconds,
+    loop_music: value.loop_music,
+    ducking_status: parseContentText(value.ducking_status, correlationId),
+  };
+}
+
+function parseMusicDetail(
+  value: unknown,
+  correlationId: string | null,
+): MusicDetail {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.version) ||
+    !isNullableString(value.created_at) ||
+    typeof value.audio_available !== "boolean" ||
+    !isNullableString(value.format) ||
+    !isNullableNonNegativeNumber(value.duration_seconds)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的音乐详情。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    audio_available: value.audio_available,
+    format: parseContentText(value.format, correlationId),
+    duration_seconds: value.duration_seconds,
+    music_mix: parseMusicMix(value.music_mix, correlationId),
+  };
+}
+
+function parseExportVoiceTiming(
+  value: unknown,
+  correlationId: string | null,
+): ExportVoiceTimingSummary | null {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    !isNullableString(value.timing_mode) ||
+    !isNullableNonNegativeNumber(value.voice_track_start) ||
+    !isNullableNonNegativeNumber(value.actual_audio_duration) ||
+    !isNullableNonNegativeNumber(value.actual_voice_end) ||
+    !isNullableBoolean(value.cue_level_alignment)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的导出配音摘要。", correlationId);
+  }
+  return {
+    timing_mode: parseContentText(value.timing_mode, correlationId),
+    voice_track_start: value.voice_track_start,
+    actual_audio_duration: value.actual_audio_duration,
+    actual_voice_end: value.actual_voice_end,
+    calibration_status: parseCalibrationStatus(
+      value.calibration_status,
+      correlationId,
+    ),
+    cue_level_alignment: value.cue_level_alignment,
+  };
+}
+
+function parseExportDetail(
+  value: unknown,
+  correlationId: string | null,
+): ExportDetail {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.status !== "string" ||
+    !isNullablePositiveInteger(value.version) ||
+    !isNullableString(value.created_at) ||
+    typeof value.stale !== "boolean" ||
+    typeof value.video_available !== "boolean" ||
+    !isNullablePositiveInteger(value.assembly_version) ||
+    !isNullablePositiveInteger(value.voice_version) ||
+    !isNullablePositiveInteger(value.subtitle_version) ||
+    !isNullablePositiveInteger(value.music_version)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的最终导出详情。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    stale: value.stale,
+    video_available: value.video_available,
+    assembly_version: value.assembly_version,
+    voice_version: value.voice_version,
+    subtitle_version: value.subtitle_version,
+    music_version: value.music_version,
+    voice_timing: parseExportVoiceTiming(value.voice_timing, correlationId),
+    music_mix: parseMusicMix(value.music_mix, correlationId),
+  };
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -1090,6 +1419,82 @@ export function getShotVideoUrl(
     });
   }
   return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/versions/${encodeURIComponent(String(version))}/video`;
+}
+
+export async function getAssembly(
+  projectId: string,
+): Promise<ApiResult<AssemblyDetail>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/assembly`,
+  );
+  return {
+    data: parseAssemblyDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getAssemblyVideoUrl(projectId: string): string {
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/assembly/video`;
+}
+
+export async function getVoice(
+  projectId: string,
+): Promise<ApiResult<VoiceDetail>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice`,
+  );
+  return {
+    data: parseVoiceDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getVoiceAudioUrl(projectId: string): string {
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/post-production/voice/audio`;
+}
+
+export async function getSubtitle(
+  projectId: string,
+): Promise<ApiResult<SubtitleDetail>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/subtitle`,
+  );
+  return {
+    data: parseSubtitleDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getMusic(
+  projectId: string,
+): Promise<ApiResult<MusicDetail>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music`,
+  );
+  return {
+    data: parseMusicDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getMusicAudioUrl(projectId: string): string {
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/post-production/music/audio`;
+}
+
+export async function getExport(
+  projectId: string,
+): Promise<ApiResult<ExportDetail>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/export`,
+  );
+  return {
+    data: parseExportDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getExportVideoUrl(projectId: string): string {
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/export/video`;
 }
 
 export async function createProject(

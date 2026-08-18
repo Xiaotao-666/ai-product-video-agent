@@ -121,6 +121,33 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "VIDEO_NOT_FOUND": ErrorDefinition(
         404, "SHOT_ERROR", "VIDEO_NOT_FOUND", "视频文件不可用。"
     ),
+    "ASSEMBLY_DATA_CORRUPT": ErrorDefinition(
+        422, "ASSEMBLY_ERROR", "ASSEMBLY_DATA_CORRUPT", "合片数据无法读取。"
+    ),
+    "ASSEMBLY_MEDIA_NOT_FOUND": ErrorDefinition(
+        404, "ASSEMBLY_ERROR", "ASSEMBLY_MEDIA_NOT_FOUND", "合片视频不可用。"
+    ),
+    "VOICE_DATA_CORRUPT": ErrorDefinition(
+        422, "POST_PRODUCTION_ERROR", "VOICE_DATA_CORRUPT", "配音数据无法读取。"
+    ),
+    "VOICE_MEDIA_NOT_FOUND": ErrorDefinition(
+        404, "POST_PRODUCTION_ERROR", "VOICE_MEDIA_NOT_FOUND", "配音音频不可用。"
+    ),
+    "SUBTITLE_DATA_CORRUPT": ErrorDefinition(
+        422, "POST_PRODUCTION_ERROR", "SUBTITLE_DATA_CORRUPT", "字幕数据无法读取。"
+    ),
+    "MUSIC_DATA_CORRUPT": ErrorDefinition(
+        422, "POST_PRODUCTION_ERROR", "MUSIC_DATA_CORRUPT", "音乐数据无法读取。"
+    ),
+    "MUSIC_MEDIA_NOT_FOUND": ErrorDefinition(
+        404, "POST_PRODUCTION_ERROR", "MUSIC_MEDIA_NOT_FOUND", "音乐音频不可用。"
+    ),
+    "EXPORT_DATA_CORRUPT": ErrorDefinition(
+        422, "EXPORT_ERROR", "EXPORT_DATA_CORRUPT", "最终导出数据无法读取。"
+    ),
+    "EXPORT_MEDIA_NOT_FOUND": ErrorDefinition(
+        404, "EXPORT_ERROR", "EXPORT_MEDIA_NOT_FOUND", "最终成片不可用。"
+    ),
 }
 
 

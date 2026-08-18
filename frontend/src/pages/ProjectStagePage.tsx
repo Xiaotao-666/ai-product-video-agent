@@ -11,6 +11,7 @@ import type {
   ProjectWorkflowResponse,
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { PostProductionStageContent } from "../components/PostProductionStageContent";
 import { PlanningStageContent } from "../components/planning/PlanningStageContent";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
@@ -246,6 +247,11 @@ export function ProjectStagePage() {
       />
 
       <ShotsStageContent
+        projectId={detail.project_id}
+        stageKey={validStageKey}
+      />
+
+      <PostProductionStageContent
         projectId={detail.project_id}
         stageKey={validStageKey}
       />

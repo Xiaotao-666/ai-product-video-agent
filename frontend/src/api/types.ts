@@ -320,6 +320,121 @@ export interface ShotDetail {
   versions: ShotVersion[];
 }
 
+export type VoiceCalibrationStatus =
+  | "PASS"
+  | "WARNING"
+  | "OUT_OF_TOLERANCE"
+  | "OUT_OF_BOUNDS"
+  | "NOT_APPLICABLE"
+  | "UNKNOWN";
+
+export interface AssemblyShotVersion {
+  shot_id: number;
+  video_version: number;
+}
+
+export interface AssemblyDetail {
+  project_id: string;
+  status: string;
+  current_version: number | null;
+  needs_update: boolean;
+  changed_shot_id: number | null;
+  created_at: string | null;
+  total_duration: number | null;
+  video_available: boolean;
+  shots: AssemblyShotVersion[];
+}
+
+export interface VoiceDetail {
+  project_id: string;
+  status: string;
+  version: number | null;
+  created_at: string | null;
+  script: string | null;
+  script_source: string | null;
+  model: string | null;
+  voice: string | null;
+  language: string | null;
+  audio_available: boolean;
+  planned_narration_duration: number | null;
+  planned_first_voice_start: number | null;
+  planned_last_voice_end: number | null;
+  planned_voice_span: number | null;
+  actual_audio_duration: number | null;
+  voice_track_start: number | null;
+  actual_voice_end: number | null;
+  timing_mode: string | null;
+  cue_level_alignment: boolean | null;
+  script_matches_storyboard: boolean | null;
+  calibration_status: VoiceCalibrationStatus;
+}
+
+export interface SubtitleCue {
+  index: number;
+  start: string;
+  end: string;
+  text: string;
+}
+
+export interface SubtitleDetail {
+  project_id: string;
+  status: string;
+  version: number | null;
+  source: string | null;
+  timing_source: string | null;
+  created_at: string | null;
+  cue_count: number;
+  content_available: boolean;
+  cues: SubtitleCue[];
+}
+
+export interface MusicMixDetail {
+  base_volume: number | null;
+  ducking_enabled: boolean | null;
+  ducking_ratio: number | null;
+  duck_attack_seconds: number | null;
+  duck_release_seconds: number | null;
+  fade_in_seconds: number | null;
+  fade_out_seconds: number | null;
+  loop_music: boolean | null;
+  ducking_status: string | null;
+}
+
+export interface MusicDetail {
+  project_id: string;
+  status: string;
+  version: number | null;
+  created_at: string | null;
+  audio_available: boolean;
+  format: string | null;
+  duration_seconds: number | null;
+  music_mix: MusicMixDetail | null;
+}
+
+export interface ExportVoiceTimingSummary {
+  timing_mode: string | null;
+  voice_track_start: number | null;
+  actual_audio_duration: number | null;
+  actual_voice_end: number | null;
+  calibration_status: VoiceCalibrationStatus;
+  cue_level_alignment: boolean | null;
+}
+
+export interface ExportDetail {
+  project_id: string;
+  status: string;
+  version: number | null;
+  created_at: string | null;
+  stale: boolean;
+  video_available: boolean;
+  assembly_version: number | null;
+  voice_version: number | null;
+  subtitle_version: number | null;
+  music_version: number | null;
+  voice_timing: ExportVoiceTimingSummary | null;
+  music_mix: MusicMixDetail | null;
+}
+
 export interface CreateProjectRequest {
   product_name: string;
   product_description: string;

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from web_backend.dependencies import (
     get_planning_content_repository,
+    get_postproduction_repository,
     get_project_repository,
     get_project_service,
     get_shot_repository,
@@ -19,6 +20,13 @@ from web_backend.models.planning import (
     VideoPromptsContentResponse,
 )
 from web_backend.errors import registered_api_error
+from web_backend.models.postproduction import (
+    AssemblyDetail,
+    ExportDetail,
+    MusicDetail,
+    SubtitleDetail,
+    VoiceDetail,
+)
 from web_backend.models.projects import (
     ProjectDetail,
     ProjectCreateRequest,
@@ -45,6 +53,18 @@ from web_backend.repositories.project_repository import (
 )
 from web_backend.repositories.planning_content_repository import (
     PlanningContentRepository,
+)
+from web_backend.repositories.postproduction_repository import (
+    AssemblyDataCorrupt,
+    AssemblyMediaNotFound,
+    ExportDataCorrupt,
+    ExportMediaNotFound,
+    MusicDataCorrupt,
+    MusicMediaNotFound,
+    PostProductionRepository,
+    SubtitleDataCorrupt,
+    VoiceDataCorrupt,
+    VoiceMediaNotFound,
 )
 from web_backend.repositories.shot_repository import (
     InvalidShotId,
@@ -74,6 +94,15 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {
     ShotDataCorrupt: "SHOT_DATA_CORRUPT",
     InvalidShotVersion: "INVALID_SHOT_VERSION",
     VideoNotFound: "VIDEO_NOT_FOUND",
+    AssemblyDataCorrupt: "ASSEMBLY_DATA_CORRUPT",
+    AssemblyMediaNotFound: "ASSEMBLY_MEDIA_NOT_FOUND",
+    VoiceDataCorrupt: "VOICE_DATA_CORRUPT",
+    VoiceMediaNotFound: "VOICE_MEDIA_NOT_FOUND",
+    SubtitleDataCorrupt: "SUBTITLE_DATA_CORRUPT",
+    MusicDataCorrupt: "MUSIC_DATA_CORRUPT",
+    MusicMediaNotFound: "MUSIC_MEDIA_NOT_FOUND",
+    ExportDataCorrupt: "EXPORT_DATA_CORRUPT",
+    ExportMediaNotFound: "EXPORT_MEDIA_NOT_FOUND",
 }
 
 
@@ -82,6 +111,14 @@ def _raise_mapped_error(error: Exception) -> NoReturn:
     if code is None:
         raise error
     raise registered_api_error(code) from error
+
+
+def _media_response(path, media_type: str) -> FileResponse:
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+    )
 
 
 @router.post(
@@ -231,8 +268,152 @@ async def get_project_shot_video(
         path = repository.resolve_video(project_id, shot_id, version)
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"},
-    )
+    return _media_response(path, "video/mp4")
+
+
+@router.get(
+    "/projects/{project_id}/assembly",
+    response_model=AssemblyDetail,
+)
+async def get_project_assembly(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> AssemblyDetail:
+    try:
+        return repository.get_assembly(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/assembly/video",
+    response_class=FileResponse,
+)
+async def get_project_assembly_video(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> FileResponse:
+    try:
+        media = repository.resolve_assembly_video(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+    return _media_response(media.path, media.media_type)
+
+
+@router.get(
+    "/projects/{project_id}/post-production/voice",
+    response_model=VoiceDetail,
+)
+async def get_project_voice(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> VoiceDetail:
+    try:
+        return repository.get_voice(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/post-production/voice/audio",
+    response_class=FileResponse,
+)
+async def get_project_voice_audio(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> FileResponse:
+    try:
+        media = repository.resolve_voice_audio(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+    return _media_response(media.path, media.media_type)
+
+
+@router.get(
+    "/projects/{project_id}/post-production/subtitle",
+    response_model=SubtitleDetail,
+)
+async def get_project_subtitle(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> SubtitleDetail:
+    try:
+        return repository.get_subtitle(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/post-production/music",
+    response_model=MusicDetail,
+)
+async def get_project_music(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> MusicDetail:
+    try:
+        return repository.get_music(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/post-production/music/audio",
+    response_class=FileResponse,
+)
+async def get_project_music_audio(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> FileResponse:
+    try:
+        media = repository.resolve_music_audio(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+    return _media_response(media.path, media.media_type)
+
+
+@router.get(
+    "/projects/{project_id}/export",
+    response_model=ExportDetail,
+)
+async def get_project_export(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> ExportDetail:
+    try:
+        return repository.get_export(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.get(
+    "/projects/{project_id}/export/video",
+    response_class=FileResponse,
+)
+async def get_project_export_video(
+    project_id: str,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> FileResponse:
+    try:
+        media = repository.resolve_export_video(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+    return _media_response(media.path, media.media_type)

@@ -3,9 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   createProject,
+  getAssembly,
+  getAssemblyVideoUrl,
   getCapabilities,
   getCreativeContent,
   getHealth,
+  getExport,
+  getExportVideoUrl,
+  getMusic,
+  getMusicAudioUrl,
   getProject,
   getProjects,
   getProjectWorkflow,
@@ -13,7 +19,10 @@ import {
   getShots,
   getShotVideoUrl,
   getStoryboardContent,
+  getSubtitle,
   getVideoPrompts,
+  getVoice,
+  getVoiceAudioUrl,
 } from "./client";
 
 function responseOf(
@@ -799,6 +808,101 @@ describe("API client", () => {
     expect(() => getShotVideoUrl("LEE柠檬", "shot_01", 0)).toThrow(
       ApiClientError,
     );
+  });
+
+  it("gets and safely projects Assembly detail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", current_version: 2,
+      needs_update: false, changed_shot_id: null,
+      created_at: "2026-08-18T10:00:00+08:00", total_duration: 18.5,
+      video_available: true, shots: [{ shot_id: 1, video_version: 2 }],
+      final_video_path: "D:\\private\\final.mp4", ffmpeg_command: "hidden",
+    })));
+    const payload = (await getAssembly("LEE柠檬")).data;
+    expect(payload.current_version).toBe(2);
+    expect(payload.shots).toEqual([{ shot_id: 1, video_version: 2 }]);
+    expect(payload).not.toHaveProperty("final_video_path");
+  });
+
+  it("gets and safely projects Voice detail and calibration", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, script: "正式配音脚本", script_source: "compiled_storyboard",
+      model: "online-tts-v2", voice: "xiaoyan", language: "zh-CN",
+      audio_available: true, planned_narration_duration: 12,
+      planned_first_voice_start: 2, planned_last_voice_end: 14,
+      planned_voice_span: 12, actual_audio_duration: 10.5,
+      voice_track_start: 2, actual_voice_end: 12.5, timing_mode: "whole_track",
+      cue_level_alignment: false, script_matches_storyboard: true,
+      calibration_status: "OUT_OF_TOLERANCE", provider_task_id: "hidden",
+    })));
+    const payload = (await getVoice("LEE柠檬")).data;
+    expect(payload.calibration_status).toBe("OUT_OF_TOLERANCE");
+    expect(payload.script).toBe("正式配音脚本");
+    expect(payload).not.toHaveProperty("provider_task_id");
+  });
+
+  it("gets and validates structured Subtitle cues", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      source: "compiled_storyboard", timing_source: "global_timeline",
+      created_at: null, cue_count: 1, content_available: true,
+      cues: [{ index: 1, start: "00:00:02,000", end: "00:00:04,500", text: "新鲜看得见" }],
+      subtitle_path: "D:\\private\\subtitle.srt",
+    })));
+    const payload = (await getSubtitle("LEE柠檬")).data;
+    expect(payload.cues[0]).toMatchObject({ start: "00:00:02,000", text: "新鲜看得见" });
+    expect(payload).not.toHaveProperty("subtitle_path");
+  });
+
+  it("gets Music detail with explicit Mix projection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, audio_available: true, format: "mp3", duration_seconds: 30,
+      music_mix: { base_volume: 0.25, ducking_enabled: true, ducking_ratio: 0.4,
+        duck_attack_seconds: 0.25, duck_release_seconds: 0.35,
+        fade_in_seconds: 0.8, fade_out_seconds: 1.2, loop_music: false,
+        ducking_status: "ENABLED", raw_filtergraph: "hidden" },
+    })));
+    const payload = (await getMusic("LEE柠檬")).data;
+    expect(payload.music_mix?.ducking_ratio).toBe(0.4);
+    expect(payload.music_mix).not.toHaveProperty("raw_filtergraph");
+  });
+
+  it("gets Export detail without fingerprint or render internals", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, stale: false, video_available: true,
+      assembly_version: 2, voice_version: 1, subtitle_version: 1, music_version: 1,
+      voice_timing: { timing_mode: "whole_track", voice_track_start: 2,
+        actual_audio_duration: 10.5, actual_voice_end: 12.5,
+        calibration_status: "PASS", cue_level_alignment: false },
+      music_mix: null, input_fingerprint_sha256: "hidden", render_config: { codec: "hidden" },
+    })));
+    const payload = (await getExport("LEE柠檬")).data;
+    expect(payload.assembly_version).toBe(2);
+    expect(payload.voice_timing?.calibration_status).toBe("PASS");
+    expect(payload).not.toHaveProperty("input_fingerprint_sha256");
+  });
+
+  it("constructs all encoded media URLs without fetch", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(getAssemblyVideoUrl("LEE柠檬")).toContain("/LEE%E6%9F%A0%E6%AA%AC/assembly/video");
+    expect(getVoiceAudioUrl("LEE柠檬")).toContain("/post-production/voice/audio");
+    expect(getMusicAudioUrl("LEE柠檬")).toContain("/post-production/music/audio");
+    expect(getExportVideoUrl("LEE柠檬")).toContain("/LEE%E6%9F%A0%E6%AA%AC/export/video");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed post-production DTOs", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, stale: "false", video_available: true,
+      assembly_version: 1, voice_version: null, subtitle_version: null,
+      music_version: null, voice_timing: null, music_mix: null,
+    })));
+    await expect(getExport("LEE柠檬")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
   it("creates a project with POST JSON and preserves correlation ID", async () => {
