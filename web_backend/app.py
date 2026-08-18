@@ -5,18 +5,26 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from web_backend.errors import register_exception_handlers
+from web_backend.locking import DEFAULT_PROJECT_LOCK_MANAGER, ProjectLockManager
 from web_backend.middleware import CorrelationIdMiddleware
 from web_backend.routers.health import router as health_router
 from web_backend.routers.projects import router as projects_router
 from web_backend.settings import BackendSettings
 
 
-def create_app(*, settings: BackendSettings | None = None) -> FastAPI:
+def create_app(
+    *,
+    settings: BackendSettings | None = None,
+    lock_manager: ProjectLockManager | None = None,
+) -> FastAPI:
     application = FastAPI(
         title="AI Product Video Agent API",
         version="v1",
     )
     application.state.settings = settings or BackendSettings.from_environment()
+    application.state.project_lock_manager = (
+        lock_manager or DEFAULT_PROJECT_LOCK_MANAGER
+    )
     application.add_middleware(CorrelationIdMiddleware)
     register_exception_handlers(application)
     application.include_router(health_router, prefix="/api")

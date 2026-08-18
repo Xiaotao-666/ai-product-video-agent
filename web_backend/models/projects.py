@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResponseModel(BaseModel):
@@ -78,6 +78,28 @@ class ProjectRequest(ResponseModel):
     duration_seconds: float | None = None
     video_style: str | None = None
     video_purpose: str | None = None
+
+
+class ProjectCreateRequest(BaseModel):
+    """HTTP input mirroring the existing Core ProductVideoRequest fields."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    product_name: str = Field(max_length=1000)
+    product_description: str = Field(max_length=10000)
+    user_notes: str = Field(default="", max_length=10000)
+    duration_seconds: int
+    video_style: str = Field(max_length=2000)
+    video_purpose: str = Field(max_length=2000)
+
+
+class ProjectCreateResponse(ResponseModel):
+    project_id: str
+    name: str
+    workflow_phase: WorkflowPhase
+    status: str
+    created_at: str
+    updated_at: str
 
 
 class PostProductionState(ResponseModel):
