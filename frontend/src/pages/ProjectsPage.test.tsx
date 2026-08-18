@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiClientError, getProjects } from "../api/client";
@@ -41,6 +42,20 @@ function resolveProjects(projects: ProjectSummary[]) {
   });
 }
 
+function renderProjectsPage() {
+  return render(
+    <MemoryRouter initialEntries={["/projects"]}>
+      <Routes>
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route
+          path="/projects/new"
+          element={<h1>新建视频项目测试路由</h1>}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 describe("ProjectsPage", () => {
   beforeEach(() => {
     mockGetProjects.mockReset();
@@ -48,7 +63,7 @@ describe("ProjectsPage", () => {
   });
 
   it("renders the Projects page", async () => {
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(
       screen.getByRole("heading", { name: "Projects" }),
     ).toBeInTheDocument();
@@ -56,7 +71,7 @@ describe("ProjectsPage", () => {
   });
 
   it("renders a project returned by getProjects", async () => {
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("LEE柠檬")).toBeInTheDocument();
     expect(screen.getByText("Backend Connected")).toBeInTheDocument();
   });
@@ -66,7 +81,7 @@ describe("ProjectsPage", () => {
       project({ project_id: "newer", name: "最新项目" }),
       project({ project_id: "older", name: "较早项目" }),
     ]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("最新项目")).toBeInTheDocument();
     expect(screen.getByText("较早项目")).toBeInTheDocument();
     const cards = screen.getAllByRole("article");
@@ -78,13 +93,13 @@ describe("ProjectsPage", () => {
     resolveProjects([
       project({ workflow_phase: "STORYBOARD_REVIEW", status: "WAITING_REVIEW" }),
     ]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("分镜审核")).toBeInTheDocument();
     expect(screen.queryByText("STORYBOARD_REVIEW")).not.toBeInTheDocument();
   });
 
   it("shows a completed project status", async () => {
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect((await screen.findAllByText("已完成")).length).toBeGreaterThan(0);
   });
 
@@ -100,14 +115,14 @@ describe("ProjectsPage", () => {
         },
       }),
     ]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("需要重新合片")).toBeInTheDocument();
     expect(screen.getByText(/需要更新/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /打开项目/ })).toBeDisabled();
   });
 
   it("shows the final export version", async () => {
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("已完成 · v1")).toBeInTheDocument();
   });
 
@@ -115,28 +130,24 @@ describe("ProjectsPage", () => {
     mockGetProjects.mockReturnValue(
       new Promise<Awaited<ReturnType<typeof getProjects>>>(() => undefined),
     );
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(screen.getByText("正在加载项目…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "刷新中…" })).toBeDisabled();
   });
 
   it("shows an empty state without calling create", async () => {
     resolveProjects([]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("还没有项目")).toBeInTheDocument();
     expect(screen.getByText("创建你的第一个 AI 产品视频项目。")).toBeInTheDocument();
-    expect(
-      screen
-        .getAllByRole("button", { name: /新建项目/ })
-        .every((button) => button.hasAttribute("disabled")),
-    ).toBe(true);
+    expect(screen.getAllByRole("link", { name: "新建项目" })).toHaveLength(2);
   });
 
   it("shows a safe offline state", async () => {
     mockGetProjects.mockRejectedValue(
       new ApiClientError({ message: "无法连接", code: "NETWORK_ERROR" }),
     );
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("无法连接 Backend")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("TypeError");
     expect(document.body).not.toHaveTextContent("fetch failed");
@@ -155,7 +166,7 @@ describe("ProjectsPage", () => {
         data: { projects: [project({ name: "重试成功项目" })] },
         correlationId: "req_success",
       });
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("错误编号：req_retry")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("重试成功项目")).toBeInTheDocument();
@@ -164,7 +175,7 @@ describe("ProjectsPage", () => {
 
   it("does not crash on an invalid timestamp", async () => {
     resolveProjects([project({ updated_at: "invalid-date" })]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     expect(await screen.findByText("更新于 时间未知")).toBeInTheDocument();
   });
 
@@ -173,7 +184,7 @@ describe("ProjectsPage", () => {
       local_path: "D:\\private\\project.json",
     });
     resolveProjects([item]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     await screen.findByText("LEE柠檬");
     expect(document.body).not.toHaveTextContent("D:\\private");
   });
@@ -183,7 +194,7 @@ describe("ProjectsPage", () => {
       credential_env_name: "MINIMAX_API_KEY",
     });
     resolveProjects([item]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     await screen.findByText("LEE柠檬");
     expect(document.body).not.toHaveTextContent("credential_env_name");
     expect(document.body).not.toHaveTextContent("MINIMAX_API_KEY");
@@ -194,8 +205,27 @@ describe("ProjectsPage", () => {
       candidate_state: "CANDIDATE_APPROVE",
     });
     resolveProjects([item]);
-    render(<ProjectsPage />);
+    renderProjectsPage();
     await screen.findByText("LEE柠檬");
     expect(document.body).not.toHaveTextContent(/candidate/i);
+  });
+
+  it("opens the create route from the Projects header", async () => {
+    renderProjectsPage();
+    await screen.findByText("LEE柠檬");
+    fireEvent.click(screen.getByRole("link", { name: "新建项目" }));
+    expect(
+      await screen.findByRole("heading", { name: "新建视频项目测试路由" }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the create route from the empty state", async () => {
+    resolveProjects([]);
+    renderProjectsPage();
+    await screen.findByText("还没有项目");
+    fireEvent.click(screen.getAllByRole("link", { name: "新建项目" })[1]);
+    expect(
+      await screen.findByRole("heading", { name: "新建视频项目测试路由" }),
+    ).toBeInTheDocument();
   });
 });

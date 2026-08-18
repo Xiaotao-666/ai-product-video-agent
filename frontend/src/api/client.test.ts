@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  createProject,
   getCapabilities,
   getHealth,
   getProjects,
@@ -41,6 +42,24 @@ const projectListPayload = {
       },
     },
   ],
+};
+
+const createRequest = {
+  product_name: "测试柠檬",
+  product_description: "新鲜柠檬饮料",
+  user_notes: "不要出现人物",
+  duration_seconds: 18,
+  video_style: "清爽、年轻",
+  video_purpose: "提升产品知名度",
+};
+
+const createResponse = {
+  project_id: "0123456789abcdef0123456789abcdef",
+  name: "测试柠檬",
+  workflow_phase: "CREATIVE",
+  status: "NOT_STARTED",
+  created_at: "2026-08-18T10:00:00+08:00",
+  updated_at: "2026-08-18T10:00:00+08:00",
 };
 
 describe("API client", () => {
@@ -212,5 +231,112 @@ describe("API client", () => {
       correlationId: "req_invalid_projects",
     });
     expect((error as Error).message).not.toContain("D:\\private");
+  });
+
+  it("creates a project with POST JSON and preserves correlation ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(createResponse, 201, {
+        "X-Correlation-ID": "req_create",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await createProject(createRequest);
+
+    expect(result.data).toEqual(createResponse);
+    expect(result.correlationId).toBe("req_create");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/api/projects");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(String(init.body))).toEqual(createRequest);
+  });
+
+  it.each([
+    [422, "INVALID_VIDEO_DURATION"],
+    [409, "PROJECT_BUSY"],
+    [500, "PROJECT_CREATE_FAILED"],
+  ])("maps create error HTTP %i with code %s", async (status, code) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf(
+          {
+            error: {
+              type: status === 422 ? "VALIDATION_ERROR" : "PROJECT_ERROR",
+              code,
+              message: "安全错误消息",
+              retryable: status === 409,
+              correlation_id: `req_${status}`,
+            },
+          },
+          status,
+        ),
+      ),
+    );
+
+    await expect(createProject(createRequest)).rejects.toMatchObject({
+      status,
+      code,
+      message: "安全错误消息",
+      correlationId: `req_${status}`,
+      retryable: status === 409,
+    });
+  });
+
+  it("converts create network failure into a safe error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("D:\\private API_KEY=hidden")),
+    );
+
+    const error = await createProject(createRequest).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({ code: "NETWORK_ERROR", status: null });
+    expect((error as Error).message).not.toContain("D:\\");
+    expect((error as Error).message).not.toContain("API_KEY");
+  });
+
+  it("rejects malformed create JSON and keeps the correlation ID", async () => {
+    const response = responseOf(null, 201, {
+      "X-Correlation-ID": "req_bad_create_json",
+    });
+    vi.mocked(response.json).mockRejectedValue(new SyntaxError("bad JSON"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(createProject(createRequest)).rejects.toMatchObject({
+      status: 201,
+      code: "INVALID_RESPONSE",
+      correlationId: "req_bad_create_json",
+    });
+  });
+
+  it("sanitizes create response extensions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf(
+          {
+            ...createResponse,
+            local_path: "D:\\private\\project.json",
+            provider_secret: "hidden",
+          },
+          201,
+        ),
+      ),
+    );
+
+    const result = await createProject(createRequest);
+
+    expect(result.data).toEqual(createResponse);
+    expect(result.data).not.toHaveProperty("local_path");
+    expect(result.data).not.toHaveProperty("provider_secret");
   });
 });

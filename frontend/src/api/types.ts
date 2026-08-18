@@ -84,3 +84,21 @@ export interface ProjectSummary {
 export interface ProjectListResponse {
   projects: ProjectSummary[];
 }
+
+export interface CreateProjectRequest {
+  product_name: string;
+  product_description: string;
+  user_notes: string;
+  duration_seconds: number;
+  video_style: string;
+  video_purpose: string;
+}
+
+export interface CreateProjectResponse {
+  project_id: string;
+  name: string;
+  workflow_phase: WorkflowPhase;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}

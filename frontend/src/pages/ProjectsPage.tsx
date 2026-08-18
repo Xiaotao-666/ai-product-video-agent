@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { ApiClientError, getProjects } from "../api/client";
 import type { ProjectSummary } from "../api/types";
@@ -53,10 +54,9 @@ export function ProjectsPage() {
           <button className="secondary-button" type="button" onClick={loadProjects} disabled={loading}>
             {loading ? "刷新中…" : "刷新"}
           </button>
-          <button className="primary-button" type="button" disabled>
+          <Link className="primary-button" to="/projects/new">
             新建项目
-            <small>Coming soon</small>
-          </button>
+          </Link>
         </div>
       </header>
 
@@ -92,10 +92,9 @@ export function ProjectsPage() {
           <p className="empty-kicker">NO PROJECTS YET</p>
           <h2>还没有项目</h2>
           <p>创建你的第一个 AI 产品视频项目。</p>
-          <button className="primary-button" type="button" disabled>
+          <Link className="primary-button" to="/projects/new">
             新建项目
-            <small>即将在下一阶段开放</small>
-          </button>
+          </Link>
         </section>
       )}
 

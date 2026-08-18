@@ -3,6 +3,8 @@ import type {
   ApiResult,
   BackendErrorResponse,
   CapabilitiesResponse,
+  CreateProjectRequest,
+  CreateProjectResponse,
   HealthResponse,
   ProjectListResponse,
   ProjectSummary,
@@ -131,6 +133,35 @@ function parseProjectList(
   return { projects: value.projects };
 }
 
+function parseCreateProjectResponse(
+  value: unknown,
+  correlationId: string | null,
+): CreateProjectResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.name !== "string" ||
+    !isWorkflowPhase(value.workflow_phase) ||
+    typeof value.status !== "string" ||
+    typeof value.created_at !== "string" ||
+    typeof value.updated_at !== "string"
+  ) {
+    throw new ApiClientError({
+      message: "Backend 返回了无法读取的创建结果。",
+      code: "INVALID_RESPONSE",
+      correlationId,
+    });
+  }
+  return {
+    project_id: value.project_id,
+    name: value.name,
+    workflow_phase: value.workflow_phase,
+    status: value.status,
+    created_at: value.created_at,
+    updated_at: value.updated_at,
+  };
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -144,13 +175,13 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-async function get<T>(path: string): Promise<ApiResult<T>> {
+async function request(
+  path: string,
+  init: RequestInit,
+): Promise<ApiResult<unknown>> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    });
+    response = await fetch(`${API_BASE_URL}${path}`, init);
   } catch {
     throw new ApiClientError({
       message: "无法连接本地 Backend。",
@@ -179,8 +210,19 @@ async function get<T>(path: string): Promise<ApiResult<T>> {
   }
 
   return {
-    data: payload as T,
+    data: payload,
     correlationId: headerCorrelationId,
+  };
+}
+
+async function get<T>(path: string): Promise<ApiResult<T>> {
+  const result = await request(path, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  return {
+    data: result.data as T,
+    correlationId: result.correlationId,
   };
 }
 
@@ -196,6 +238,23 @@ export async function getProjects(): Promise<ApiResult<ProjectListResponse>> {
   const result = await get<unknown>("/api/projects");
   return {
     data: parseProjectList(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function createProject(
+  project: CreateProjectRequest,
+): Promise<ApiResult<CreateProjectResponse>> {
+  const result = await request("/api/projects", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(project),
+  });
+  return {
+    data: parseCreateProjectResponse(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

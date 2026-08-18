@@ -3,18 +3,25 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import { getCapabilities, getHealth, getProjects } from "./api/client";
+import {
+  createProject,
+  getCapabilities,
+  getHealth,
+  getProjects,
+} from "./api/client";
 import type { CapabilitiesResponse } from "./api/types";
 
 vi.mock("./api/client", () => ({
   getHealth: vi.fn(),
   getCapabilities: vi.fn(),
   getProjects: vi.fn(),
+  createProject: vi.fn(),
 }));
 
 const mockGetHealth = vi.mocked(getHealth);
 const mockGetCapabilities = vi.mocked(getCapabilities);
 const mockGetProjects = vi.mocked(getProjects);
+const mockCreateProject = vi.mocked(createProject);
 
 function renderSystem() {
   return render(
@@ -54,6 +61,17 @@ describe("App", () => {
     mockGetProjects.mockResolvedValue({
       data: { projects: [] },
       correlationId: "req_projects",
+    });
+    mockCreateProject.mockResolvedValue({
+      data: {
+        project_id: "project-new",
+        name: "测试项目",
+        workflow_phase: "CREATIVE",
+        status: "NOT_STARTED",
+        created_at: "2026-08-18T10:00:00+08:00",
+        updated_at: "2026-08-18T10:00:00+08:00",
+      },
+      correlationId: "req_create",
     });
   });
 
@@ -140,7 +158,24 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Projects" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Projects/ })).toHaveClass(
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
+      "nav-item-active",
+    );
+  });
+
+  it("renders /projects/new and keeps Projects navigation active", () => {
+    render(
+      <MemoryRouter initialEntries={["/projects/new"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    expect(
+      screen.getByRole("heading", { name: "新建视频项目" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveClass(
+      "nav-item-active",
+    );
+    expect(screen.getByRole("link", { name: /System Status/ })).not.toHaveClass(
       "nav-item-active",
     );
   });

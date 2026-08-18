@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppSidebar } from "./components/AppSidebar";
+import { CreateProjectPage } from "./pages/CreateProjectPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { SystemStatusPage } from "./pages/SystemStatusPage";
 import "./styles/app.css";
@@ -12,6 +13,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/projects/new" element={<CreateProjectPage />} />
         <Route path="/system" element={<SystemStatusPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Routes>

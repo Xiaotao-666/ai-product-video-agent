@@ -441,6 +441,7 @@
   color: #efffc5;
   background: #26323d;
   border: 1px solid #26323d;
+  text-decoration: none;
 }
 
 .secondary-button {
@@ -466,6 +467,11 @@
 .secondary-button:not(:disabled):hover {
   background: #f6f8f9;
   border-color: #c9d0d5;
+}
+
+.primary-button:not(:disabled):hover {
+  background: #1d2832;
+  border-color: #1d2832;
 }
 
 .backend-state {
@@ -769,6 +775,226 @@
   border-top: 3px solid #b97878;
 }
 
+.create-project-page {
+  padding-top: 52px;
+}
+
+.create-page-content {
+  width: min(100%, 880px);
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #65727d;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  color: #26323d;
+}
+
+.create-page-header {
+  margin: 34px 0 34px;
+}
+
+.create-page-header h1 {
+  margin: 10px 0 0;
+  color: #17202a;
+  font-size: clamp(36px, 5vw, 54px);
+  font-weight: 680;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.create-page-header > p:last-child {
+  max-width: 650px;
+  margin: 18px 0 0;
+  color: #697683;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.project-form {
+  padding: clamp(26px, 4vw, 40px);
+  background: #ffffff;
+  border: 1px solid #dfe4e8;
+  border-radius: 14px;
+}
+
+.form-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e7ebee;
+}
+
+.form-heading h2 {
+  margin: 8px 0 0;
+  color: #202a33;
+  font-size: 23px;
+  font-weight: 670;
+  letter-spacing: -0.025em;
+}
+
+.form-heading > span {
+  color: #8a959e;
+  font-size: 10px;
+}
+
+.project-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 18px;
+  margin-top: 30px;
+}
+
+.form-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.form-field label {
+  color: #34414c;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.form-field input,
+.form-field textarea {
+  width: 100%;
+  color: #202a33;
+  background: #ffffff;
+  border: 1px solid #d5dce1;
+  border-radius: 8px;
+  outline: none;
+  font-size: 13px;
+  line-height: 1.55;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.form-field input {
+  min-height: 44px;
+  padding: 0 13px;
+}
+
+.form-field textarea {
+  min-height: 106px;
+  padding: 12px 13px;
+  resize: vertical;
+}
+
+.form-field input::placeholder,
+.form-field textarea::placeholder {
+  color: #a1aab2;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  border-color: #74818b;
+  box-shadow: 0 0 0 3px rgb(38 50 61 / 8%);
+}
+
+.form-field input[aria-invalid="true"],
+.form-field textarea[aria-invalid="true"] {
+  border-color: #b97878;
+}
+
+.duration-input {
+  position: relative;
+}
+
+.duration-input input {
+  padding-right: 48px;
+}
+
+.duration-input > span {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  color: #7b8791;
+  font-size: 11px;
+  transform: translateY(-50%);
+}
+
+.field-help,
+.field-error,
+.form-correlation {
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.field-help {
+  color: #89949d;
+}
+
+.field-error {
+  color: #945353;
+  font-weight: 620;
+}
+
+.form-success,
+.form-global-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 24px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.form-success {
+  color: #286744;
+  background: #eaf5ee;
+}
+
+.form-global-error {
+  flex-direction: column;
+  color: #7e4b4b;
+  background: #f7eded;
+}
+
+.form-success strong,
+.form-global-error strong {
+  font-size: 12px;
+}
+
+.form-correlation {
+  margin: 20px 0 0;
+  color: #7e4b4b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 34px;
+  padding-top: 24px;
+  border-top: 1px solid #e7ebee;
+}
+
+.form-actions .primary-button,
+.form-actions .secondary-button {
+  min-width: 112px;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -841,5 +1067,28 @@
 
   .project-metadata {
     grid-template-columns: 1fr;
+  }
+
+  .project-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-field-wide {
+    grid-column: auto;
+  }
+
+  .form-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .form-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .form-actions .primary-button,
+  .form-actions .secondary-button {
+    width: 100%;
   }
 }
