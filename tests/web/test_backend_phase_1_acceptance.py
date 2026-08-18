@@ -189,6 +189,8 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/post-production/music/audio",
                 "/api/projects/{project_id}/export",
                 "/api/projects/{project_id}/export/video",
+                "/api/tasks/{task_id}",
+                "/api/projects/{project_id}/tasks",
             },
         )
         self.assertNotIn("/api/actions", schema["paths"])

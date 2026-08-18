@@ -41,6 +41,12 @@ import type {
   StoryboardShotContent,
   SubtitleCue,
   SubtitleDetail,
+  ProjectTaskListResponse,
+  TaskError,
+  TaskOperation,
+  TaskRecord,
+  TaskResultReference,
+  TaskStatus,
   VideoPromptShotContent,
   VideoPromptsContentResponse,
   VoiceCalibrationStatus,
@@ -72,6 +78,25 @@ const VOICE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set([
   "OUT_OF_BOUNDS",
   "NOT_APPLICABLE",
   "UNKNOWN",
+]);
+const TASK_ID_PATTERN = /^task_[0-9a-f]{32}$/;
+const TASK_STATUSES: ReadonlySet<string> = new Set([
+  "QUEUED",
+  "RUNNING",
+  "SUCCEEDED",
+  "FAILED",
+  "INTERRUPTED",
+  "CANCELLED",
+]);
+const TASK_OPERATIONS: ReadonlySet<string> = new Set([
+  "CREATIVE_GENERATE",
+  "STORYBOARD_GENERATE",
+  "VIDEO_PROMPT_GENERATE",
+  "SHOT_GENERATE",
+  "ASSEMBLY",
+  "VOICE_GENERATE",
+  "SUBTITLE_GENERATE",
+  "FINAL_EXPORT",
 ]);
 const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
   "CREATIVE",
@@ -1242,6 +1267,133 @@ function parseExportDetail(
   };
 }
 
+function isTaskStatus(value: unknown): value is TaskStatus {
+  return typeof value === "string" && TASK_STATUSES.has(value);
+}
+
+function isTaskOperation(value: unknown): value is TaskOperation {
+  return typeof value === "string" && TASK_OPERATIONS.has(value);
+}
+
+function parseTaskError(
+  value: unknown,
+  correlationId: string | null,
+): TaskError | null {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.code !== "string" ||
+    !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.code) ||
+    typeof value.message !== "string" ||
+    typeof value.retryable !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的任务错误。", correlationId);
+  }
+  return {
+    code: value.code,
+    message: parseContentText(value.message, correlationId) ?? "任务执行失败。",
+    retryable: value.retryable,
+  };
+}
+
+function parseTaskResult(
+  value: unknown,
+  correlationId: string | null,
+): TaskResultReference | null {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.resource_type !== "string" ||
+    !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.resource_type) ||
+    !isNullableString(value.resource_id) ||
+    !isNullablePositiveInteger(value.version)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的任务结果。", correlationId);
+  }
+  return {
+    resource_type: value.resource_type,
+    resource_id: parseContentText(value.resource_id, correlationId),
+    version: value.version,
+  };
+}
+
+function parseTaskRecord(
+  value: unknown,
+  correlationId: string | null,
+): TaskRecord {
+  if (
+    !isRecord(value) ||
+    typeof value.task_id !== "string" ||
+    !TASK_ID_PATTERN.test(value.task_id) ||
+    typeof value.project_id !== "string" ||
+    value.project_id.length === 0 ||
+    UNSAFE_CONTENT.test(value.project_id) ||
+    !isTaskOperation(value.operation) ||
+    !isTaskStatus(value.status) ||
+    typeof value.created_at !== "string" ||
+    !isNullableString(value.started_at) ||
+    !isNullableString(value.finished_at) ||
+    typeof value.correlation_id !== "string" ||
+    UNSAFE_CONTENT.test(value.correlation_id)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的任务记录。", correlationId);
+  }
+
+  const error = parseTaskError(value.error, correlationId);
+  const result = parseTaskResult(value.result, correlationId);
+  const isTerminal = ["SUCCEEDED", "FAILED", "INTERRUPTED", "CANCELLED"].includes(
+    value.status,
+  );
+  if (
+    (value.status === "QUEUED" &&
+      (value.started_at !== null || value.finished_at !== null)) ||
+    (value.status === "RUNNING" &&
+      (value.started_at === null || value.finished_at !== null)) ||
+    (isTerminal && value.finished_at === null) ||
+    (["FAILED", "INTERRUPTED"].includes(value.status) && error === null) ||
+    (!["FAILED", "INTERRUPTED"].includes(value.status) && error !== null) ||
+    (result !== null && value.status !== "SUCCEEDED")
+  ) {
+    return invalidResponse("Backend 返回了状态不一致的任务记录。", correlationId);
+  }
+
+  return {
+    task_id: value.task_id,
+    project_id: value.project_id,
+    operation: value.operation,
+    status: value.status,
+    created_at: value.created_at,
+    started_at: value.started_at,
+    finished_at: value.finished_at,
+    correlation_id: value.correlation_id,
+    error,
+    result,
+  };
+}
+
+function parseProjectTaskList(
+  value: unknown,
+  correlationId: string | null,
+): ProjectTaskListResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    value.project_id.length === 0 ||
+    UNSAFE_CONTENT.test(value.project_id) ||
+    !Array.isArray(value.tasks)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的项目任务列表。", correlationId);
+  }
+  return {
+    project_id: value.project_id,
+    tasks: value.tasks.map((task) => parseTaskRecord(task, correlationId)),
+  };
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -1495,6 +1647,30 @@ export async function getExport(
 
 export function getExportVideoUrl(projectId: string): string {
   return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/export/video`;
+}
+
+export async function getTask(
+  taskId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await get<unknown>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getProjectTasks(
+  projectId: string,
+): Promise<ApiResult<ProjectTaskListResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/tasks`,
+  );
+  return {
+    data: parseProjectTaskList(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
 }
 
 export async function createProject(

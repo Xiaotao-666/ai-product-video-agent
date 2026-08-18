@@ -1,0 +1,102 @@
+"""Internal task submission and query service; no public submit API exists."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from datetime import datetime, timezone
+from threading import Lock
+
+from web_backend.middleware import select_correlation_id
+from web_backend.models.tasks import (
+    ProjectTaskListResponse,
+    TaskError,
+    TaskOperation,
+    TaskRecord,
+    TaskStatus,
+)
+from web_backend.repositories.project_repository import ProjectRepository
+from web_backend.repositories.task_repository import TaskRepository
+from web_backend.services.projects import ProjectBusy
+from web_backend.services.task_runner import (
+    TaskCallable,
+    TaskRunner,
+    TaskRunnerClosed,
+)
+
+
+class TaskService:
+    """Coordinate durable creation with same-project active-task protection."""
+
+    def __init__(
+        self,
+        repository: TaskRepository,
+        runner: TaskRunner,
+        project_repository: ProjectRepository,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        id_factory: Callable[[], str] | None = None,
+    ) -> None:
+        self._repository = repository
+        self._runner = runner
+        self._project_repository = project_repository
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._id_factory = id_factory or (lambda: f"task_{uuid.uuid4().hex}")
+        self._submission_guard = Lock()
+
+    def submit(
+        self,
+        *,
+        project_id: str,
+        operation: TaskOperation,
+        correlation_id: str | None,
+        callable_: TaskCallable,
+    ) -> TaskRecord:
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        with self._submission_guard:
+            if self._repository.find_active_for_project(canonical_project_id):
+                raise ProjectBusy("project already has an active Web task")
+            task = TaskRecord(
+                task_id=self._id_factory(),
+                project_id=canonical_project_id,
+                operation=operation,
+                status=TaskStatus.QUEUED,
+                created_at=self._clock(),
+                correlation_id=select_correlation_id(correlation_id),
+            )
+            self._repository.create(task)
+            try:
+                self._runner.submit(task.task_id, callable_)
+            except TaskRunnerClosed:
+                interrupted_payload = task.model_dump()
+                interrupted_payload.update(
+                    status=TaskStatus.INTERRUPTED,
+                    finished_at=self._clock(),
+                    error=TaskError(
+                        code="TASK_RUNNER_UNAVAILABLE",
+                        message="任务执行器当前不可用。",
+                        retryable=False,
+                    ),
+                )
+                self._repository.update(
+                    TaskRecord.model_validate(interrupted_payload)
+                )
+                raise
+            return task
+
+    def get(self, task_id: str) -> TaskRecord:
+        return self._repository.get(task_id)
+
+    def list_for_project(self, project_id: str) -> ProjectTaskListResponse:
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        return ProjectTaskListResponse(
+            project_id=canonical_project_id,
+            tasks=self._repository.list_for_project(canonical_project_id),
+        )
+
+    def recover_interrupted_tasks(self) -> list[TaskRecord]:
+        return self._repository.interrupt_active_tasks()

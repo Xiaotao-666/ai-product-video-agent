@@ -148,6 +148,15 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "EXPORT_MEDIA_NOT_FOUND": ErrorDefinition(
         404, "EXPORT_ERROR", "EXPORT_MEDIA_NOT_FOUND", "最终成片不可用。"
     ),
+    "INVALID_TASK_ID": ErrorDefinition(
+        422, "TASK_ERROR", "INVALID_TASK_ID", "任务标识无效。"
+    ),
+    "TASK_NOT_FOUND": ErrorDefinition(
+        404, "TASK_ERROR", "TASK_NOT_FOUND", "任务不存在。"
+    ),
+    "TASK_DATA_CORRUPT": ErrorDefinition(
+        422, "TASK_ERROR", "TASK_DATA_CORRUPT", "任务记录无法读取。"
+    ),
 }
 
 

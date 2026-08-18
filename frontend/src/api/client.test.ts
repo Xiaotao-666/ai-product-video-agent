@@ -13,6 +13,7 @@ import {
   getMusic,
   getMusicAudioUrl,
   getProject,
+  getProjectTasks,
   getProjects,
   getProjectWorkflow,
   getShot,
@@ -20,6 +21,7 @@ import {
   getShotVideoUrl,
   getStoryboardContent,
   getSubtitle,
+  getTask,
   getVideoPrompts,
   getVoice,
   getVoiceAudioUrl,
@@ -77,6 +79,19 @@ const createResponse = {
   status: "NOT_STARTED",
   created_at: "2026-08-18T10:00:00+08:00",
   updated_at: "2026-08-18T10:00:00+08:00",
+};
+
+const taskPayload = {
+  task_id: "task_0123456789abcdef0123456789abcdef",
+  project_id: "project-1",
+  operation: "CREATIVE_GENERATE",
+  status: "QUEUED",
+  created_at: "2026-08-18T12:00:00Z",
+  started_at: null,
+  finished_at: null,
+  correlation_id: "req_task",
+  error: null,
+  result: null,
 };
 
 const workflowStagesPayload = {
@@ -1010,5 +1025,131 @@ describe("API client", () => {
     expect(result.data).toEqual(createResponse);
     expect(result.data).not.toHaveProperty("local_path");
     expect(result.data).not.toHaveProperty("provider_secret");
+  });
+
+  it("gets a durable task and preserves response correlation ID", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf(taskPayload, 200, { "X-Correlation-ID": "req_task_get" }),
+      ),
+    );
+
+    const result = await getTask(taskPayload.task_id);
+
+    expect(result.data).toEqual(taskPayload);
+    expect(result.correlationId).toBe("req_task_get");
+  });
+
+  it("maps task not found without exposing backend internals", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf(
+          {
+            error: {
+              type: "TASK_ERROR",
+              code: "TASK_NOT_FOUND",
+              message: "任务不存在。",
+              retryable: false,
+              correlation_id: "req_missing_task",
+            },
+          },
+          404,
+        ),
+      ),
+    );
+
+    await expect(getTask(taskPayload.task_id)).rejects.toMatchObject({
+      status: 404,
+      code: "TASK_NOT_FOUND",
+      correlationId: "req_missing_task",
+    });
+  });
+
+  it("gets a project's durable task list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({ project_id: "project-1", tasks: [taskPayload] }),
+      ),
+    );
+
+    const result = await getProjectTasks("project-1");
+
+    expect(result.data.project_id).toBe("project-1");
+    expect(result.data.tasks).toEqual([taskPayload]);
+  });
+
+  it("maps task query network failure to the shared safe error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("D:\\private API_KEY=hidden")),
+    );
+
+    await expect(getTask(taskPayload.task_id)).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      status: null,
+      message: "无法连接本地 Backend。",
+    });
+  });
+
+  it("rejects malformed task lifecycle JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          ...taskPayload,
+          status: "RUNNING",
+          started_at: null,
+        }),
+      ),
+    );
+
+    await expect(getTask(taskPayload.task_id)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
+  it("keeps correlation ID when task JSON is unreadable", async () => {
+    const response = responseOf(null, 200, {
+      "X-Correlation-ID": "req_bad_task_json",
+    });
+    vi.mocked(response.json).mockRejectedValue(new SyntaxError("bad JSON"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(getTask(taskPayload.task_id)).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_RESPONSE",
+      correlationId: "req_bad_task_json",
+    });
+  });
+
+  it("projects task fields without absolute paths or secrets", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          ...taskPayload,
+          status: "FAILED",
+          finished_at: "2026-08-18T12:00:01Z",
+          error: {
+            code: "TASK_EXECUTION_FAILED",
+            message: "D:\\private API_KEY=hidden",
+            retryable: false,
+          },
+          local_path: "D:\\private\\task.json",
+          provider_response: { authorization: "hidden" },
+        }),
+      ),
+    );
+
+    const payload = (await getTask(taskPayload.task_id)).data;
+
+    expect(payload.error?.message).toBe("[敏感内容已隐藏]");
+    expect(payload).not.toHaveProperty("local_path");
+    expect(payload).not.toHaveProperty("provider_response");
+    expect(JSON.stringify(payload)).not.toContain("D:\\");
+    expect(JSON.stringify(payload).toLowerCase()).not.toContain("api_key");
   });
 });

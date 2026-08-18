@@ -40,6 +40,54 @@ export interface ApiResult<T> {
   correlationId: string | null;
 }
 
+export type TaskStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "INTERRUPTED"
+  | "CANCELLED";
+
+export type TaskOperation =
+  | "CREATIVE_GENERATE"
+  | "STORYBOARD_GENERATE"
+  | "VIDEO_PROMPT_GENERATE"
+  | "SHOT_GENERATE"
+  | "ASSEMBLY"
+  | "VOICE_GENERATE"
+  | "SUBTITLE_GENERATE"
+  | "FINAL_EXPORT";
+
+export interface TaskError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface TaskResultReference {
+  resource_type: string;
+  resource_id: string | null;
+  version: number | null;
+}
+
+export interface TaskRecord {
+  task_id: string;
+  project_id: string;
+  operation: TaskOperation;
+  status: TaskStatus;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  correlation_id: string;
+  error: TaskError | null;
+  result: TaskResultReference | null;
+}
+
+export interface ProjectTaskListResponse {
+  project_id: string;
+  tasks: TaskRecord[];
+}
+
 export type WorkflowPhase =
   | "CREATIVE"
   | "CREATIVE_REVIEW"

@@ -24,7 +24,13 @@ class BackendSettings(BaseModel):
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=8000, ge=1, le=65535)
     projects_root: Path = Path(r"D:\desktop\视频生成Agent产出")
+    runtime_root: Path | None = None
+    task_workers: int = Field(default=2, ge=1, le=8)
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
+
+    @property
+    def web_runtime_root(self) -> Path:
+        return self.runtime_root or (self.projects_root / ".web_runtime")
 
     @field_validator("cors_origins")
     @classmethod
@@ -60,6 +66,7 @@ class BackendSettings(BaseModel):
         """Read only Web-specific environment variables without loading secrets."""
 
         raw_origins = os.getenv("WEB_CORS_ORIGINS")
+        raw_runtime_root = os.getenv("WEB_RUNTIME_ROOT")
         cors_origins = (
             tuple(part for part in raw_origins.split(","))
             if raw_origins is not None
@@ -72,5 +79,7 @@ class BackendSettings(BaseModel):
                 "WEB_PROJECTS_ROOT",
                 r"D:\desktop\视频生成Agent产出",
             ),
+            runtime_root=raw_runtime_root or None,
+            task_workers=os.getenv("WEB_TASK_WORKERS", "2"),
             cors_origins=cors_origins,
         )

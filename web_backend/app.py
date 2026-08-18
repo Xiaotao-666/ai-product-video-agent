@@ -20,11 +20,15 @@ from web_backend.repositories.postproduction_repository import (
     PostProductionRepository,
 )
 from web_backend.repositories.shot_repository import ShotRepository
+from web_backend.repositories.task_repository import TaskRepository
 from web_backend.routers.capabilities import router as capabilities_router
 from web_backend.routers.health import router as health_router
 from web_backend.routers.projects import router as projects_router
+from web_backend.routers.tasks import router as tasks_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.projects import ProjectService
+from web_backend.services.task_runner import TaskRunner
+from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
 
 
@@ -44,6 +48,12 @@ def _is_loopback_host(host: str) -> bool:
 def _initialize_local_resources(application: FastAPI) -> None:
     """Build lightweight objects only; constructors perform no project I/O."""
 
+    if (
+        getattr(application.state, "local_resources_initialized", False)
+        and not application.state.task_runner.is_shutdown
+    ):
+        return
+
     settings = application.state.settings
     lock_manager = application.state.project_lock_manager
     application.state.project_repository = ProjectRepository(settings.projects_root)
@@ -56,16 +66,34 @@ def _initialize_local_resources(application: FastAPI) -> None:
     application.state.postproduction_repository = PostProductionRepository(
         application.state.project_repository
     )
+    application.state.task_repository = TaskRepository(settings.web_runtime_root)
+    application.state.task_runner = TaskRunner(
+        application.state.task_repository,
+        lock_manager,
+        max_workers=settings.task_workers,
+    )
+    application.state.task_service = TaskService(
+        application.state.task_repository,
+        application.state.task_runner,
+        application.state.project_repository,
+    )
     application.state.project_service = ProjectService(
         settings.projects_root,
         lock_manager,
     )
     application.state.capability_service = CapabilityService()
+    application.state.local_resources_initialized = True
 
 
 @asynccontextmanager
 async def backend_lifespan(application: FastAPI):
     _initialize_local_resources(application)
+    interrupted = application.state.task_service.recover_interrupted_tasks()
+    if interrupted:
+        lifecycle_logger.warning(
+            "Marked %d abandoned Web task(s) as INTERRUPTED without replay",
+            len(interrupted),
+        )
     application.state.lifecycle_started = True
     settings = application.state.settings
     if not _is_loopback_host(settings.host):
@@ -75,7 +103,8 @@ async def backend_lifespan(application: FastAPI):
     try:
         yield
     finally:
-        # Current resources own no file, network, provider, or subprocess handles.
+        application.state.task_runner.shutdown()
+        application.state.local_resources_initialized = False
         application.state.lifecycle_started = False
 
 
@@ -111,6 +140,7 @@ def create_app(
     application.include_router(health_router, prefix="/api")
     application.include_router(capabilities_router, prefix="/api")
     application.include_router(projects_router, prefix="/api")
+    application.include_router(tasks_router, prefix="/api")
     return application
 
 

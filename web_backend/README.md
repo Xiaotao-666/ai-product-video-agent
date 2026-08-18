@@ -51,3 +51,23 @@ http://localhost:5173
 Web writes are serialized only inside one backend process. Use one Uvicorn
 worker, and do not let the CLI and Web backend write the same project at the
 same time. Cross-process task recovery and locking are not part of Phase 1.
+
+## Durable local task foundation
+
+Phase 3A-1 adds durable Web execution tracking without exposing a task submit
+endpoint or connecting any business action. Task records are atomically stored
+under `WEB_RUNTIME_ROOT/tasks` (by default the `.web_runtime` directory beside
+the Agent projects), never inside an Agent project.
+
+```text
+GET /api/tasks/{task_id}
+GET /api/projects/{project_id}/tasks
+```
+
+`WEB_TASK_WORKERS` defaults to `2`. Reads do not create the runtime directory;
+the first future internal task submission creates it lazily. On startup,
+abandoned `QUEUED` or `RUNNING` records become `INTERRUPTED` and are never
+automatically replayed. The runner does not retry business callables.
+
+The current implementation remains limited to one Uvicorn worker. The CLI and
+Web backend must not write the same project concurrently.
