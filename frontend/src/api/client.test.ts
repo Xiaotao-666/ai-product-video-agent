@@ -5,7 +5,9 @@ import {
   createProject,
   getCapabilities,
   getHealth,
+  getProject,
   getProjects,
+  getProjectWorkflow,
 } from "./client";
 
 function responseOf(
@@ -60,6 +62,60 @@ const createResponse = {
   status: "NOT_STARTED",
   created_at: "2026-08-18T10:00:00+08:00",
   updated_at: "2026-08-18T10:00:00+08:00",
+};
+
+const workflowStagesPayload = {
+  creative: { status: "APPROVED" },
+  storyboard: { status: "APPROVED" },
+  video_prompt: { status: "APPROVED" },
+  shots: { status: "COMPLETED", approved: 3, total: 3 },
+  assembly: { status: "COMPLETED", needs_update: false, version: 2 },
+  voice: { status: "COMPLETED", version: 1 },
+  subtitle: { status: "NOT_STARTED", version: null },
+  music: { status: "COMPLETED", version: 2 },
+  export: {
+    status: "COMPLETED",
+    version: 3,
+    created_at: "2026-08-18T14:20:00+08:00",
+    stale: false,
+  },
+};
+
+const projectWorkflowPayload = {
+  project_id: "LEE柠檬",
+  workflow_phase: "COMPLETED",
+  status: "COMPLETED",
+  stages: workflowStagesPayload,
+  available_actions: [],
+  updated_at: "2026-08-18T14:30:00+08:00",
+};
+
+const projectDetailPayload = {
+  project_id: "LEE柠檬",
+  name: "LEE柠檬清爽饮品",
+  request: {
+    product_name: "LEE柠檬",
+    product_description: "新鲜柠檬饮料",
+    user_notes: "不要出现人物",
+    duration_seconds: 18,
+    video_style: "清爽、年轻",
+    video_purpose: "提升产品知名度",
+  },
+  workflow: {
+    workflow_phase: "COMPLETED",
+    status: "COMPLETED",
+    stages: workflowStagesPayload,
+    available_actions: [],
+  },
+  assembly: workflowStagesPayload.assembly,
+  post_production: {
+    status: "RUNNING",
+    voice: workflowStagesPayload.voice,
+    subtitle: workflowStagesPayload.subtitle,
+    music: workflowStagesPayload.music,
+  },
+  final_export: workflowStagesPayload.export,
+  updated_at: "2026-08-18T14:30:00+08:00",
 };
 
 describe("API client", () => {
@@ -231,6 +287,158 @@ describe("API client", () => {
       correlationId: "req_invalid_projects",
     });
     expect((error as Error).message).not.toContain("D:\\private");
+  });
+
+  it("gets and validates a project detail with an encoded Chinese ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(
+        {
+          ...projectDetailPayload,
+          local_path: "D:\\private\\project.json",
+          credential_env_name: "MINIMAX_API_KEY",
+        },
+        200,
+        { "X-Correlation-ID": "req_detail" },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getProject("LEE柠檬");
+
+    expect(result.data.name).toBe("LEE柠檬清爽饮品");
+    expect(result.data.request.duration_seconds).toBe(18);
+    expect(result.correlationId).toBe("req_detail");
+    expect(result.data).not.toHaveProperty("local_path");
+    expect(result.data).not.toHaveProperty("credential_env_name");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/projects/LEE%E6%9F%A0%E6%AA%AC"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("gets and validates project workflow with an encoded Chinese ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(
+        {
+          ...projectWorkflowPayload,
+          candidate_state: "CANDIDATE_APPROVE",
+          raw_error: "hidden",
+        },
+        200,
+        { "X-Correlation-ID": "req_workflow" },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getProjectWorkflow("LEE柠檬");
+
+    expect(result.data.workflow_phase).toBe("COMPLETED");
+    expect(result.data.stages.shots).toEqual({
+      status: "COMPLETED",
+      approved: 3,
+      total: 3,
+    });
+    expect(result.correlationId).toBe("req_workflow");
+    expect(result.data).not.toHaveProperty("candidate_state");
+    expect(result.data).not.toHaveProperty("raw_error");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/api/projects/LEE%E6%9F%A0%E6%AA%AC/workflow",
+      ),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it.each([
+    [404, "PROJECT_NOT_FOUND"],
+    [422, "PROJECT_DATA_CORRUPT"],
+  ])("maps project detail HTTP %i with code %s", async (status, code) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf(
+          {
+            error: {
+              type: "PROJECT_ERROR",
+              code,
+              message: "安全项目错误",
+              retryable: false,
+              correlation_id: `req_detail_${status}`,
+            },
+          },
+          status,
+        ),
+      ),
+    );
+
+    await expect(getProject("project-1")).rejects.toMatchObject({
+      status,
+      code,
+      correlationId: `req_detail_${status}`,
+    });
+  });
+
+  it.each([
+    [404, "PROJECT_NOT_FOUND"],
+    [422, "PROJECT_DATA_UNSUPPORTED"],
+  ])("maps project workflow HTTP %i with code %s", async (status, code) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf(
+          {
+            error: {
+              type: "PROJECT_ERROR",
+              code,
+              message: "安全工作流错误",
+              retryable: false,
+              correlation_id: `req_workflow_${status}`,
+            },
+          },
+          status,
+        ),
+      ),
+    );
+
+    await expect(getProjectWorkflow("project-1")).rejects.toMatchObject({
+      status,
+      code,
+      correlationId: `req_workflow_${status}`,
+    });
+  });
+
+  it.each([
+    ["project detail", () => getProject("project-1")],
+    ["project workflow", () => getProjectWorkflow("project-1")],
+  ])("converts %s network failure into a safe error", async (_name, call) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("D:\\private API_KEY=hidden")),
+    );
+
+    const error = await call().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({ code: "NETWORK_ERROR", status: null });
+    expect((error as Error).message).not.toContain("D:\\");
+    expect((error as Error).message).not.toContain("API_KEY");
+  });
+
+  it.each([
+    ["project detail", () => getProject("project-1")],
+    ["project workflow", () => getProjectWorkflow("project-1")],
+  ])("rejects malformed %s JSON with correlation ID", async (_name, call) => {
+    const response = responseOf(null, 200, {
+      "X-Correlation-ID": "req_malformed_workspace",
+    });
+    vi.mocked(response.json).mockRejectedValue(new SyntaxError("bad JSON"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(call()).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_RESPONSE",
+      correlationId: "req_malformed_workspace",
+    });
   });
 
   it("creates a project with POST JSON and preserves correlation ID", async () => {

@@ -64,11 +64,79 @@ export interface AssemblyState {
   version: number | null;
 }
 
-export interface FinalExportState {
+export interface StageState {
   status: string;
+}
+
+export interface ShotStageState extends StageState {
+  approved: number;
+  total: number;
+}
+
+export interface ComponentState extends StageState {
   version: number | null;
+}
+
+export interface FinalExportState extends ComponentState {
   created_at: string | null;
   stale: boolean;
+}
+
+export type AvailableAction =
+  | "GENERATE_CREATIVE"
+  | "APPROVE_CREATIVE"
+  | "REVISE_CREATIVE"
+  | "REGENERATE_CREATIVE"
+  | "GENERATE_STORYBOARD"
+  | "APPROVE_STORYBOARD"
+  | "REVISE_STORYBOARD"
+  | "REGENERATE_STORYBOARD"
+  | "GENERATE_VIDEO_PROMPTS"
+  | "APPROVE_VIDEO_PROMPTS"
+  | "REVISE_VIDEO_PROMPTS"
+  | "REGENERATE_VIDEO_PROMPTS"
+  | "GENERATE_SHOTS"
+  | "REVIEW_SHOTS"
+  | "MANAGE_SHOT_VERSIONS"
+  | "ASSEMBLE"
+  | "GENERATE_VOICE"
+  | "GENERATE_SUBTITLE"
+  | "SET_MUSIC"
+  | "FINAL_EXPORT";
+
+export interface WorkflowStages {
+  creative: StageState;
+  storyboard: StageState;
+  video_prompt: StageState;
+  shots: ShotStageState;
+  assembly: AssemblyState;
+  voice: ComponentState;
+  subtitle: ComponentState;
+  music: ComponentState;
+  export: FinalExportState;
+}
+
+export interface WorkflowState {
+  workflow_phase: WorkflowPhase;
+  status: string;
+  stages: WorkflowStages;
+  available_actions: AvailableAction[];
+}
+
+export interface ProjectRequest {
+  product_name: string | null;
+  product_description: string | null;
+  user_notes: string | null;
+  duration_seconds: number | null;
+  video_style: string | null;
+  video_purpose: string | null;
+}
+
+export interface PostProductionState {
+  status: string;
+  voice: ComponentState;
+  subtitle: ComponentState;
+  music: ComponentState;
 }
 
 export interface ProjectSummary {
@@ -83,6 +151,22 @@ export interface ProjectSummary {
 
 export interface ProjectListResponse {
   projects: ProjectSummary[];
+}
+
+export interface ProjectDetail {
+  project_id: string;
+  name: string;
+  request: ProjectRequest;
+  workflow: WorkflowState;
+  assembly: AssemblyState;
+  post_production: PostProductionState;
+  final_export: FinalExportState;
+  updated_at: string;
+}
+
+export interface ProjectWorkflowResponse extends WorkflowState {
+  project_id: string;
+  updated_at: string;
 }
 
 export interface CreateProjectRequest {

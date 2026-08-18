@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiClientError, getProjects } from "../api/client";
@@ -12,6 +12,11 @@ vi.mock("../api/client", async (importOriginal) => {
 });
 
 const mockGetProjects = vi.mocked(getProjects);
+
+function WorkspaceRouteProbe() {
+  const { projectId } = useParams();
+  return <h1>Workspace {projectId}</h1>;
+}
 
 function project(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
@@ -51,6 +56,7 @@ function renderProjectsPage() {
           path="/projects/new"
           element={<h1>新建视频项目测试路由</h1>}
         />
+        <Route path="/projects/:projectId" element={<WorkspaceRouteProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -103,7 +109,7 @@ describe("ProjectsPage", () => {
     expect((await screen.findAllByText("已完成")).length).toBeGreaterThan(0);
   });
 
-  it("shows Assembly Required without offering workspace actions", async () => {
+  it("shows Assembly Required and keeps Workspace navigation read-only", async () => {
     resolveProjects([
       project({
         workflow_phase: "ASSEMBLY_REQUIRED",
@@ -118,7 +124,38 @@ describe("ProjectsPage", () => {
     renderProjectsPage();
     expect(await screen.findByText("需要重新合片")).toBeInTheDocument();
     expect(screen.getByText(/需要更新/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /打开项目/ })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /打开项目/ })).toHaveAttribute(
+      "href",
+      "/projects/project-1",
+    );
+  });
+
+  it("opens a UUID project Workspace", async () => {
+    resolveProjects([
+      project({ project_id: "0123456789abcdef0123456789abcdef" }),
+    ]);
+    renderProjectsPage();
+    const openLink = await screen.findByRole("link", { name: /打开项目/ });
+    fireEvent.click(openLink);
+    expect(
+      await screen.findByRole("heading", {
+        name: "Workspace 0123456789abcdef0123456789abcdef",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("URL-encodes and opens a Chinese legacy project ID", async () => {
+    resolveProjects([project({ project_id: "LEE柠檬" })]);
+    renderProjectsPage();
+    const openLink = await screen.findByRole("link", { name: /打开项目/ });
+    expect(openLink).toHaveAttribute(
+      "href",
+      "/projects/LEE%E6%9F%A0%E6%AA%AC",
+    );
+    fireEvent.click(openLink);
+    expect(
+      await screen.findByRole("heading", { name: "Workspace LEE柠檬" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the final export version", async () => {

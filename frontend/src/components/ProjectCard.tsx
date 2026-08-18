@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+
 import type { ProjectSummary } from "../api/types";
 import {
   formatProjectDate,
@@ -54,15 +56,13 @@ export function ProjectCard({ project }: ProjectCardProps) {
         </div>
       </dl>
 
-      <button
+      <Link
         className="project-open-button"
-        type="button"
-        disabled
-        title="Project Workspace 将在后续阶段开放"
+        to={`/projects/${encodeURIComponent(project.project_id)}`}
       >
         打开项目
-        <span>即将开放</span>
-      </button>
+        <span>进入 Workspace</span>
+      </Link>
     </article>
   );
 }

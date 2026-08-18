@@ -1,4 +1,4 @@
-import type { WorkflowPhase } from "./api/types";
+import type { AvailableAction, WorkflowPhase } from "./api/types";
 
 export type StatusTone =
   | "neutral"
@@ -29,17 +29,42 @@ export const WORKFLOW_PHASE_LABELS: Record<WorkflowPhase, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   NOT_STARTED: "未开始",
+  IN_PROGRESS: "进行中",
   RUNNING: "进行中",
   GENERATING: "生成中",
   WAITING_REVIEW: "等待审核",
-  APPROVED: "已通过",
+  APPROVED: "已审核",
   COMPLETED: "已完成",
   FINAL_COMPLETED: "已完成",
   FAILED: "执行失败",
+  REJECTED: "已拒绝",
   CANCELLED: "已取消",
   STALE: "需要更新",
   UNREADABLE: "数据异常",
-  UNKNOWN: "状态未知",
+  UNKNOWN: "未知状态",
+};
+
+export const AVAILABLE_ACTION_LABELS: Record<AvailableAction, string> = {
+  GENERATE_CREATIVE: "生成创意",
+  APPROVE_CREATIVE: "审核创意",
+  REVISE_CREATIVE: "修改创意",
+  REGENERATE_CREATIVE: "重新生成创意",
+  GENERATE_STORYBOARD: "生成分镜",
+  APPROVE_STORYBOARD: "审核分镜",
+  REVISE_STORYBOARD: "修改分镜",
+  REGENERATE_STORYBOARD: "重新生成分镜",
+  GENERATE_VIDEO_PROMPTS: "生成视频提示词",
+  APPROVE_VIDEO_PROMPTS: "审核视频提示词",
+  REVISE_VIDEO_PROMPTS: "修改视频提示词",
+  REGENERATE_VIDEO_PROMPTS: "重新生成视频提示词",
+  GENERATE_SHOTS: "生成镜头",
+  REVIEW_SHOTS: "审核镜头",
+  MANAGE_SHOT_VERSIONS: "管理镜头版本",
+  ASSEMBLE: "视频合片",
+  GENERATE_VOICE: "生成配音",
+  GENERATE_SUBTITLE: "生成字幕",
+  SET_MUSIC: "设置音乐",
+  FINAL_EXPORT: "最终导出",
 };
 
 export function statusPresentation(status: string): {
@@ -47,11 +72,11 @@ export function statusPresentation(status: string): {
   tone: StatusTone;
 } {
   const normalized = status.toUpperCase();
-  const label = STATUS_LABELS[normalized] ?? "状态未知";
+  const label = STATUS_LABELS[normalized] ?? "未知状态";
   if (["COMPLETED", "FINAL_COMPLETED", "APPROVED"].includes(normalized)) {
     return { label, tone: "success" };
   }
-  if (["RUNNING", "GENERATING"].includes(normalized)) {
+  if (["IN_PROGRESS", "RUNNING", "GENERATING"].includes(normalized)) {
     return { label, tone: "progress" };
   }
   if (normalized === "WAITING_REVIEW") {
@@ -60,7 +85,7 @@ export function statusPresentation(status: string): {
   if (normalized === "STALE") {
     return { label, tone: "warning" };
   }
-  if (["FAILED", "CANCELLED", "UNREADABLE"].includes(normalized)) {
+  if (["FAILED", "REJECTED", "CANCELLED", "UNREADABLE"].includes(normalized)) {
     return { label, tone: "danger" };
   }
   return { label, tone: "neutral" };
