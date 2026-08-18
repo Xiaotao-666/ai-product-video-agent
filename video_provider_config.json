@@ -1,0 +1,26 @@
+{
+  "credential_env": {
+    "minimax": {
+      "MiniMax-Hailuo-2.3": "MINIMAX_API_KEY",
+      "MiniMax-H3": "MINIMAX_H3_API_KEY"
+    }
+  },
+  "default_models": {
+    "none": {
+      "provider": "minimax",
+      "model": "MiniMax-Hailuo-2.3"
+    },
+    "first_frame": {
+      "provider": "minimax",
+      "model": "MiniMax-Hailuo-2.3"
+    },
+    "reference_asset": {
+      "provider": "minimax",
+      "model": "MiniMax-H3"
+    }
+  },
+  "known_models": {
+    "MiniMax-Hailuo-2.3": "minimax",
+    "MiniMax-H3": "minimax"
+  }
+}

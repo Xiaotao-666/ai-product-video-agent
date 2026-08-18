@@ -1,0 +1,19 @@
+{
+  "default_provider": "script_subtitle",
+  "routing_priority": [
+    "storyboard_subtitle",
+    "script_subtitle"
+  ],
+  "providers": {
+    "storyboard_subtitle": {
+      "enabled": true,
+      "model": "compiled-storyboard-v1"
+    },
+    "script_subtitle": {
+      "enabled": true,
+      "model": "length-weighted-v1",
+      "max_chars_per_cue": 18,
+      "estimated_chars_per_second": 4.0
+    }
+  }
+}

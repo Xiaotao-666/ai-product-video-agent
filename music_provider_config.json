@@ -1,0 +1,10 @@
+{
+  "default_provider": "local_music",
+  "providers": {
+    "local_music": {
+      "enabled": true,
+      "max_file_size_mb": 500,
+      "default_volume": 0.25
+    }
+  }
+}

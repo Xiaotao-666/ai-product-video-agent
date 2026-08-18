@@ -1,0 +1,18 @@
+{
+  "default_provider": "xfyun_tts",
+  "providers": {
+    "xfyun_tts": {
+      "enabled": true,
+      "model": "online-tts-v2",
+      "language": "zh-CN",
+      "sample_rate": 16000,
+      "default_voice": "xiaoyan"
+    },
+    "aliyun_tts": {
+      "enabled": true,
+      "model": "nls-stream-tts",
+      "language": "zh-CN",
+      "sample_rate": 16000
+    }
+  }
+}
