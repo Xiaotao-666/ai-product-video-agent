@@ -359,7 +359,7 @@ def generate_candidate_video(
         shot_id, candidate.get("video_version")
     )
     resuming = resume_task is not None
-    safety = _saved_candidate_safety(prompt_payload) if resuming else None
+    safety = _saved_candidate_safety(prompt_payload)
     if safety is None:
         safety = safety_review(
             prompt_payload["prompt"],
@@ -812,14 +812,17 @@ def _create_candidate_from_approved(
     approved = _approved_prompt(paths, checkpoint, shot_id)
     checkpoint.begin_candidate_editing(shot_id, None)
     if mode == "same_prompt":
-        create_candidate_prompt_version(
-            paths,
-            checkpoint,
-            shot_id,
-            str(approved["prompt"]),
-            "same_prompt",
-            task_logger,
+        checkpoint.set_candidate_prompt(shot_id, int(approved["version"]))
+        task_logger.event(
+            "CANDIDATE_CREATED",
+            shot_id=shot_id,
+            candidate_prompt_version=int(approved["version"]),
+            source="same_prompt",
             parent_version=int(approved["version"]),
+            old_approved_prompt_version=int(approved["version"]),
+            old_approved_video_version=checkpoint.shot_checkpoint(shot_id).get(
+                "approved_video_version"
+            ),
         )
         return True
     if mode == "ai_revision":

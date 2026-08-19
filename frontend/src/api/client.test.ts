@@ -37,6 +37,7 @@ import {
   getVoice,
   getVoiceAudioUrl,
   regenerateCreative,
+  regenerateShotGeneration,
   regenerateStoryboard,
   regenerateVideoPrompts,
   preflightShotGeneration,
@@ -48,6 +49,7 @@ import {
   reviseVideoPrompts,
   uploadReferenceAsset,
 } from "./client";
+import { TASK_OPERATIONS } from "./types";
 
 function responseOf(
   payload: unknown,
@@ -107,6 +109,7 @@ const taskPayload = {
   task_id: "task_0123456789abcdef0123456789abcdef",
   project_id: "project-1",
   operation: "CREATIVE_GENERATE",
+  target_id: null,
   status: "QUEUED",
   created_at: "2026-08-18T12:00:00Z",
   started_at: null,
@@ -1718,6 +1721,7 @@ describe("API client", () => {
       task_id: "task_0123456789abcdef0123456789abcdef",
       project_id: "中文项目",
       operation: "SHOT_GENERATE",
+      target_id: "shot_01",
       status: "QUEUED",
       created_at: "2026-08-19T00:00:00Z",
       started_at: null,
@@ -1743,6 +1747,194 @@ describe("API client", () => {
     expect(JSON.parse(String(startInit.body))).toEqual(payload);
     expect(String(startInit.body)).not.toMatch(/provider_task_id|file_id|path|api_key/i);
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "POST" }));
+  });
+
+  it("parses every canonical Task operation and preserves compatible target IDs", async () => {
+    const tasks = TASK_OPERATIONS.map((operation, index) => ({
+      task_id: `task_${index.toString(16).padStart(32, "0")}`,
+      project_id: "中文项目",
+      operation,
+      target_id: index % 2 === 0 ? "shot_01" : null,
+      status: "QUEUED",
+      created_at: "2026-08-19T00:00:00Z",
+      started_at: null,
+      finished_at: null,
+      correlation_id: `req_${index}`,
+      error: null,
+      result: null,
+    }));
+    const fetchMock = vi.fn();
+    for (const task of tasks) fetchMock.mockResolvedValueOnce(responseOf(task));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const task of tasks) {
+      const parsed = await getTask(task.task_id);
+      expect(parsed.data.operation).toBe(task.operation);
+      expect(parsed.data.target_id).toBe(task.target_id);
+    }
+  });
+
+  it("maps a legacy missing target_id to null and still rejects an unknown operation", async () => {
+    const legacy = {
+      task_id: "task_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      project_id: "中文项目",
+      operation: "CREATIVE_GENERATE",
+      status: "QUEUED",
+      created_at: "2026-08-19T00:00:00Z",
+      started_at: null,
+      finished_at: null,
+      correlation_id: "req_legacy",
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(legacy))
+      .mockResolvedValueOnce(responseOf({ ...legacy, operation: "UNKNOWN_TASK" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await getTask(legacy.task_id)).data.target_id).toBeNull();
+    await expect(getTask(legacy.task_id)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
+  it("attaches a SHOT_REGENERATE task from a valid 202 response", async () => {
+    const task = {
+      task_id: "task_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      project_id: "中文项目",
+      operation: "SHOT_REGENERATE",
+      target_id: "shot_01",
+      status: "QUEUED",
+      created_at: new Date().toISOString(),
+      started_at: null,
+      finished_at: null,
+      correlation_id: "req_regenerate",
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(
+      task,
+      202,
+      {
+        Location: `/api/tasks/${task.task_id}`,
+        "X-Correlation-ID": task.correlation_id,
+      },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateShotGeneration("中文项目", "shot_01", {
+      intent: "REGENERATE_CURRENT_PROMPT",
+      model_selection: "AUTO",
+      requested_model: null,
+      visual_input: { mode: "none", asset_ids: [] },
+      preflight_fingerprint: "c".repeat(64),
+      confirm_paid_call: true,
+    });
+
+    expect(result.data).toMatchObject({ operation: "SHOT_REGENERATE", target_id: "shot_01" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles an unreadable paid 202 body through Location without another POST", async () => {
+    const task = {
+      task_id: "task_cccccccccccccccccccccccccccccccc",
+      project_id: "中文项目",
+      operation: "SHOT_REGENERATE",
+      target_id: "shot_01",
+      status: "QUEUED",
+      created_at: new Date().toISOString(),
+      started_at: null,
+      finished_at: null,
+      correlation_id: "req_location",
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(
+        { ...task, operation: "UNREADABLE_NEW_OPERATION" },
+        202,
+        { Location: `/api/tasks/${task.task_id}`, "X-Correlation-ID": task.correlation_id },
+      ))
+      .mockResolvedValueOnce(responseOf(task));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateShotGeneration("中文项目", "shot_01", {
+      intent: "REGENERATE_CURRENT_PROMPT",
+      model_selection: "AUTO",
+      requested_model: null,
+      visual_input: { mode: "none", asset_ids: [] },
+      preflight_fingerprint: "d".repeat(64),
+      confirm_paid_call: true,
+    });
+
+    expect(result.data.task_id).toBe(task.task_id);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(fetchMock.mock.calls[1][0]).toBe(`http://127.0.0.1:8000/api/tasks/${task.task_id}`);
+  });
+
+  it("uses the project task list when Location GET fails and never repeats the paid POST", async () => {
+    const task = {
+      task_id: "task_dddddddddddddddddddddddddddddddd",
+      project_id: "中文项目",
+      operation: "SHOT_GENERATE",
+      target_id: "shot_01",
+      status: "RUNNING",
+      created_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      correlation_id: "req_project_fallback",
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(
+        { ...task, operation: "BROKEN_OPERATION" },
+        202,
+        { Location: `/api/tasks/${task.task_id}`, "X-Correlation-ID": task.correlation_id },
+      ))
+      .mockResolvedValueOnce(responseOf({ error: {} }, 503))
+      .mockResolvedValueOnce(responseOf({ project_id: "中文项目", tasks: [task] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await startShotGeneration("中文项目", "shot_01", {
+      model_selection: "AUTO",
+      requested_model: null,
+      visual_input: { mode: "none", asset_ids: [] },
+      preflight_fingerprint: "e".repeat(64),
+      confirm_paid_call: true,
+    });
+
+    expect(result.data.task_id).toBe(task.task_id);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks an accepted paid request as status-unreadable when both GET paths fail", async () => {
+    const taskId = "task_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(
+        { operation: "BROKEN" },
+        202,
+        { Location: `/api/tasks/${taskId}`, "X-Correlation-ID": "req_uncertain" },
+      ))
+      .mockResolvedValueOnce(responseOf({ error: {} }, 503))
+      .mockResolvedValueOnce(responseOf({ error: {} }, 503));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startShotGeneration("中文项目", "shot_01", {
+      model_selection: "AUTO",
+      requested_model: null,
+      visual_input: { mode: "none", asset_ids: [] },
+      preflight_fingerprint: "f".repeat(64),
+      confirm_paid_call: true,
+    })).rejects.toMatchObject({
+      code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+      status: 202,
+      requestAccepted: true,
+      correlationId: "req_uncertain",
+    });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
   });
 
   it("parses safe generation status without provider identifiers", async () => {

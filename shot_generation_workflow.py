@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from project_manager import ProjectPaths
-from project_state import ProjectCheckpoint, ProjectStage, ShotStatus, StageStatus
+from project_state import (
+    CandidateStatus,
+    ProjectCheckpoint,
+    ProjectStage,
+    ShotStatus,
+    StageStatus,
+)
 from prompt_generator import PromptSafetyReview, review_prompt_safety
 from shot_review import (
     active_prompt_payload,
@@ -44,6 +51,15 @@ class ShotPromptSafetyRejected(ShotGenerationWorkflowError):
 
 class ShotPromptSafetyUnavailable(ShotGenerationWorkflowError):
     pass
+
+
+class CurrentPromptRegenerationNotAllowed(ShotGenerationWorkflowError):
+    pass
+
+
+class GenerationIntent(StrEnum):
+    INITIAL_GENERATION = "INITIAL_GENERATION"
+    REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
 
 
 SafetyReview = Callable[[str, str, TaskLogger | None, str], PromptSafetyReview]
@@ -91,12 +107,16 @@ def continue_shot_generation(
     safety: PromptSafetyReview | None = None,
     safety_review: SafetyReview = review_prompt_safety,
     video_generate: VideoGenerate = generate_video,
+    candidate_lane: bool = False,
 ) -> Path:
     """Run or resume the provider-neutral Core path without any review action."""
 
     entry = checkpoint.shot_checkpoint(shot_id)
+    candidate = checkpoint.candidate_checkpoint(shot_id)
     version = int(
-        entry.get("current_generation_version")
+        candidate.get("video_version")
+        if candidate_lane
+        else entry.get("current_generation_version")
         or entry.get("pending_video_version")
         or 0
     )
@@ -104,16 +124,31 @@ def continue_shot_generation(
         raise ShotGenerationWorkflowError("Shot is missing its generation version.")
 
     output_path = paths.shot_version_video_path(shot_id, version)
-    prompt_payload = active_prompt_payload(paths, checkpoint, plan, shot_id)
+    prompt_payload = (
+        checkpoint.prompt_version(shot_id, int(candidate.get("prompt_version") or 0))
+        if candidate_lane
+        else active_prompt_payload(paths, checkpoint, plan, shot_id)
+    )
+    if not isinstance(prompt_payload, dict):
+        raise ShotGenerationWorkflowError("Shot is missing its Prompt snapshot.")
     resume_task = checkpoint.generation_provider_task(
-        shot_id, entry.get("current_generation_version")
+        shot_id,
+        candidate.get("video_version")
+        if candidate_lane
+        else entry.get("current_generation_version"),
     )
     resuming = resume_task is not None
     generation_record = _generation_record(entry, version)
     recorded_prompt_version = generation_record.get("prompt_version")
+    expected_prompt_version = int(
+        candidate.get("prompt_version")
+        if candidate_lane
+        else entry.get("active_prompt_version")
+        or 0
+    )
     if resuming and recorded_prompt_version is not None and int(
         recorded_prompt_version
-    ) != int(entry.get("active_prompt_version") or 0):
+    ) != expected_prompt_version:
         raise ShotGenerationResumeUnavailable(
             "The active Prompt no longer matches the submitted generation."
         )
@@ -123,6 +158,17 @@ def continue_shot_generation(
         if resuming
         else visual_input or checkpoint.shot_visual_input(shot_id)
     )
+    if safety is None and candidate_lane:
+        if prompt_payload.get("safety_is_safe") is not None:
+            safety = PromptSafetyReview(
+                is_safe=bool(prompt_payload.get("safety_is_safe")),
+                reviewed_video_prompt=str(
+                    prompt_payload.get("safety_prompt")
+                    or prompt_payload.get("prompt")
+                    or ""
+                ),
+                risk_notes=list(prompt_payload.get("safety_risk_notes") or []),
+            )
     if safety is None:
         safety = active_prompt_safety(paths, checkpoint, plan, shot_id)
     if safety is None:
@@ -139,12 +185,20 @@ def continue_shot_generation(
         save_safety_to_active_prompt(paths, checkpoint, plan, shot_id, safety)
     if not safety.is_safe:
         error = ShotPromptSafetyRejected("Shot Prompt Safety did not pass.")
-        checkpoint.mark_shot_failed(shot_id, error)
+        (
+            checkpoint.mark_candidate_failed(shot_id, error)
+            if candidate_lane
+            else checkpoint.mark_shot_failed(shot_id, error)
+        )
         raise error
 
     if output_path.is_file() and output_path.stat().st_size > 0:
-        checkpoint.mark_shot_local_finalizing(shot_id)
-        checkpoint.mark_shot_ready_for_review(shot_id)
+        if candidate_lane:
+            checkpoint.mark_candidate_local_finalizing(shot_id)
+            checkpoint.mark_candidate_ready(shot_id)
+        else:
+            checkpoint.mark_shot_local_finalizing(shot_id)
+            checkpoint.mark_shot_ready_for_review(shot_id)
         return output_path
 
     try:
@@ -161,40 +215,80 @@ def continue_shot_generation(
             provider_selection=provider_selection,
             provider_registry=provider_registry,
             resume_task=resume_task,
-            on_preflight=lambda metadata: checkpoint.mark_shot_preflight(
-                shot_id, metadata
+            on_preflight=(
+                lambda metadata: checkpoint.mark_candidate_preflight(shot_id, metadata)
+                if candidate_lane
+                else checkpoint.mark_shot_preflight(shot_id, metadata)
             ),
-            on_submitting=lambda metadata: checkpoint.mark_shot_submission_started(
-                shot_id,
-                metadata,
-                duration=shot.duration,
-                resolution="768P",
-                visual_input=generation_visual,
+            on_submitting=(
+                lambda metadata: checkpoint.mark_candidate_submission_started(
+                    shot_id,
+                    metadata,
+                    duration=shot.duration,
+                    resolution="768P",
+                    visual_input=generation_visual,
+                )
+                if candidate_lane
+                else checkpoint.mark_shot_submission_started(
+                    shot_id,
+                    metadata,
+                    duration=shot.duration,
+                    resolution="768P",
+                    visual_input=generation_visual,
+                )
             ),
-            on_submitted=lambda task: checkpoint.mark_shot_submitted(shot_id, task),
-            on_task_updated=lambda task: checkpoint.mark_shot_task_updated(
-                shot_id, task
+            on_submitted=(
+                lambda task: checkpoint.mark_candidate_submitted(shot_id, task)
+                if candidate_lane
+                else checkpoint.mark_shot_submitted(shot_id, task)
             ),
-            on_downloading=lambda _task: checkpoint.mark_shot_downloading(shot_id),
-            on_downloaded=lambda _path: checkpoint.mark_shot_local_finalizing(
-                shot_id
+            on_task_updated=(
+                lambda task: checkpoint.mark_candidate_task_updated(shot_id, task)
+                if candidate_lane
+                else checkpoint.mark_shot_task_updated(shot_id, task)
+            ),
+            on_downloading=(
+                lambda _task: checkpoint.mark_candidate_downloading(shot_id)
+                if candidate_lane
+                else checkpoint.mark_shot_downloading(shot_id)
+            ),
+            on_downloaded=(
+                lambda _path: checkpoint.mark_candidate_local_finalizing(shot_id)
+                if candidate_lane
+                else checkpoint.mark_shot_local_finalizing(shot_id)
             ),
         )
     except ProviderSubmissionUnknownError:
-        checkpoint.mark_shot_submission_unknown(shot_id)
+        (
+            checkpoint.mark_candidate_submission_unknown(shot_id)
+            if candidate_lane
+            else checkpoint.mark_shot_submission_unknown(shot_id)
+        )
         raise
     except (VideoProviderError, OSError, RuntimeError) as error:
-        checkpoint.mark_shot_failed(shot_id, error)
+        (
+            checkpoint.mark_candidate_failed(shot_id, error)
+            if candidate_lane
+            else checkpoint.mark_shot_failed(shot_id, error)
+        )
         raise
 
     if not generated_path.is_file() or generated_path.stat().st_size <= 0:
         error = ShotGenerationWorkflowError(
             "Provider completed without a usable local video."
         )
-        checkpoint.mark_shot_failed(shot_id, error)
+        (
+            checkpoint.mark_candidate_failed(shot_id, error)
+            if candidate_lane
+            else checkpoint.mark_shot_failed(shot_id, error)
+        )
         raise error
-    checkpoint.mark_shot_local_finalizing(shot_id)
-    checkpoint.mark_shot_ready_for_review(shot_id)
+    if candidate_lane:
+        checkpoint.mark_candidate_local_finalizing(shot_id)
+        checkpoint.mark_candidate_ready(shot_id)
+    else:
+        checkpoint.mark_shot_local_finalizing(shot_id)
+        checkpoint.mark_shot_ready_for_review(shot_id)
     return generated_path
 
 
@@ -219,7 +313,9 @@ def generate_initial_shot(
             "Shot is not eligible for initial generation."
         )
     checkpoint.set_shot_visual_input(shot_id, visual_input_snapshot(visual_input))
-    checkpoint.prepare_shot_generation(shot_id)
+    checkpoint.prepare_shot_generation(
+        shot_id, generation_intent=GenerationIntent.INITIAL_GENERATION.value
+    )
     return continue_shot_generation(
         paths=paths,
         checkpoint=checkpoint,
@@ -233,6 +329,148 @@ def generate_initial_shot(
         provider_registry=provider_registry,
         safety_review=safety_review,
         video_generate=video_generate,
+    )
+
+
+def regenerate_shot_with_current_prompt(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    shot: StoryboardShot,
+    shot_id: int,
+    visual_input: dict[str, Any],
+    deepseek_key: str,
+    provider_credentials: Mapping[str, Any] | str | None,
+    task_logger: TaskLogger,
+    provider_selection: ProviderSelection | None = None,
+    provider_registry: VideoProviderRegistry | None = None,
+    safety_review: SafetyReview = review_prompt_safety,
+    video_generate: VideoGenerate = generate_video,
+) -> Path:
+    """Create one new Video version while preserving the current Prompt version."""
+
+    entry = checkpoint.shot_checkpoint(shot_id)
+    status = checkpoint.shot_status(shot_id)
+    approved_video = entry.get("approved_video_version")
+    candidate_lane = approved_video is not None
+    visual = visual_input_snapshot(visual_input)
+
+    if not candidate_lane:
+        if status is not ShotStatus.WAITING_REVIEW:
+            raise CurrentPromptRegenerationNotAllowed(
+                "Only an unapproved review version can be regenerated here."
+            )
+        previous_version = int(entry.get("active_video_version") or 0)
+        if previous_version <= 0:
+            raise CurrentPromptRegenerationNotAllowed(
+                "The Shot has no current review version."
+            )
+        previous = checkpoint._generation_for_version(entry, previous_version)
+        if previous is not None:
+            previous.update(
+                {
+                    "status": "REJECTED",
+                    "review_result": "REJECTED",
+                    "is_active": False,
+                }
+            )
+            from shot_storage import write_review_snapshot
+
+            write_review_snapshot(
+                paths,
+                shot_id,
+                previous_version,
+                review_result="REJECTED",
+                user_action="regenerate_current_prompt",
+            )
+        entry["visual_input"] = visual
+        entry["visual_input_selected"] = True
+        checkpoint.prepare_shot_generation(
+            shot_id,
+            generation_intent=GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
+        )
+    else:
+        if status is not ShotStatus.APPROVED:
+            raise CurrentPromptRegenerationNotAllowed(
+                "The official Shot is not approved."
+            )
+        candidate = checkpoint.candidate_checkpoint(shot_id)
+        candidate_status = checkpoint.candidate_status(shot_id)
+        if candidate_status is CandidateStatus.GENERATING:
+            raise CurrentPromptRegenerationNotAllowed(
+                "A pending generation is already in progress."
+            )
+        if candidate_status is not CandidateStatus.NONE:
+            old_version = candidate.get("video_version")
+            archived = dict(candidate)
+            archived["result"] = "REJECTED"
+            archived["finished_at"] = archived.get("updated_at")
+            entry.setdefault("candidate_history", []).append(archived)
+            if old_version is not None:
+                old_generation = checkpoint._generation_for_version(
+                    entry, int(old_version)
+                )
+                if old_generation is not None:
+                    old_generation.update(
+                        {
+                            "status": "REJECTED",
+                            "review_result": "REJECTED",
+                            "is_active": False,
+                            "is_approved": False,
+                        }
+                    )
+                from shot_storage import write_review_snapshot
+
+                write_review_snapshot(
+                    paths,
+                    shot_id,
+                    int(old_version),
+                    review_result="REJECTED",
+                    user_action="regenerate_current_prompt",
+                )
+        prompt_version = int(
+            candidate.get("prompt_version")
+            or entry.get("approved_prompt_version")
+            or entry.get("active_prompt_version")
+            or 0
+        )
+        if prompt_version <= 0 or checkpoint.prompt_version(shot_id, prompt_version) is None:
+            raise CurrentPromptRegenerationNotAllowed(
+                "The current official Prompt is unavailable."
+            )
+        fresh = checkpoint._new_candidate_entry()
+        fresh.update(
+            {
+                "status": CandidateStatus.EDITING.value,
+                "base_approved_prompt_version": entry.get("approved_prompt_version"),
+                "base_approved_video_version": entry.get("approved_video_version"),
+                "prompt_version": prompt_version,
+                "visual_input": visual,
+                "source": "same_prompt",
+            }
+        )
+        entry["candidate"] = fresh
+        checkpoint.prepare_candidate_generation(
+            shot_id,
+            generation_intent=GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
+        )
+
+    return continue_shot_generation(
+        paths=paths,
+        checkpoint=checkpoint,
+        plan=plan,
+        shot=shot,
+        shot_id=shot_id,
+        deepseek_key=deepseek_key,
+        provider_credentials=provider_credentials,
+        task_logger=task_logger,
+        provider_selection=provider_selection,
+        provider_registry=provider_registry,
+        visual_input=visual,
+        safety_review=safety_review,
+        video_generate=video_generate,
+        candidate_lane=candidate_lane,
     )
 
 
@@ -251,18 +489,27 @@ def resume_shot_generation(
     video_generate: VideoGenerate = generate_video,
 ) -> Path:
     entry = checkpoint.shot_checkpoint(shot_id)
-    if checkpoint.shot_status(shot_id) in {
+    candidate = checkpoint.candidate_checkpoint(shot_id)
+    candidate_version = int(candidate.get("video_version") or 0)
+    candidate_lane = (
+        candidate_version > 0
+        and str(candidate.get("generation_intent") or "")
+        == GenerationIntent.REGENERATE_CURRENT_PROMPT.value
+        and checkpoint.candidate_status(shot_id)
+        in {CandidateStatus.GENERATING, CandidateStatus.FAILED}
+    )
+    if not candidate_lane and checkpoint.shot_status(shot_id) in {
         ShotStatus.WAITING_REVIEW,
         ShotStatus.APPROVED,
     }:
         raise ShotGenerationResumeUnavailable(
             "Shot review is already complete or awaiting a decision."
         )
-    if bool(entry.get("submission_unknown")):
+    if bool(candidate.get("submission_unknown") if candidate_lane else entry.get("submission_unknown")):
         raise ShotGenerationResumeUnavailable(
             "A submission with no known provider task cannot be resumed safely."
         )
-    version = int(entry.get("current_generation_version") or 0)
+    version = candidate_version if candidate_lane else int(entry.get("current_generation_version") or 0)
     if version <= 0:
         raise ShotGenerationResumeUnavailable("No interrupted generation exists.")
     output = paths.shot_version_video_path(shot_id, version)
@@ -281,4 +528,5 @@ def resume_shot_generation(
         provider_registry=provider_registry,
         safety_review=safety_review,
         video_generate=video_generate,
+        candidate_lane=candidate_lane,
     )

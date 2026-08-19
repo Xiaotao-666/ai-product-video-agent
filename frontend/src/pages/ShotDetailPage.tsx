@@ -273,6 +273,7 @@ export function ShotDetailPage() {
     !official &&
     !pending &&
     ["NOT_STARTED", "GENERATING", "FAILED"].includes(shot.status);
+  const showCurrentPromptRegeneration = Boolean(official || pending);
 
   return (
     <main className="main-content shot-detail-page">
@@ -312,6 +313,15 @@ export function ShotDetailPage() {
         />
       )}
 
+      {showCurrentPromptRegeneration && (
+        <ShotGenerationPreparation
+          projectId={project.project_id}
+          shotId={shot.shot_id}
+          intent="REGENERATE_CURRENT_PROMPT"
+          onCompleted={loadShot}
+        />
+      )}
+
       <section
         className="shot-version-section shot-version-section-official"
         aria-labelledby="official-version-title"
@@ -337,16 +347,13 @@ export function ShotDetailPage() {
             <h2 id="pending-version-title">待审核新版本</h2>
           </div>
           <VersionCard projectId={project.project_id} shotId={shot.shot_id} version={pending} />
-          {official ? (
-            <p className="stage-empty-copy">现有正式版本的候选审核将在后续阶段开放。</p>
-          ) : (
-            <ShotApproveAction
-              projectId={project.project_id}
-              shotId={shot.shot_id}
-              version={pending.version}
-              onApprovedRefresh={loadShot}
-            />
-          )}
+          <ShotApproveAction
+            projectId={project.project_id}
+            shotId={shot.shot_id}
+            version={pending.version}
+            previousOfficialVersion={official?.version ?? null}
+            onApprovedRefresh={loadShot}
+          />
         </section>
       )}
 

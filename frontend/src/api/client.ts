@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "../config";
+import { TASK_OPERATIONS } from "./types";
 import type {
   ApiResult,
   AssemblyDetail,
@@ -105,6 +106,8 @@ const VOICE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set([
   "UNKNOWN",
 ]);
 const TASK_ID_PATTERN = /^task_[0-9a-f]{32}$/;
+const TASK_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const TASK_LOCATION_PATTERN = /^\/api\/tasks\/(task_[0-9a-f]{32})$/;
 const TASK_STATUSES: ReadonlySet<string> = new Set([
   "QUEUED",
   "RUNNING",
@@ -113,24 +116,7 @@ const TASK_STATUSES: ReadonlySet<string> = new Set([
   "INTERRUPTED",
   "CANCELLED",
 ]);
-const TASK_OPERATIONS: ReadonlySet<string> = new Set([
-  "CREATIVE_GENERATE",
-  "CREATIVE_RETRY",
-  "CREATIVE_REVISE",
-  "CREATIVE_REGENERATE",
-  "STORYBOARD_GENERATE",
-  "STORYBOARD_REVISE",
-  "STORYBOARD_REGENERATE",
-  "VIDEO_PROMPT_GENERATE",
-  "VIDEO_PROMPT_REVISE",
-  "VIDEO_PROMPT_REGENERATE",
-  "SHOT_GENERATE",
-  "SHOT_RESUME",
-  "ASSEMBLY",
-  "VOICE_GENERATE",
-  "SUBTITLE_GENERATE",
-  "FINAL_EXPORT",
-]);
+const TASK_OPERATION_SET: ReadonlySet<string> = new Set(TASK_OPERATIONS);
 const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
   "CREATIVE",
   "CREATIVE_REVIEW",
@@ -178,6 +164,8 @@ export class ApiClientError extends Error {
   readonly code: string;
   readonly correlationId: string | null;
   readonly retryable: boolean;
+  readonly requestAccepted: boolean;
+  readonly taskLocation: string | null;
 
   constructor(options: {
     message: string;
@@ -185,6 +173,8 @@ export class ApiClientError extends Error {
     code: string;
     correlationId?: string | null;
     retryable?: boolean;
+    requestAccepted?: boolean;
+    taskLocation?: string | null;
   }) {
     super(options.message);
     this.name = "ApiClientError";
@@ -192,6 +182,8 @@ export class ApiClientError extends Error {
     this.code = options.code;
     this.correlationId = options.correlationId ?? null;
     this.retryable = options.retryable ?? false;
+    this.requestAccepted = options.requestAccepted ?? false;
+    this.taskLocation = options.taskLocation ?? null;
   }
 }
 
@@ -1077,6 +1069,15 @@ function parseGenerationShotContext(
       "Backend 返回了无法读取的分辨率。",
       correlationId,
     ),
+    official_video_version: isNullablePositiveInteger(value.official_video_version)
+      ? value.official_video_version
+      : null,
+    pending_video_version: isNullablePositiveInteger(value.pending_video_version)
+      ? value.pending_video_version
+      : null,
+    next_video_version: isNullablePositiveInteger(value.next_video_version)
+      ? value.next_video_version
+      : null,
   };
 }
 
@@ -1297,6 +1298,11 @@ function parseShotGenerationStatus(
     resume_kind: value.resume_kind as ShotGenerationStatusResponse["resume_kind"],
     video_version: value.video_version,
     provider_submission_known: value.provider_submission_known,
+    generation_intent:
+      value.generation_intent === "INITIAL"
+      || value.generation_intent === "REGENERATE_CURRENT_PROMPT"
+        ? value.generation_intent
+        : null,
   };
 }
 
@@ -1607,7 +1613,7 @@ function isTaskStatus(value: unknown): value is TaskStatus {
 }
 
 function isTaskOperation(value: unknown): value is TaskOperation {
-  return typeof value === "string" && TASK_OPERATIONS.has(value);
+  return typeof value === "string" && TASK_OPERATION_SET.has(value);
 }
 
 function parseTaskError(
@@ -1668,6 +1674,11 @@ function parseTaskRecord(
     value.project_id.length === 0 ||
     UNSAFE_CONTENT.test(value.project_id) ||
     !isTaskOperation(value.operation) ||
+    (value.target_id !== undefined &&
+      value.target_id !== null &&
+      (typeof value.target_id !== "string" ||
+        !TASK_REFERENCE_PATTERN.test(value.target_id) ||
+        UNSAFE_CONTENT.test(value.target_id))) ||
     !isTaskStatus(value.status) ||
     typeof value.created_at !== "string" ||
     !isNullableString(value.started_at) ||
@@ -1700,6 +1711,7 @@ function parseTaskRecord(
     task_id: value.task_id,
     project_id: value.project_id,
     operation: value.operation,
+    target_id: value.target_id ?? null,
     status: value.status,
     created_at: value.created_at,
     started_at: value.started_at,
@@ -1738,6 +1750,8 @@ async function readJson(response: Response): Promise<unknown> {
       status: response.status,
       code: "INVALID_RESPONSE",
       correlationId: response.headers.get(CORRELATION_HEADER),
+      requestAccepted: response.status === 202,
+      taskLocation: response.headers.get("Location"),
     });
   }
 }
@@ -1745,7 +1759,7 @@ async function readJson(response: Response): Promise<unknown> {
 async function request(
   path: string,
   init: RequestInit,
-): Promise<ApiResult<unknown>> {
+): Promise<ApiResult<unknown> & { status: number; location: string | null }> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, init);
@@ -1779,6 +1793,8 @@ async function request(
   return {
     data: payload,
     correlationId: headerCorrelationId,
+    status: response.status,
+    location: response.headers.get("Location"),
   };
 }
 
@@ -1791,6 +1807,130 @@ async function get<T>(path: string): Promise<ApiResult<T>> {
     data: result.data as T,
     correlationId: result.correlationId,
   };
+}
+
+type PaidShotTaskOperation = "SHOT_GENERATE" | "SHOT_REGENERATE";
+
+interface AcceptedShotTaskExpectation {
+  projectId: string;
+  shotId: string;
+  operation: PaidShotTaskOperation;
+  submittedAt: number;
+  correlationId: string | null;
+  location: string | null;
+}
+
+function acceptedShotTaskMatches(
+  task: TaskRecord,
+  expectation: AcceptedShotTaskExpectation,
+): boolean {
+  return task.project_id === expectation.projectId
+    && task.operation === expectation.operation
+    && task.target_id === expectation.shotId
+    && (
+      expectation.correlationId === null
+      || task.correlation_id === expectation.correlationId
+    );
+}
+
+function taskIdFromLocation(location: string | null): string | null {
+  if (location === null) return null;
+  return TASK_LOCATION_PATTERN.exec(location)?.[1] ?? null;
+}
+
+function acceptedTaskStatusUnreadable(
+  expectation: AcceptedShotTaskExpectation,
+): ApiClientError {
+  return new ApiClientError({
+    message: "生成请求已被后端接受，但当前无法读取任务状态。请勿重复提交生成请求。",
+    status: 202,
+    code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+    correlationId: expectation.correlationId,
+    requestAccepted: true,
+    taskLocation: expectation.location,
+  });
+}
+
+async function reconcileAcceptedShotTask(
+  expectation: AcceptedShotTaskExpectation,
+): Promise<ApiResult<TaskRecord>> {
+  const locationTaskId = taskIdFromLocation(expectation.location);
+  if (locationTaskId !== null) {
+    try {
+      const located = await getTask(locationTaskId);
+      if (acceptedShotTaskMatches(located.data, expectation)) {
+        return located;
+      }
+    } catch {
+      // A failed GET never authorizes another paid POST. Continue with the
+      // project task list as the second read-only reconciliation path.
+    }
+  }
+
+  try {
+    const listed = await getProjectTasks(expectation.projectId);
+    const exact = listed.data.tasks.filter((task) =>
+      acceptedShotTaskMatches(task, expectation)
+    );
+    if (exact.length === 1) {
+      return { data: exact[0], correlationId: expectation.correlationId };
+    }
+    if (expectation.correlationId === null) {
+      const recent = listed.data.tasks.filter((task) => {
+        const createdAt = Date.parse(task.created_at);
+        return task.project_id === expectation.projectId
+          && task.operation === expectation.operation
+          && task.target_id === expectation.shotId
+          && Number.isFinite(createdAt)
+          && createdAt >= expectation.submittedAt - 60_000;
+      });
+      if (recent.length === 1) {
+        return { data: recent[0], correlationId: recent[0].correlation_id };
+      }
+    }
+  } catch {
+    // Preserve the accepted-but-unreadable state. Reconciliation remains GET-only.
+  }
+
+  throw acceptedTaskStatusUnreadable(expectation);
+}
+
+async function submitPaidShotTask(
+  path: string,
+  init: RequestInit,
+  expectation: Omit<AcceptedShotTaskExpectation, "correlationId" | "location">,
+): Promise<ApiResult<TaskRecord>> {
+  let result: Awaited<ReturnType<typeof request>>;
+  try {
+    result = await request(path, init);
+  } catch (error) {
+    if (!(error instanceof ApiClientError) || !error.requestAccepted) throw error;
+    return reconcileAcceptedShotTask({
+      ...expectation,
+      correlationId: error.correlationId,
+      location: error.taskLocation,
+    });
+  }
+
+  try {
+    const task = parseTaskRecord(result.data, result.correlationId);
+    const acceptedExpectation: AcceptedShotTaskExpectation = {
+      ...expectation,
+      correlationId: result.correlationId,
+      location: result.location,
+    };
+    if (!acceptedShotTaskMatches(task, acceptedExpectation)) {
+      return reconcileAcceptedShotTask(acceptedExpectation);
+    }
+    return { data: task, correlationId: result.correlationId };
+  } catch (error) {
+    if (result.status !== 202) throw error;
+    return reconcileAcceptedShotTask({
+      ...expectation,
+      correlationId: result.correlationId,
+      location: result.location,
+    });
+  }
 }
 
 export function getHealth(): Promise<ApiResult<HealthResponse>> {
@@ -1914,9 +2054,10 @@ export async function approveShot(
 export async function getShotGenerationOptions(
   projectId: string,
   shotId: string,
+  intent: "INITIAL" | "REGENERATE_CURRENT_PROMPT" = "INITIAL",
 ): Promise<ApiResult<GenerationOptionsResponse>> {
   const result = await get<unknown>(
-    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/options`,
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/options${intent === "INITIAL" ? "" : `?intent=${encodeURIComponent(intent)}`}`,
   );
   return {
     data: parseGenerationOptions(result.data, result.correlationId),
@@ -1990,7 +2131,8 @@ export async function startShotGeneration(
   shotId: string,
   payload: GenerationStartRequest,
 ): Promise<ApiResult<TaskRecord>> {
-  const result = await request(
+  const submittedAt = Date.now();
+  return submitPaidShotTask(
     `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/start`,
     {
       method: "POST",
@@ -2000,11 +2142,28 @@ export async function startShotGeneration(
       },
       body: JSON.stringify(payload),
     },
+    { projectId, shotId, operation: "SHOT_GENERATE", submittedAt },
   );
-  return {
-    data: parseTaskRecord(result.data, result.correlationId),
-    correlationId: result.correlationId,
-  };
+}
+
+export async function regenerateShotGeneration(
+  projectId: string,
+  shotId: string,
+  payload: GenerationStartRequest,
+): Promise<ApiResult<TaskRecord>> {
+  const submittedAt = Date.now();
+  return submitPaidShotTask(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/regenerate`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    { projectId, shotId, operation: "SHOT_REGENERATE", submittedAt },
+  );
 }
 
 export async function resumeShotGeneration(

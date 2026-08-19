@@ -16,6 +16,7 @@ from web_backend.dependencies import (
 )
 from web_backend.errors import registered_api_error
 from web_backend.models.generation import (
+    GenerationIntent,
     GenerationOptionsResponse,
     GenerationPreflightRequest,
     GenerationPreflightResponse,
@@ -193,9 +194,10 @@ def generation_options(
         ShotGenerationPreflightService,
         Depends(get_shot_generation_preflight_service),
     ],
+    intent: GenerationIntent = GenerationIntent.INITIAL,
 ) -> GenerationOptionsResponse:
     try:
-        return service.options(project_id, shot_id)
+        return service.options(project_id, shot_id, intent)
     except ProjectRepositoryError as error:
         _raise_mapped(error)
 
@@ -272,6 +274,44 @@ def start_generation(
 ) -> TaskRecord:
     try:
         task = service.submit_start(
+            project_id,
+            shot_id,
+            payload,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except PaidCallConfirmationRequired as error:
+        raise registered_api_error("PAID_CALL_CONFIRMATION_REQUIRED") from error
+    except GenerationPreflightStale as error:
+        raise registered_api_error("GENERATION_PREFLIGHT_STALE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/generation/regenerate",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.SHOT_REGENERATE),
+)
+def regenerate_generation(
+    project_id: str,
+    shot_id: str,
+    payload: GenerationStartRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        ShotGenerationActionService,
+        Depends(get_shot_generation_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_regenerate(
             project_id,
             shot_id,
             payload,

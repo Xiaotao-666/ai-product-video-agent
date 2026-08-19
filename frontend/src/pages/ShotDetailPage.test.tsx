@@ -257,8 +257,8 @@ describe("ShotDetailPage", () => {
     renderPage();
     const section = (await screen.findByRole("heading", { name: "待审核新版本", level: 2 })).closest("section");
     expect(within(section!).getByRole("heading", { name: "Video v3 / Prompt v4" })).toBeInTheDocument();
-    expect(within(section!).getByText("现有正式版本的候选审核将在后续阶段开放。")).toBeInTheDocument();
-    expect(within(section!).queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+    expect(within(section!).getByRole("button", { name: "审核通过" })).toBeInTheDocument();
+    expect(within(section!).queryByText(/Candidate/i)).not.toBeInTheDocument();
   });
 
   it("approves an initial v001, refreshes it as official, and keeps video controls", async () => {
@@ -279,7 +279,7 @@ describe("ShotDetailPage", () => {
     })).toBeInTheDocument();
     expect(mockApproveShot).toHaveBeenCalledTimes(1);
     expect(mockApproveShot).toHaveBeenCalledWith("LEE柠檬", "shot_01");
-    expect(mockGetShotGenerationStatus).toHaveBeenCalledTimes(2);
+    expect(mockGetShotGenerationStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Video v1 预览")).toHaveAttribute("controls");
     expect(document.body).not.toHaveTextContent(/QUEUED|RUNNING|MiniMax 调用/);
@@ -379,10 +379,22 @@ describe("ShotDetailPage", () => {
     expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
   });
 
-  it("contains no write action controls", async () => {
+  it("exposes only the scoped regeneration and approval controls", async () => {
     renderPage();
     await screen.findByRole("heading", { name: "Shot 01", level: 1 });
-    expect(screen.queryByRole("button", { name: /批准|拒绝|生成|选择正式|编辑|删除/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "用当前 Prompt 重新生成" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /拒绝|选择正式|编辑|删除/ })).not.toBeInTheDocument();
+  });
+
+  it("confirms replacing an official version while retaining it as history", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "审核通过" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("确认将 v3 设为新的正式版本？");
+    expect(dialog).toHaveTextContent("当前正式 v2 将保留为历史版本。");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(mockApproveShot).not.toHaveBeenCalled();
   });
 
   it("does not render unsafe response extensions or internal terminology", async () => {

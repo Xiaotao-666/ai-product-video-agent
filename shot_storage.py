@@ -245,6 +245,9 @@ def write_generation_snapshot(
         "generation_phase": payload.get(
             "generation_phase", payload.get("status", "NOT_STARTED")
         ),
+        "generation_intent": payload.get(
+            "generation_intent", existing.get("generation_intent")
+        ),
         "submission_unknown": bool(payload.get("submission_unknown", False)),
         "submitted_at": payload.get("submitted_at"),
         "file_ready_at": payload.get("file_ready_at"),

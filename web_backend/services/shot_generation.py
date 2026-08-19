@@ -13,12 +13,14 @@ from project_manager import create_project_paths
 from project_state import ProjectCheckpoint, ProjectStateError
 from prompt_generator import PromptGenerationError
 from shot_generation_workflow import (
+    CurrentPromptRegenerationNotAllowed,
     InitialShotGenerationNotAllowed,
     ShotGenerationResumeUnavailable,
     ShotGenerationWorkflowError,
     ShotPromptSafetyRejected,
     ShotPromptSafetyUnavailable,
     generate_initial_shot,
+    regenerate_shot_with_current_prompt,
     resume_shot_generation,
 )
 from storyboard import Storyboard, StoryboardShot, VideoPromptPlan
@@ -37,6 +39,7 @@ from visual_input import (
     reference_asset_visual_input,
 )
 from web_backend.models.generation import (
+    GenerationIntent,
     GenerationPreflightRequest,
     GenerationStartRequest,
     ModelSelectionMode,
@@ -126,13 +129,15 @@ class ShotGenerationActionService:
     ) -> TaskRecord:
         if not payload.confirm_paid_call:
             raise PaidCallConfirmationRequired("paid call was not confirmed")
+        if payload.intent is not GenerationIntent.INITIAL:
+            raise GenerationPreflightStale("initial generation intent is invalid")
         canonical_project_id = self._project_repository.get_project(
             project_id
         ).project_id
         canonical_shot_id, _shot_number = normalize_shot_id(shot_id)
         preflight_payload = GenerationPreflightRequest.model_validate(
             payload.model_dump(
-                include={"model_selection", "requested_model", "visual_input"}
+                include={"intent", "model_selection", "requested_model", "visual_input"}
             )
         )
         current = self._preflight_service.preflight(
@@ -180,6 +185,48 @@ class ShotGenerationActionService:
             ),
         )
 
+    def submit_regenerate(
+        self,
+        project_id: str,
+        shot_id: str,
+        payload: GenerationStartRequest,
+        *,
+        correlation_id: str | None,
+    ) -> TaskRecord:
+        if not payload.confirm_paid_call:
+            raise PaidCallConfirmationRequired("paid call was not confirmed")
+        if payload.intent is not GenerationIntent.REGENERATE_CURRENT_PROMPT:
+            raise GenerationPreflightStale("regeneration intent is invalid")
+        canonical_project_id = self._project_repository.get_project(project_id).project_id
+        canonical_shot_id, _shot_number = normalize_shot_id(shot_id)
+        preflight_payload = GenerationPreflightRequest.model_validate(
+            payload.model_dump(
+                include={"intent", "model_selection", "requested_model", "visual_input"}
+            )
+        )
+        current = self._preflight_service.preflight(
+            canonical_project_id, canonical_shot_id, preflight_payload
+        )
+        if (
+            not current.ready
+            or current.preflight_fingerprint is None
+            or current.preflight_fingerprint != payload.preflight_fingerprint
+        ):
+            raise GenerationPreflightStale("generation preflight changed")
+        return self._task_service.submit(
+            project_id=canonical_project_id,
+            operation=TaskOperation.SHOT_REGENERATE,
+            target_id=canonical_shot_id,
+            correlation_id=correlation_id,
+            callable_=lambda: self._run_start(
+                canonical_project_id,
+                canonical_shot_id,
+                preflight_payload,
+                payload.preflight_fingerprint,
+                regenerate=True,
+            ),
+        )
+
     def status(
         self, project_id: str, shot_id: str
     ) -> ShotGenerationStatusResponse:
@@ -196,16 +243,35 @@ class ShotGenerationActionService:
         if not entry:
             raise ShotNotFound("shot was not found")
 
-        status = str(entry.get("status") or "NOT_STARTED").upper()
-        phase = str(entry.get("generation_phase") or status).upper()
+        candidate = _mapping(entry.get("candidate"))
+        candidate_status = str(candidate.get("status") or "NONE").upper()
+        candidate_active = (
+            candidate_status not in {"NONE", "EDITING"}
+            and str(candidate.get("generation_intent") or "")
+            == "REGENERATE_CURRENT_PROMPT"
+        )
+        status = str(
+            candidate.get("status") if candidate_active else entry.get("status") or "NOT_STARTED"
+        ).upper()
+        phase = str(
+            candidate.get("generation_phase")
+            if candidate_active
+            else entry.get("generation_phase")
+            or status
+        ).upper()
         version = (
-            _positive_int(entry.get("current_generation_version"))
+            _positive_int(candidate.get("video_version"))
+            if candidate_active
+            else _positive_int(entry.get("current_generation_version"))
             or _positive_int(entry.get("pending_video_version"))
             or _positive_int(entry.get("active_video_version"))
         )
-        submission_unknown = bool(entry.get("submission_unknown")) or phase == "SUBMISSION_UNKNOWN"
-        provider_task_id = str(entry.get("provider_task_id") or "").strip()
-        file_id = str(entry.get("file_id") or "").strip()
+        submission_unknown = bool(
+            candidate.get("submission_unknown") if candidate_active else entry.get("submission_unknown")
+        ) or phase == "SUBMISSION_UNKNOWN"
+        progress = candidate if candidate_active else entry
+        provider_task_id = str(progress.get("provider_task_id") or "").strip()
+        file_id = str(progress.get("file_id") or "").strip()
         video_exists = False
         if version is not None:
             video = (
@@ -234,7 +300,21 @@ class ShotGenerationActionService:
             elif provider_task_id:
                 resume_kind = ShotGenerationResumeKind.POLL_EXISTING_TASK
 
-        if status == "WAITING_REVIEW":
+        active = self._task_service.active_for_project(canonical_project_id)
+        active_for_shot = (
+            active is not None
+            and active.operation
+            in {
+                TaskOperation.SHOT_GENERATE,
+                TaskOperation.SHOT_REGENERATE,
+                TaskOperation.SHOT_RESUME,
+            }
+            and active.target_id == canonical_shot_id
+            and active.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+        )
+        if active_for_shot and not candidate_active and phase in {"APPROVED", "NOT_STARTED"}:
+            public_state = ShotGenerationState.QUEUED
+        elif status == "WAITING_REVIEW":
             public_state = ShotGenerationState.WAITING_REVIEW
         elif status == "APPROVED":
             public_state = ShotGenerationState.APPROVED
@@ -245,14 +325,9 @@ class ShotGenerationActionService:
         elif status == "FAILED":
             public_state = ShotGenerationState.FAILED
         else:
-            active = self._task_service.active_for_project(canonical_project_id)
             public_state = (
                 ShotGenerationState.QUEUED
-                if active is not None
-                and active.operation
-                in {TaskOperation.SHOT_GENERATE, TaskOperation.SHOT_RESUME}
-                and active.target_id == canonical_shot_id
-                and active.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+                if active_for_shot
                 else ShotGenerationState.NOT_STARTED
             )
         return ShotGenerationStatusResponse(
@@ -263,6 +338,15 @@ class ShotGenerationActionService:
             resume_kind=resume_kind,
             video_version=version,
             provider_submission_known=not submission_unknown,
+            generation_intent=(
+                GenerationIntent.REGENERATE_CURRENT_PROMPT
+                if candidate_active
+                or (active_for_shot and active.operation is TaskOperation.SHOT_REGENERATE)
+                or str(entry.get("generation_intent") or "") == "REGENERATE_CURRENT_PROMPT"
+                else GenerationIntent.INITIAL
+                if entry.get("generation_intent")
+                else None
+            ),
         )
 
     def _run_start(
@@ -271,6 +355,7 @@ class ShotGenerationActionService:
         shot_id: str,
         payload: GenerationPreflightRequest,
         fingerprint: str,
+        regenerate: bool = False,
     ) -> TaskResultReference:
         current = self._preflight_service.preflight(project_id, shot_id, payload)
         if (
@@ -298,6 +383,7 @@ class ShotGenerationActionService:
             resume=False,
             visual_input=visual_input,
             provider_selection=provider_selection,
+            regenerate=regenerate,
         )
 
     def _run_resume(self, project_id: str, shot_id: str) -> TaskResultReference:
@@ -312,6 +398,7 @@ class ShotGenerationActionService:
             resume=True,
             visual_input=None,
             provider_selection=None,
+            regenerate=False,
         )
 
     def _execute(
@@ -322,6 +409,7 @@ class ShotGenerationActionService:
         resume: bool,
         visual_input: dict[str, Any] | None,
         provider_selection: ProviderSelection | None,
+        regenerate: bool,
     ) -> TaskResultReference:
         _canonical, shot_number = normalize_shot_id(shot_id)
         try:
@@ -361,7 +449,22 @@ class ShotGenerationActionService:
                     provider_registry=registry,
                 )
                 if resume
-                else generate_initial_shot(
+                else (
+                    regenerate_shot_with_current_prompt(
+                        paths=paths,
+                        checkpoint=checkpoint,
+                        plan=plan,
+                        shot=shot,
+                        shot_id=shot_number,
+                        visual_input=visual_input or none_visual_input(),
+                        deepseek_key=deepseek_key,
+                        provider_credentials=credentials,
+                        task_logger=logger,
+                        provider_selection=provider_selection,
+                        provider_registry=registry,
+                    )
+                    if regenerate
+                    else generate_initial_shot(
                     paths=paths,
                     checkpoint=checkpoint,
                     plan=plan,
@@ -374,13 +477,18 @@ class ShotGenerationActionService:
                     provider_selection=provider_selection,
                     provider_registry=registry,
                 )
+                )
             )
         except ProviderSubmissionUnknownError:
             _task_failure(
                 "SUBMISSION_UNKNOWN",
                 "无法确认视频生成请求是否已提交，请不要立即重复生成。",
             )
-        except (InitialShotGenerationNotAllowed, ShotGenerationResumeUnavailable):
+        except (
+            CurrentPromptRegenerationNotAllowed,
+            InitialShotGenerationNotAllowed,
+            ShotGenerationResumeUnavailable,
+        ):
             _task_failure("ACTION_NOT_ALLOWED", "当前镜头状态不允许执行此操作。")
         except ShotPromptSafetyUnavailable:
             _task_failure(
@@ -409,7 +517,13 @@ class ShotGenerationActionService:
                 retryable=False,
             )
 
-        version = _positive_int(checkpoint.shot_checkpoint(shot_number).get("active_video_version"))
+        completed_entry = checkpoint.shot_checkpoint(shot_number)
+        completed_candidate = _mapping(completed_entry.get("candidate"))
+        version = _positive_int(
+            completed_candidate.get("video_version")
+            if regenerate or completed_candidate.get("status") == "WAITING_REVIEW"
+            else completed_entry.get("active_video_version")
+        )
         if version is None or not output.is_file():
             _task_failure(
                 "SHOT_GENERATION_FAILED",

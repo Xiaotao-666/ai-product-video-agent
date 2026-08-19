@@ -48,23 +48,27 @@ export type TaskStatus =
   | "INTERRUPTED"
   | "CANCELLED";
 
-export type TaskOperation =
-  | "CREATIVE_GENERATE"
-  | "CREATIVE_RETRY"
-  | "CREATIVE_REVISE"
-  | "CREATIVE_REGENERATE"
-  | "STORYBOARD_GENERATE"
-  | "STORYBOARD_REVISE"
-  | "STORYBOARD_REGENERATE"
-  | "VIDEO_PROMPT_GENERATE"
-  | "VIDEO_PROMPT_REVISE"
-  | "VIDEO_PROMPT_REGENERATE"
-  | "SHOT_GENERATE"
-  | "SHOT_RESUME"
-  | "ASSEMBLY"
-  | "VOICE_GENERATE"
-  | "SUBTITLE_GENERATE"
-  | "FINAL_EXPORT";
+export const TASK_OPERATIONS = [
+  "CREATIVE_GENERATE",
+  "CREATIVE_RETRY",
+  "CREATIVE_REVISE",
+  "CREATIVE_REGENERATE",
+  "STORYBOARD_GENERATE",
+  "STORYBOARD_REVISE",
+  "STORYBOARD_REGENERATE",
+  "VIDEO_PROMPT_GENERATE",
+  "VIDEO_PROMPT_REVISE",
+  "VIDEO_PROMPT_REGENERATE",
+  "SHOT_GENERATE",
+  "SHOT_REGENERATE",
+  "SHOT_RESUME",
+  "ASSEMBLY",
+  "VOICE_GENERATE",
+  "SUBTITLE_GENERATE",
+  "FINAL_EXPORT",
+] as const;
+
+export type TaskOperation = (typeof TASK_OPERATIONS)[number];
 
 export interface TaskError {
   code: string;
@@ -394,7 +398,12 @@ export interface GenerationShotContext {
   duration_seconds: number;
   prompt_version: number | null;
   resolution: string;
+  official_video_version?: number | null;
+  pending_video_version?: number | null;
+  next_video_version?: number | null;
 }
+
+export type GenerationIntent = "INITIAL" | "REGENERATE_CURRENT_PROMPT";
 
 export interface GenerationModelOption {
   model_id: string;
@@ -446,6 +455,7 @@ export interface ReferenceAssetListResponse {
 }
 
 export interface GenerationPreflightRequest {
+  intent?: GenerationIntent;
   model_selection: GenerationModelSelection;
   requested_model: string | null;
   visual_input: {
@@ -510,6 +520,7 @@ export interface ShotGenerationStatusResponse {
   resume_kind: ShotGenerationResumeKind | null;
   video_version: number | null;
   provider_submission_known: boolean;
+  generation_intent?: GenerationIntent | null;
 }
 
 export type VoiceCalibrationStatus =

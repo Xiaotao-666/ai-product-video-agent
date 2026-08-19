@@ -11,6 +11,7 @@ import {
   getTask,
   preflightShotGeneration,
   resumeShotGeneration,
+  regenerateShotGeneration,
   startShotGeneration,
 } from "../../api/client";
 import type {
@@ -32,6 +33,7 @@ vi.mock("../../api/client", async (importOriginal) => {
     getShotGenerationStatus: vi.fn(),
     getTask: vi.fn(),
     resumeShotGeneration: vi.fn(),
+    regenerateShotGeneration: vi.fn(),
     startShotGeneration: vi.fn(),
   };
 });
@@ -43,6 +45,7 @@ const mockTasks = vi.mocked(getProjectTasks);
 const mockStatus = vi.mocked(getShotGenerationStatus);
 const mockTask = vi.mocked(getTask);
 const mockResume = vi.mocked(resumeShotGeneration);
+const mockRegenerate = vi.mocked(regenerateShotGeneration);
 const mockStart = vi.mocked(startShotGeneration);
 
 const options: GenerationOptionsResponse = {
@@ -173,6 +176,7 @@ describe("ShotGenerationPreparation", () => {
     mockStatus.mockReset();
     mockTask.mockReset();
     mockResume.mockReset();
+    mockRegenerate.mockReset();
     mockStart.mockReset();
     mockOptions.mockResolvedValue({ data: options, correlationId: "req_options" });
     mockReferences.mockResolvedValue({ data: references, correlationId: "req_refs" });
@@ -189,6 +193,53 @@ describe("ShotGenerationPreparation", () => {
     mockStart.mockResolvedValue({ data: queuedTask, correlationId: "req_generate" });
     mockResume.mockResolvedValue({ data: { ...queuedTask, operation: "SHOT_RESUME" }, correlationId: "req_resume" });
     mockTask.mockResolvedValue({ data: queuedTask, correlationId: "req_task" });
+  });
+
+  it("prepares and confirms a paid current-Prompt regeneration exactly once", async () => {
+    const regenerationOptions: GenerationOptionsResponse = {
+      ...options,
+      shot: {
+        ...options.shot,
+        official_video_version: 1,
+        pending_video_version: null,
+        next_video_version: 2,
+      },
+    };
+    const regenerationReady: GenerationPreflightResponse = {
+      ...ready,
+      shot: regenerationOptions.shot,
+    };
+    mockOptions.mockResolvedValue({ data: regenerationOptions, correlationId: "req_options" });
+    mockPreflight.mockResolvedValue({ data: regenerationReady, correlationId: "req_preflight" });
+    mockRegenerate.mockResolvedValue({
+      data: { ...queuedTask, operation: "SHOT_REGENERATE" },
+      correlationId: "req_regenerate",
+    });
+    render(
+      <MemoryRouter>
+        <ShotGenerationPreparation
+          projectId="project-a"
+          shotId="shot_01"
+          intent="REGENERATE_CURRENT_PROMPT"
+        />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("heading", { name: "用当前 Prompt 重新生成" })).toBeInTheDocument();
+    expect(screen.getByText("当前正式版本会保留，只有新版本审核通过后才会替换。", { exact: false })).toBeInTheDocument();
+    expect(screen.getAllByText("v2").length).toBeGreaterThanOrEqual(1);
+    expect(mockOptions).toHaveBeenCalledWith("project-a", "shot_01", "REGENERATE_CURRENT_PROMPT");
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    await screen.findByRole("button", { name: "生成新的待审核版本" });
+    expect(mockPreflight).toHaveBeenCalledWith("project-a", "shot_01", expect.objectContaining({
+      intent: "REGENERATE_CURRENT_PROMPT",
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "生成新的待审核版本" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("确认后将调用付费视频模型并创建新的视频版本。");
+    const confirm = screen.getByRole("button", { name: "确认并生成视频" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockRegenerate).toHaveBeenCalledTimes(1));
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("shows initial Shot context, three explained modes, and no generate action", async () => {
@@ -354,6 +405,117 @@ describe("ShotGenerationPreparation", () => {
     });
     expect(await screen.findByText("排队中…")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d+%/);
+  });
+
+  it("locks initial paid generation when a 202 was accepted but task status is unreadable", async () => {
+    mockStart.mockRejectedValue(new ApiClientError({
+      code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+      status: 202,
+      message: "生成请求已被后端接受，但当前无法读取任务状态。请勿重复提交生成请求。",
+      correlationId: "req_uncertain_start",
+      requestAccepted: true,
+    }));
+    const view = renderPreparation();
+    await screen.findByRole("heading", { name: "生成设置" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成视频" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请求已被后端接受");
+    expect(screen.getByRole("button", { name: "生成视频" })).toBeDisabled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "生成视频" }));
+    view.rerender(
+      <MemoryRouter>
+        <ShotGenerationPreparation projectId="project-a" shotId="shot_01" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(mockStart).toHaveBeenCalledTimes(1));
+  });
+
+  it("rechecks accepted regeneration with GETs only and attaches the existing task", async () => {
+    const completed = {
+      ...queuedTask,
+      operation: "SHOT_REGENERATE" as const,
+      status: "SUCCEEDED" as const,
+      started_at: "2026-08-19T00:00:01Z",
+      finished_at: "2026-08-19T00:01:00Z",
+      correlation_id: "req_uncertain_regenerate",
+      result: { resource_type: "SHOT_VIDEO", resource_id: "shot_01", version: 2 },
+    };
+    mockRegenerate.mockRejectedValue(new ApiClientError({
+      code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+      status: 202,
+      message: "生成请求已被后端接受，但当前无法读取任务状态。请勿重复提交生成请求。",
+      correlationId: completed.correlation_id,
+      requestAccepted: true,
+    }));
+    mockTasks
+      .mockResolvedValueOnce({ data: { project_id: "project-a", tasks: [] }, correlationId: "req_initial" })
+      .mockResolvedValue({ data: { project_id: "project-a", tasks: [completed] }, correlationId: "req_refresh" });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "WAITING_REVIEW",
+        resume_available: false, resume_kind: null, video_version: 2,
+        provider_submission_known: true, generation_intent: "REGENERATE_CURRENT_PROMPT",
+      },
+      correlationId: "req_status",
+    });
+    const onCompleted = vi.fn();
+    render(
+      <MemoryRouter>
+        <ShotGenerationPreparation
+          projectId="project-a"
+          shotId="shot_01"
+          intent="REGENERATE_CURRENT_PROMPT"
+          onCompleted={onCompleted}
+        />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("heading", { name: "用当前 Prompt 重新生成" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成新的待审核版本" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请勿重复提交生成请求");
+    fireEvent.click(screen.getByRole("button", { name: "重新检查状态" }));
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledTimes(1));
+    expect(mockTasks).toHaveBeenCalledTimes(2);
+    expect(mockStatus).toHaveBeenCalledTimes(2);
+    expect(mockRegenerate).toHaveBeenCalledTimes(1);
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("keeps regeneration locked when the GET-only status recheck still fails", async () => {
+    mockRegenerate.mockRejectedValue(new ApiClientError({
+      code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+      status: 202,
+      message: "生成请求已被后端接受，但当前无法读取任务状态。请勿重复提交生成请求。",
+      correlationId: "req_still_uncertain",
+      requestAccepted: true,
+    }));
+    mockTasks
+      .mockResolvedValueOnce({ data: { project_id: "project-a", tasks: [] }, correlationId: "req_initial" })
+      .mockRejectedValue(new ApiClientError({ code: "NETWORK_ERROR", message: "offline" }));
+    render(
+      <MemoryRouter>
+        <ShotGenerationPreparation
+          projectId="project-a"
+          shotId="shot_01"
+          intent="REGENERATE_CURRENT_PROMPT"
+        />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("heading", { name: "用当前 Prompt 重新生成" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成新的待审核版本" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新检查状态" }));
+
+    await waitFor(() => expect(mockTasks).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toHaveTextContent("请勿重复提交生成请求");
+    expect(screen.getByRole("button", { name: "生成新的待审核版本" })).toBeDisabled();
+    expect(mockRegenerate).toHaveBeenCalledTimes(1);
   });
 
   it("clears stale preflight and asks the user to check again", async () => {

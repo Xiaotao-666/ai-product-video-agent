@@ -89,16 +89,23 @@ class ShotApprovalService:
             ),
             None,
         )
+        initial_review = (
+            detail.status == "WAITING_REVIEW"
+            and detail.official_version is None
+        )
+        pending_official_replacement = (
+            detail.status == "APPROVED"
+            and detail.official_version is not None
+        )
         if (
-            detail.status != "WAITING_REVIEW"
-            or detail.official_version is not None
+            not (initial_review or pending_official_replacement)
             or detail.pending_review_version is None
             or pending is None
             or pending.version != detail.pending_review_version
             or pending.review_status != "WAITING_REVIEW"
             or not pending.video_available
         ):
-            raise ShotApprovalNotAllowed("Shot is not waiting for initial approval")
+            raise ShotApprovalNotAllowed("Shot has no approvable pending version")
 
     def _require_no_active_task(self, project_id: str) -> None:
         if self._task_service.active_for_project(project_id) is not None:

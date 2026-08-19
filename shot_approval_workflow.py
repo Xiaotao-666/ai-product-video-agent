@@ -24,10 +24,79 @@ def approve_shot_stage(
     """Approve the active WAITING_REVIEW version without touching media snapshots."""
 
     entry = checkpoint.shot_checkpoint(shot_id)
+    candidate = entry.get("candidate") or {}
+    if (
+        checkpoint.shot_status(shot_id) is ShotStatus.APPROVED
+        and str(candidate.get("status") or CandidateStatus.NONE.value)
+        == CandidateStatus.WAITING_REVIEW.value
+    ):
+        try:
+            video_version = int(candidate.get("video_version") or 0)
+            prompt_version = int(candidate.get("prompt_version") or 0)
+        except (TypeError, ValueError) as error:
+            raise ShotApprovalError("Pending version pointers are invalid.") from error
+        generation = next(
+            (
+                item
+                for item in entry.get("generation_versions") or []
+                if isinstance(item, dict)
+                if int(item.get("video_version") or 0) == video_version
+            ),
+            None,
+        )
+        if (
+            video_version <= 0
+            or prompt_version <= 0
+            or not isinstance(generation, dict)
+            or int(generation.get("prompt_version") or 0) != prompt_version
+            or str(generation.get("review_result") or generation.get("status"))
+            != ShotStatus.WAITING_REVIEW.value
+        ):
+            raise ShotApprovalError("Pending version metadata is incomplete.")
+        try:
+            bundle = validate_bundle(paths, shot_id, video_version, require_video=True)
+        except (OSError, ShotStorageError, ValueError) as error:
+            raise ShotApprovalError("Pending version bundle is incomplete.") from error
+        if (
+            str(bundle["review"].get("review_result"))
+            != ShotStatus.WAITING_REVIEW.value
+            or int(bundle["prompt"].get("prompt_version") or 0) != prompt_version
+        ):
+            raise ShotApprovalError("Pending version binding is invalid.")
+        old_prompt, old_video, new_prompt, new_video = checkpoint.approve_candidate(
+            shot_id
+        )
+        assembly = checkpoint.data.get("assembly") or {}
+        if (
+            assembly.get("final_video_version") is not None
+            or assembly.get("final_video_path")
+            or str(assembly.get("status") or "").upper()
+            in {"COMPLETED", "APPROVED", "STALE"}
+        ):
+            checkpoint.mark_assembly_needs_update(shot_id, old_video, new_video)
+        if recorder is not None:
+            recorder.record_shot_action(
+                shot_id,
+                "approve_pending_version",
+                old_approved_prompt_version=old_prompt,
+                old_approved_video_version=old_video,
+                prompt_version=new_prompt,
+                video_version=new_video,
+            )
+        if task_logger is not None:
+            task_logger.event(
+                "SHOT_PENDING_VERSION_APPROVED",
+                shot_id=shot_id,
+                old_approved_video_version=old_video,
+                approved_prompt_version=new_prompt,
+                approved_video_version=new_video,
+                generation_count=entry.get("generation_count", 0),
+            )
+        return new_video
+
     if checkpoint.shot_status(shot_id) is not ShotStatus.WAITING_REVIEW:
         raise ShotApprovalError("Only a WAITING_REVIEW Shot can be approved.")
 
-    candidate = entry.get("candidate") or {}
     if str(candidate.get("status") or CandidateStatus.NONE.value) != CandidateStatus.NONE.value:
         raise ShotApprovalError("Candidate review belongs to a later workflow.")
 

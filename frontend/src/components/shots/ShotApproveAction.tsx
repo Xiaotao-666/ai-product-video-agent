@@ -7,6 +7,7 @@ interface Props {
   projectId: string;
   shotId: string;
   version: number;
+  previousOfficialVersion?: number | null;
   onApprovedRefresh: () => Promise<void>;
 }
 
@@ -35,6 +36,7 @@ export function ShotApproveAction({
   projectId,
   shotId,
   version,
+  previousOfficialVersion = null,
   onApprovedRefresh,
 }: Props) {
   const [confirming, setConfirming] = useState(false);
@@ -117,8 +119,12 @@ export function ShotApproveAction({
 
       {!approved && confirming && (
         <div className="creative-approval-confirmation" role="dialog" aria-modal="false">
-          <strong>确认通过当前视频版本？</strong>
-          <p>通过后该版本将成为正式版本。</p>
+          <strong>{previousOfficialVersion
+            ? `确认将 v${version} 设为新的正式版本？`
+            : "确认通过当前视频版本？"}</strong>
+          <p>{previousOfficialVersion
+            ? `当前正式 v${previousOfficialVersion} 将保留为历史版本。`
+            : "通过后该版本将成为正式版本。"}</p>
           <div className="creative-approval-buttons">
             <button
               className="secondary-button"

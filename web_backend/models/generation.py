@@ -18,6 +18,11 @@ class ModelSelectionMode(StrEnum):
     MANUAL = "MANUAL"
 
 
+class GenerationIntent(StrEnum):
+    INITIAL = "INITIAL"
+    REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
+
+
 class GenerationVisualInputMode(StrEnum):
     NONE = "none"
     REFERENCE_ASSET = "reference_asset"
@@ -51,6 +56,9 @@ class GenerationShotContext(ResponseModel):
     duration_seconds: int
     prompt_version: int | None
     resolution: str
+    official_video_version: int | None = None
+    pending_video_version: int | None = None
+    next_video_version: int | None = None
 
 
 class GenerationModelOption(ResponseModel):
@@ -122,6 +130,7 @@ class GenerationVisualInputRequest(BaseModel):
 class GenerationPreflightRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    intent: GenerationIntent = GenerationIntent.INITIAL
     model_selection: ModelSelectionMode
     requested_model: str | None = Field(default=None, max_length=200)
     visual_input: GenerationVisualInputRequest
@@ -196,3 +205,4 @@ class ShotGenerationStatusResponse(ResponseModel):
     resume_kind: ShotGenerationResumeKind | None = None
     video_version: int | None = Field(default=None, ge=1)
     provider_submission_known: bool
+    generation_intent: GenerationIntent | None = None

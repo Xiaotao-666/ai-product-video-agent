@@ -199,6 +199,7 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/shots/{shot_id}/generation/options",
                 "/api/projects/{project_id}/shots/{shot_id}/generation/preflight",
                 "/api/projects/{project_id}/shots/{shot_id}/generation/start",
+                "/api/projects/{project_id}/shots/{shot_id}/generation/regenerate",
                 "/api/projects/{project_id}/shots/{shot_id}/generation/resume",
                 "/api/projects/{project_id}/shots/{shot_id}/generation/status",
                 "/api/projects/{project_id}/assembly",

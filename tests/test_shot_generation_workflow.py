@@ -9,11 +9,14 @@ from project_manager import create_project_paths
 from project_state import ProjectCheckpoint
 from prompt_generator import PromptSafetyReview
 from shot_generation_workflow import (
+    GenerationIntent,
     InitialShotGenerationNotAllowed,
     ShotGenerationResumeUnavailable,
     generate_initial_shot,
+    regenerate_shot_with_current_prompt,
     resume_shot_generation,
 )
+from shot_approval_workflow import approve_shot_stage
 from storyboard import Storyboard, VideoPromptPlan
 from task_logger import TaskLogger
 from tests.web.test_backend_phase_1b_projects import base_project, write_json, write_project
@@ -229,6 +232,143 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
         self.generate(FakeCoreVideoGenerator())
         with self.assertRaises(InitialShotGenerationNotAllowed):
             self.generate(FakeCoreVideoGenerator())
+
+    def regenerate(self, fake: FakeCoreVideoGenerator):
+        return regenerate_shot_with_current_prompt(
+            paths=self.paths,
+            checkpoint=self.checkpoint,
+            plan=self.plan,
+            shot=self.board.shots[0],
+            shot_id=1,
+            visual_input=none_visual_input(),
+            deepseek_key="",
+            provider_credentials={"minimax": "mock"},
+            task_logger=self.logger,
+            video_generate=fake,
+            safety_review=lambda *_args, **_kwargs: self.fail(
+                "saved same-Prompt safety must be reused"
+            ),
+        )
+
+    def test_06_unapproved_review_regenerates_video_without_new_prompt(self):
+        self.generate(FakeCoreVideoGenerator())
+        self.regenerate(FakeCoreVideoGenerator())
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["active_video_version"], 2)
+        self.assertIsNone(entry["approved_video_version"])
+        self.assertEqual(entry["active_prompt_version"], 2)
+        self.assertEqual(len(entry["prompt_versions"]), 1)
+        self.assertEqual(entry["generation_count"], 2)
+        self.assertEqual(entry["generation_versions"][0]["review_result"], "REJECTED")
+        self.assertEqual(entry["generation_versions"][1]["prompt_version"], 2)
+        self.assertEqual(
+            entry["generation_versions"][1]["generation_intent"],
+            GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
+        )
+
+    def test_07_approved_regeneration_preserves_official_until_pending_approve(self):
+        self.generate(FakeCoreVideoGenerator())
+        approve_shot_stage(paths=self.paths, checkpoint=self.checkpoint, shot_id=1)
+        immutable = {
+            name: (self.paths.shot_version_dir(1, 1) / name).read_bytes()
+            for name in ("video.mp4", "prompt.json", "safety.json", "generation.json")
+        }
+        self.regenerate(FakeCoreVideoGenerator())
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["approved_video_version"], 1)
+        self.assertEqual(entry["candidate"]["video_version"], 2)
+        self.assertEqual(entry["candidate"]["status"], "WAITING_REVIEW")
+        self.assertEqual(entry["generation_count"], 2)
+        self.assertEqual(len(entry["prompt_versions"]), 1)
+        for name, value in immutable.items():
+            self.assertEqual((self.paths.shot_version_dir(1, 1) / name).read_bytes(), value)
+        approved = approve_shot_stage(
+            paths=self.paths, checkpoint=self.checkpoint, shot_id=1
+        )
+        self.assertEqual(approved, 2)
+        self.assertEqual(entry["approved_video_version"], 2)
+        self.assertEqual(entry["approved_prompt_version"], 2)
+        self.assertEqual(entry["candidate"]["status"], "NONE")
+        self.assertEqual(entry["generation_count"], 2)
+
+    def test_08_regeneration_resume_reuses_same_version_and_submit(self):
+        self.generate(FakeCoreVideoGenerator())
+        approve_shot_stage(paths=self.paths, checkpoint=self.checkpoint, shot_id=1)
+        first = FakeCoreVideoGenerator(fail_after_submit=True)
+        with self.assertRaises(VideoProviderError):
+            self.regenerate(first)
+        resumed = FakeCoreVideoGenerator()
+        resume_shot_generation(
+            paths=self.paths,
+            checkpoint=self.checkpoint,
+            plan=self.plan,
+            shot=self.board.shots[0],
+            shot_id=1,
+            deepseek_key="",
+            provider_credentials={"minimax": "mock"},
+            task_logger=self.logger,
+            video_generate=resumed,
+        )
+        self.assertEqual(resumed.submit_calls, 0)
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["generation_count"], 2)
+        self.assertEqual(entry["approved_video_version"], 1)
+        self.assertEqual(entry["candidate"]["video_version"], 2)
+
+    def test_09_regeneration_submission_unknown_preserves_official(self):
+        self.generate(FakeCoreVideoGenerator())
+        approve_shot_stage(paths=self.paths, checkpoint=self.checkpoint, shot_id=1)
+        with self.assertRaises(ProviderSubmissionUnknownError):
+            self.regenerate(FakeCoreVideoGenerator(ambiguous=True))
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["approved_video_version"], 1)
+        self.assertEqual(entry["candidate"]["generation_phase"], "SUBMISSION_UNKNOWN")
+        self.assertTrue(entry["candidate"]["submission_unknown"])
+        with self.assertRaises(ShotGenerationResumeUnavailable):
+            resume_shot_generation(
+                paths=self.paths,
+                checkpoint=self.checkpoint,
+                plan=self.plan,
+                shot=self.board.shots[0],
+                shot_id=1,
+                deepseek_key="",
+                provider_credentials={"minimax": "mock"},
+                task_logger=self.logger,
+                video_generate=FakeCoreVideoGenerator(),
+            )
+
+    def test_10_repeated_regeneration_keeps_one_pending_and_all_bundles(self):
+        self.generate(FakeCoreVideoGenerator())
+        approve_shot_stage(paths=self.paths, checkpoint=self.checkpoint, shot_id=1)
+        self.regenerate(FakeCoreVideoGenerator())
+        v2_video = self.paths.shot_version_video_path(1, 2).read_bytes()
+        self.regenerate(FakeCoreVideoGenerator())
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["approved_video_version"], 1)
+        self.assertEqual(entry["candidate"]["video_version"], 3)
+        self.assertEqual(entry["candidate"]["status"], "WAITING_REVIEW")
+        self.assertEqual(entry["generation_count"], 3)
+        self.assertEqual(entry["generation_versions"][1]["review_result"], "REJECTED")
+        self.assertEqual(self.paths.shot_version_video_path(1, 2).read_bytes(), v2_video)
+        self.assertTrue(self.paths.shot_version_video_path(1, 3).is_file())
+
+    def test_11_assembly_stales_only_after_pending_version_is_approved(self):
+        self.generate(FakeCoreVideoGenerator())
+        approve_shot_stage(paths=self.paths, checkpoint=self.checkpoint, shot_id=1)
+        self.checkpoint.data["assembly"] = {
+            "status": "COMPLETED",
+            "final_video_version": 1,
+            "final_video_path": "assembly/final_v001.mp4",
+            "needs_update": False,
+        }
+        self.checkpoint.project.save_json(self.checkpoint.path, self.checkpoint.data)
+        self.regenerate(FakeCoreVideoGenerator())
+        self.assertFalse(self.checkpoint.data["assembly"]["needs_update"])
+        approve_shot_stage(paths=self.paths, checkpoint=self.checkpoint, shot_id=1)
+        assembly = self.checkpoint.data["assembly"]
+        self.assertTrue(assembly["needs_update"])
+        self.assertEqual(assembly["old_approved_video_version"], 1)
+        self.assertEqual(assembly["new_approved_video_version"], 2)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from visual_input import (
     reference_asset_visual_input,
 )
 from web_backend.models.generation import (
+    GenerationIntent,
     GenerationIssue,
     GenerationIssueCode,
     GenerationModelOption,
@@ -136,8 +137,13 @@ class ShotGenerationPreflightService:
     def _registry() -> VideoProviderRegistry:
         return create_default_registry(load_provider_credentials_from_env())
 
-    def options(self, project_id: str, shot_id: str) -> GenerationOptionsResponse:
-        context = self._context(project_id, shot_id)
+    def options(
+        self,
+        project_id: str,
+        shot_id: str,
+        intent: GenerationIntent = GenerationIntent.INITIAL,
+    ) -> GenerationOptionsResponse:
+        context = self._context(project_id, shot_id, intent)
         registry = self._registry()
         models = self._models(registry)
         modes = [
@@ -173,7 +179,7 @@ class ShotGenerationPreflightService:
         shot_id: str,
         payload: GenerationPreflightRequest,
     ) -> GenerationPreflightResponse:
-        context = self._context(project_id, shot_id)
+        context = self._context(project_id, shot_id, payload.intent)
         issues = list(context.state_issues)
         selected_ids = list(payload.visual_input.asset_ids)
         mode = payload.visual_input.mode
@@ -317,6 +323,10 @@ class ShotGenerationPreflightService:
         material = {
             "project_id": project_id,
             "shot_id": context.public.shot_id,
+            "generation_intent": payload.intent.value,
+            "official_video_version": context.public.official_video_version,
+            "pending_video_version": context.public.pending_video_version,
+            "next_video_version": context.public.next_video_version,
             "prompt_version": context.public.prompt_version,
             "prompt_sha256": hashlib.sha256(context.prompt.encode("utf-8")).hexdigest(),
             "duration": context.public.duration_seconds,
@@ -340,7 +350,7 @@ class ShotGenerationPreflightService:
                 if asset is not None
                 else []
             ),
-            "workflow": "initial_shot_generation",
+            "workflow": "shot_generation",
         }
         encoded = json.dumps(
             material,
@@ -376,7 +386,12 @@ class ShotGenerationPreflightService:
             return None
         return matches[0]
 
-    def _context(self, project_id: str, shot_id: str) -> _ShotContext:
+    def _context(
+        self,
+        project_id: str,
+        shot_id: str,
+        intent: GenerationIntent,
+    ) -> _ShotContext:
         canonical_id, shot_number = normalize_shot_id(shot_id)
         workflow = self.project_repository.get_workflow(project_id)
         project_dir = self.project_repository.resolve_project_dir(project_id).resolve()
@@ -409,7 +424,24 @@ class ShotGenerationPreflightService:
         if duration is None:
             raise ProjectDataCorrupt("storyboard shot duration is invalid")
 
-        prompt_version = _positive_int(checkpoint.get("active_prompt_version"))
+        candidate = _mapping(checkpoint.get("candidate"))
+        candidate_status = str(candidate.get("status") or "NONE").upper()
+        approved_version = _positive_int(checkpoint.get("approved_video_version"))
+        active_version = _positive_int(checkpoint.get("active_video_version"))
+        candidate_version = (
+            _positive_int(candidate.get("video_version"))
+            if candidate_status not in {"NONE", "EDITING"}
+            else None
+        )
+        prompt_version = _positive_int(
+            candidate.get("prompt_version")
+            if intent is GenerationIntent.REGENERATE_CURRENT_PROMPT
+            and candidate_status not in {"NONE", "EDITING"}
+            else checkpoint.get("approved_prompt_version")
+            if intent is GenerationIntent.REGENERATE_CURRENT_PROMPT
+            and approved_version is not None
+            else checkpoint.get("active_prompt_version")
+        )
         prompt_record = next(
             (
                 _mapping(value)
@@ -441,14 +473,45 @@ class ShotGenerationPreflightService:
                 _positive_int(checkpoint.get("pending_video_version")) is not None,
             )
         )
-        if generated:
-            issues.append(_issue(GenerationIssueCode.SHOT_ALREADY_GENERATED))
         shot_status = str(checkpoint.get("status") or "NOT_STARTED").upper()
-        if (
-            shot_status != "NOT_STARTED"
-            or AvailableAction.GENERATE_SHOTS not in workflow.available_actions
-        ) and not generated:
-            issues.append(_issue(GenerationIssueCode.SHOT_NOT_READY))
+        if intent is GenerationIntent.INITIAL:
+            if generated:
+                issues.append(_issue(GenerationIssueCode.SHOT_ALREADY_GENERATED))
+            if (
+                shot_status != "NOT_STARTED"
+                or AvailableAction.GENERATE_SHOTS not in workflow.available_actions
+            ) and not generated:
+                issues.append(_issue(GenerationIssueCode.SHOT_NOT_READY))
+        else:
+            unapproved_review = (
+                shot_status == "WAITING_REVIEW"
+                and approved_version is None
+                and active_version is not None
+            )
+            approved_review = (
+                shot_status == "APPROVED"
+                and approved_version is not None
+                and candidate_status != "GENERATING"
+            )
+            if not (unapproved_review or approved_review):
+                issues.append(_issue(GenerationIssueCode.SHOT_NOT_READY))
+
+        generation_versions = [
+            _positive_int(_mapping(item).get("video_version")) or 0
+            for item in (checkpoint.get("generation_versions") or [])
+        ]
+        next_version = max(
+            [
+                active_version or 0,
+                approved_version or 0,
+                candidate_version or 0,
+                _positive_int(checkpoint.get("generation_count")) or 0,
+                *generation_versions,
+            ]
+        ) + 1
+        pending_version = candidate_version or (
+            active_version if approved_version is None and shot_status == "WAITING_REVIEW" else None
+        )
 
         return _ShotContext(
             public=GenerationShotContext(
@@ -456,6 +519,9 @@ class ShotGenerationPreflightService:
                 duration_seconds=duration,
                 prompt_version=prompt_version,
                 resolution=_RESOLUTION,
+                official_video_version=approved_version,
+                pending_video_version=pending_version,
+                next_video_version=next_version,
             ),
             project_dir=project_dir,
             prompt=prompt or "unavailable",
