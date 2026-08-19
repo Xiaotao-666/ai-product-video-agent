@@ -518,6 +518,66 @@
   margin-top: 24px;
 }
 
+.manual-prompt-entry,
+.manual-prompt-editor {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #dce2e7;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.manual-prompt-entry p,
+.manual-prompt-version-note {
+  margin-bottom: 0;
+  color: #667584;
+}
+
+.manual-prompt-label {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-weight: 700;
+}
+
+.manual-prompt-label textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.85rem;
+  border: 1px solid #dce2e7;
+  border-radius: 0.75rem;
+  background: #f6f8fa;
+  color: inherit;
+  font: inherit;
+  line-height: 1.6;
+}
+
+.manual-prompt-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.manual-prompt-comparison > div {
+  min-width: 0;
+  padding: 0.85rem;
+  border-radius: 0.75rem;
+  background: #f6f8fa;
+}
+
+.manual-prompt-comparison p {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .manual-prompt-comparison {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .shot-summary-list,
   .shot-prompt-grid,

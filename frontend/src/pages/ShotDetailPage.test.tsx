@@ -204,6 +204,47 @@ const approvedInitialShot: ShotDetail = {
   })),
 };
 
+const reconciledManualShot: ShotDetail = {
+  project_id: "LEE柠檬",
+  shot_id: "shot_01",
+  status: "WAITING_REVIEW",
+  official_version: null,
+  pending_review_version: 2,
+  version_count: 2,
+  generation_count: 2,
+  versions: [
+    {
+      version: 2,
+      role: "PENDING_REVIEW",
+      review_status: "WAITING_REVIEW",
+      created_at: "2026-08-20T00:43:00+08:00",
+      prompt: {
+        version: 2,
+        source: "manual_edit",
+        visual_prompt_core: "edited manual visual core",
+        final_prompt: "edited manual final prompt",
+      },
+      generation: { model: "MiniMax-Hailuo-2.3", visual_input_mode: "NONE" },
+      video_available: true,
+    },
+    {
+      version: 1,
+      role: "HISTORY",
+      review_status: "REJECTED",
+      history_reason: "SUPERSEDED",
+      created_at: "2026-08-20T00:20:00+08:00",
+      prompt: {
+        version: 1,
+        source: "ai_generated",
+        visual_prompt_core: "original visual core",
+        final_prompt: "original final prompt",
+      },
+      generation: { model: "MiniMax-Hailuo-2.3", visual_input_mode: "NONE" },
+      video_available: true,
+    },
+  ],
+};
+
 function renderPage(path = "/projects/LEE%E6%9F%A0%E6%AA%AC/stages/shots/shot_01") {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -302,6 +343,130 @@ describe("ShotDetailPage", () => {
     expect(within(section!).queryByText(/Candidate/i)).not.toBeInTheDocument();
   });
 
+  it("keeps an initial pending version visible without leaking its status into the manual action", async () => {
+    const incidentShot: ShotDetail = {
+      ...waitingInitialShot,
+      versions: waitingInitialShot.versions.map((version) => ({
+        ...version,
+        prompt: { ...version.prompt, version: 1 },
+      })),
+    };
+    const oldInitialTask = {
+      task_id: "task_0123456789abcdef0123456789abcdef",
+      project_id: "LEE柠檬",
+      operation: "SHOT_GENERATE" as const,
+      target_id: "shot_01",
+      status: "SUCCEEDED" as const,
+      created_at: "2026-08-20T00:18:50Z",
+      started_at: "2026-08-20T00:18:50Z",
+      finished_at: "2026-08-20T00:21:20Z",
+      correlation_id: "req_old_initial",
+      error: null,
+      result: null,
+    };
+    mockGetShot.mockResolvedValue({ data: incidentShot, correlationId: "req_incident_shot" });
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [oldInitialTask] },
+      correlationId: "req_old_initial_task",
+    });
+    mockGetShotGenerationStatus.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", shot_id: "shot_01", state: "WAITING_REVIEW",
+        resume_available: false, resume_kind: null, video_version: 1,
+        provider_submission_known: true, generation_intent: "INITIAL",
+      },
+      correlationId: "req_initial_waiting_status",
+    });
+    mockGetShotGenerationOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        eligible: true,
+        shot: {
+          shot_id: "shot_01", duration_seconds: 6, prompt_version: 1,
+          resolution: "768P", pending_video_version: 1,
+          base_video_version: 1, next_prompt_version: 2, next_video_version: 2,
+        },
+        selection_modes: ["AUTO", "MANUAL"],
+        visual_input_modes: [
+          { mode: "none", display_name: "不使用参考图", description: "完全根据提示词生成。", compatible_model_ids: ["MiniMax-Hailuo-2.3"] },
+        ],
+        models: [{
+          model_id: "MiniMax-Hailuo-2.3", display_name: "MiniMax Hailuo 2.3",
+          provider: "minimax", provider_display_name: "MiniMax", api_version: "v1",
+          available: true, supported_visual_input_modes: ["none"], supported_resolutions: ["768P"],
+          supported_durations: [6], min_duration: null, max_duration: null,
+        }],
+        issues: [],
+        paid_call_required: true,
+      },
+      correlationId: "req_manual_options",
+    });
+
+    renderPage();
+    const pendingSection = (await screen.findByRole("heading", { name: "待审核新版本", level: 2 })).closest("section");
+    expect(within(pendingSection!).getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+
+    const manualSection = screen.getByRole("heading", { name: "手动编辑 Prompt 并生成" }).closest("section");
+    fireEvent.click(within(manualSection!).getByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await within(manualSection!).findByLabelText("视觉 Prompt 核心"), {
+      target: { value: "edited visual core" },
+    });
+    fireEvent.click(within(manualSection!).getByRole("button", { name: "继续检查生成配置" }));
+
+    expect(await within(manualSection!).findByRole("button", { name: "检查生成配置" })).toBeInTheDocument();
+    expect(within(manualSection!).getByText("此次将创建")).toBeInTheDocument();
+    expect(within(manualSection!).getByText("生成将使用")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("视频已生成，正在刷新镜头");
+    expect(within(pendingSection!).getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+  });
+
+  it("restores a completed manual v002 from durable Shot state despite its old failed task", async () => {
+    const failedTask = {
+      task_id: "task_fedcba9876543210fedcba9876543210",
+      project_id: "LEE柠檬",
+      operation: "SHOT_REGENERATE" as const,
+      target_id: "shot_01",
+      status: "FAILED" as const,
+      created_at: "2026-08-20T00:40:00Z",
+      started_at: "2026-08-20T00:40:01Z",
+      finished_at: "2026-08-20T00:43:01Z",
+      correlation_id: "req_old_failed_result_reference",
+      error: {
+        code: "SHOT_GENERATION_FAILED",
+        message: "镜头生成结果无法安全处理。",
+        retryable: false,
+      },
+      result: null,
+    };
+    mockGetShot.mockResolvedValue({ data: reconciledManualShot, correlationId: "req_reconciled_shot" });
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [failedTask] },
+      correlationId: "req_failed_task_history",
+    });
+    mockGetShotGenerationStatus.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", shot_id: "shot_01", state: "WAITING_REVIEW",
+        resume_available: false, resume_kind: null, video_version: 2,
+        provider_submission_known: true,
+        generation_intent: "REGENERATE_MANUAL_PROMPT",
+      },
+      correlationId: "req_reconciled_status",
+    });
+
+    renderPage();
+
+    const pending = (await screen.findByRole("heading", { name: "待审核新版本", level: 2 })).closest("section");
+    expect(within(pending!).getByRole("heading", { name: "Video v2 / Prompt v2" })).toBeInTheDocument();
+    expect(within(pending!).getByLabelText("Video v2 预览")).toHaveAttribute("controls");
+    const history = screen.getByRole("heading", { name: "历史版本", level: 2 }).closest("section");
+    expect(within(history!).getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+    expect(within(history!).getByLabelText("Video v1 预览")).toHaveAttribute("controls");
+    expect(document.body).not.toHaveTextContent("镜头生成结果无法安全处理。");
+    expect(screen.queryByRole("button", { name: "继续生成" })).not.toBeInTheDocument();
+    expect(mockApproveShot).not.toHaveBeenCalled();
+    expect(mockSetOfficialShotVersion).not.toHaveBeenCalled();
+  });
+
   it("approves an initial v001, refreshes it as official, and keeps video controls", async () => {
     mockGetShot
       .mockResolvedValueOnce({ data: waitingInitialShot, correlationId: "req_waiting" })
@@ -368,7 +533,9 @@ describe("ShotDetailPage", () => {
       .mockResolvedValueOnce({ data: switchableShot, correlationId: "req_before_switch" })
       .mockResolvedValue({ data: switchedShot, correlationId: "req_after_switch" });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "设为正式版本" }));
+    const setOfficial = await screen.findByRole("button", { name: "设为正式版本" });
+    await waitFor(() => expect(setOfficial).toBeEnabled());
+    fireEvent.click(setOfficial);
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveTextContent("当前正式版本v2");
     expect(dialog).toHaveTextContent("目标版本v1");
@@ -473,8 +640,9 @@ describe("ShotDetailPage", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Shot 01", level: 1 });
     expect(screen.getByRole("heading", { name: "用当前 Prompt 重新生成" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑 Prompt 并生成新版本" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /拒绝|选择正式|编辑|删除/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /拒绝|选择正式|删除/ })).not.toBeInTheDocument();
   });
 
   it("confirms replacing an official version while retaining it as history", async () => {

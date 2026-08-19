@@ -163,6 +163,7 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
         fake = FakeCoreVideoGenerator()
         output = self.generate(fake)
         self.assertTrue(output.is_file())
+        self.assertEqual(output, self.paths.shot_version_video_path(1, 1))
         self.assertEqual(fake.submit_calls, 1)
         self.assertEqual(fake.events, ["submitting", "submitted", "file_ready", "downloaded"])
         entry = self.checkpoint.shot_checkpoint(1)
@@ -190,6 +191,7 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
             video_generate=resumed,
         )
         self.assertTrue(output.is_file())
+        self.assertEqual(output, self.paths.shot_version_video_path(1, 1))
         self.assertEqual(resumed.submit_calls, 0)
         self.assertEqual(self.checkpoint.shot_checkpoint(1)["generation_count"], 1)
 
@@ -252,7 +254,8 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
 
     def test_06_unapproved_review_regenerates_video_without_new_prompt(self):
         self.generate(FakeCoreVideoGenerator())
-        self.regenerate(FakeCoreVideoGenerator())
+        output = self.regenerate(FakeCoreVideoGenerator())
+        self.assertEqual(output, self.paths.shot_version_video_path(1, 2))
         entry = self.checkpoint.shot_checkpoint(1)
         self.assertEqual(entry["active_video_version"], 2)
         self.assertIsNone(entry["approved_video_version"])
@@ -273,7 +276,8 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
             name: (self.paths.shot_version_dir(1, 1) / name).read_bytes()
             for name in ("video.mp4", "prompt.json", "safety.json", "generation.json")
         }
-        self.regenerate(FakeCoreVideoGenerator())
+        output = self.regenerate(FakeCoreVideoGenerator())
+        self.assertEqual(output, self.paths.shot_version_video_path(1, 2))
         entry = self.checkpoint.shot_checkpoint(1)
         self.assertEqual(entry["approved_video_version"], 1)
         self.assertEqual(entry["candidate"]["video_version"], 2)
@@ -298,7 +302,7 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
         with self.assertRaises(VideoProviderError):
             self.regenerate(first)
         resumed = FakeCoreVideoGenerator()
-        resume_shot_generation(
+        output = resume_shot_generation(
             paths=self.paths,
             checkpoint=self.checkpoint,
             plan=self.plan,
@@ -309,6 +313,7 @@ class ShotGenerationWorkflowTests(unittest.TestCase):
             task_logger=self.logger,
             video_generate=resumed,
         )
+        self.assertEqual(output, self.paths.shot_version_video_path(1, 2))
         self.assertEqual(resumed.submit_calls, 0)
         entry = self.checkpoint.shot_checkpoint(1)
         self.assertEqual(entry["generation_count"], 2)

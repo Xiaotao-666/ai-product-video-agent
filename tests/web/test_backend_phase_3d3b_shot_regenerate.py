@@ -10,6 +10,7 @@ from unittest.mock import patch
 import tests.web.test_backend_phase_3d2_shot_generation as phase3d2
 from project_manager import create_project_paths
 from project_state import ProjectCheckpoint
+from shot_storage import ShotStorageError
 from shot_approval_workflow import approve_shot_stage
 from shot_generation_workflow import (
     generate_initial_shot,
@@ -20,6 +21,8 @@ from task_logger import TaskLogger
 from tests.test_shot_generation_workflow import FakeCoreVideoGenerator
 from visual_input import none_visual_input
 from web_backend.models.tasks import TaskOperation, TaskRecord, TaskStatus
+from web_backend.models.generation import GenerationIntent as WebGenerationIntent
+from web_backend.services.shot_generation import _resolve_completed_generation_version
 
 
 class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
@@ -42,7 +45,7 @@ class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
         )
         return paths, checkpoint, board, plan
 
-    def _generate_and_approve_v1(self) -> None:
+    def _generate_v1(self) -> None:
         paths, checkpoint, board, plan = self._core()
         generate_initial_shot(
             paths=paths,
@@ -56,6 +59,10 @@ class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
             task_logger=TaskLogger(paths),
             video_generate=FakeCoreVideoGenerator(),
         )
+
+    def _generate_and_approve_v1(self) -> None:
+        self._generate_v1()
+        paths, checkpoint, _board, _plan = self._core()
         approve_shot_stage(paths=paths, checkpoint=checkpoint, shot_id=1)
 
     @staticmethod
@@ -104,6 +111,9 @@ class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
                 task = self.wait_terminal(response.json()["task_id"])
                 self.assertEqual(task.status.value, "SUCCEEDED")
                 core.assert_called_once()
+                self.last_task = task
+            else:
+                self.last_task = None
             return response
 
     def test_01_options_and_preflight_expose_current_and_next_versions(self) -> None:
@@ -149,6 +159,7 @@ class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
         response = self._regenerate(FakeCoreVideoGenerator())
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["operation"], "SHOT_REGENERATE")
+        self.assertEqual(self.last_task.result.version, 2)
 
         detail = self.client.get("/api/projects/project-a/shots/shot_01").json()
         self.assertEqual(detail["official_version"], 1)
@@ -287,6 +298,53 @@ class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
         self.assertEqual(listed.json()["tasks"][0]["target_id"], "shot_01")
         self.assertEqual(task_path.read_bytes(), before_task)
         self.assertEqual(project_path.read_bytes(), before_project)
+
+    def test_08_unapproved_active_review_regeneration_returns_new_active_version(self) -> None:
+        self._generate_v1()
+        first_fake = FakeCoreVideoGenerator()
+        first = self._regenerate(first_fake)
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(self.last_task.result.version, 2)
+        self.assertEqual(first_fake.submit_calls, 1)
+
+        entry = json.loads(
+            (self.project_dir / "project.json").read_text(encoding="utf-8")
+        )["video_generation"]["shots"]["1"]
+        self.assertIsNone(entry["approved_video_version"])
+        self.assertEqual(entry["active_video_version"], 2)
+        self.assertEqual(entry["status"], "WAITING_REVIEW")
+        self.assertEqual(entry["candidate"]["status"], "NONE")
+
+        second_fake = FakeCoreVideoGenerator()
+        second = self._regenerate(second_fake)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(self.last_task.result.version, 3)
+        self.assertEqual(second_fake.submit_calls, 1)
+        final = json.loads(
+            (self.project_dir / "project.json").read_text(encoding="utf-8")
+        )["video_generation"]["shots"]["1"]
+        self.assertEqual(final["active_video_version"], 3)
+        self.assertEqual(final["generation_count"], 3)
+        self.assertEqual(final["candidate"]["status"], "NONE")
+        paths, checkpoint, _board, _plan = self._core()
+        self.assertEqual(
+            _resolve_completed_generation_version(
+                paths=paths,
+                checkpoint=checkpoint,
+                shot_id=1,
+                output=paths.shot_version_video_path(1, 3),
+                expected_intent=WebGenerationIntent.REGENERATE_CURRENT_PROMPT,
+            ),
+            3,
+        )
+        with self.assertRaises(ShotStorageError):
+            _resolve_completed_generation_version(
+                paths=paths,
+                checkpoint=checkpoint,
+                shot_id=1,
+                output=paths.shot_version_video_path(1, 2),
+                expected_intent=WebGenerationIntent.REGENERATE_CURRENT_PROMPT,
+            )
 
 
 if __name__ == "__main__":

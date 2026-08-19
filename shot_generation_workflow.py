@@ -17,11 +17,18 @@ from project_state import (
 )
 from prompt_generator import PromptSafetyReview, review_prompt_safety
 from shot_review import (
+    ShotReviewError,
     active_prompt_payload,
     active_prompt_safety,
+    create_manual_prompt_version,
     save_safety_to_active_prompt,
 )
-from storyboard import StoryboardShot, VideoPromptPlan
+from storyboard import (
+    CreativeBrief,
+    StoryboardShot,
+    VideoPromptPlan,
+    VideoPromptStructureError,
+)
 from task_logger import TaskLogger
 from video_generation_request import ProviderSelection
 from video_generator import (
@@ -57,9 +64,14 @@ class CurrentPromptRegenerationNotAllowed(ShotGenerationWorkflowError):
     pass
 
 
+class ManualPromptRegenerationNotAllowed(ShotGenerationWorkflowError):
+    pass
+
+
 class GenerationIntent(StrEnum):
     INITIAL_GENERATION = "INITIAL_GENERATION"
     REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
+    REGENERATE_MANUAL_PROMPT = "REGENERATE_MANUAL_PROMPT"
 
 
 SafetyReview = Callable[[str, str, TaskLogger | None, str], PromptSafetyReview]
@@ -350,6 +362,123 @@ def regenerate_shot_with_current_prompt(
 ) -> Path:
     """Create one new Video version while preserving the current Prompt version."""
 
+    return _regenerate_shot_with_prompt(
+        paths=paths,
+        checkpoint=checkpoint,
+        plan=plan,
+        shot=shot,
+        shot_id=shot_id,
+        visual_input=visual_input,
+        deepseek_key=deepseek_key,
+        provider_credentials=provider_credentials,
+        task_logger=task_logger,
+        provider_selection=provider_selection,
+        provider_registry=provider_registry,
+        safety_review=safety_review,
+        video_generate=video_generate,
+        prompt_version_override=None,
+        generation_intent=GenerationIntent.REGENERATE_CURRENT_PROMPT,
+        candidate_source="same_prompt",
+    )
+
+
+def regenerate_shot_with_manual_prompt(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    brief: CreativeBrief,
+    shot: StoryboardShot,
+    shot_id: int,
+    base_prompt_version: int,
+    edited_visual_prompt_core: str,
+    visual_input: dict[str, Any],
+    deepseek_key: str,
+    provider_credentials: Mapping[str, Any] | str | None,
+    task_logger: TaskLogger,
+    product_name: str | None = None,
+    provider_selection: ProviderSelection | None = None,
+    provider_registry: VideoProviderRegistry | None = None,
+    safety_review: SafetyReview = review_prompt_safety,
+    video_generate: VideoGenerate = generate_video,
+) -> Path:
+    """Persist a new manual Prompt and generate one Video bound to its snapshot."""
+
+    entry = checkpoint.shot_checkpoint(shot_id)
+    approved_video = entry.get("approved_video_version")
+    candidate_status = checkpoint.candidate_status(shot_id)
+    allowed = (
+        checkpoint.shot_status(shot_id) is ShotStatus.WAITING_REVIEW
+        and approved_video is None
+        and int(entry.get("active_video_version") or 0) > 0
+    ) or (
+        checkpoint.shot_status(shot_id) is ShotStatus.APPROVED
+        and approved_video is not None
+        and candidate_status is not CandidateStatus.GENERATING
+        and not bool(checkpoint.candidate_checkpoint(shot_id).get("submission_unknown"))
+        and str(
+            checkpoint.candidate_checkpoint(shot_id).get("generation_phase") or ""
+        ).upper()
+        != "SUBMISSION_UNKNOWN"
+    )
+    if not allowed:
+        raise ManualPromptRegenerationNotAllowed(
+            "The Shot is not eligible for manual Prompt regeneration."
+        )
+    try:
+        prompt_payload = create_manual_prompt_version(
+            paths=paths,
+            checkpoint=checkpoint,
+            plan=plan,
+            shot=shot,
+            shot_id=shot_id,
+            base_prompt_version=base_prompt_version,
+            edited_visual_prompt_core=edited_visual_prompt_core,
+            task_logger=task_logger,
+            global_constraints=brief.global_constraints,
+            product_name=product_name,
+        )
+    except (ShotReviewError, VideoPromptStructureError) as error:
+        raise ManualPromptRegenerationNotAllowed(str(error)) from error
+    return _regenerate_shot_with_prompt(
+        paths=paths,
+        checkpoint=checkpoint,
+        plan=plan,
+        shot=shot,
+        shot_id=shot_id,
+        visual_input=visual_input,
+        deepseek_key=deepseek_key,
+        provider_credentials=provider_credentials,
+        task_logger=task_logger,
+        provider_selection=provider_selection,
+        provider_registry=provider_registry,
+        safety_review=safety_review,
+        video_generate=video_generate,
+        prompt_version_override=int(prompt_payload["version"]),
+        generation_intent=GenerationIntent.REGENERATE_MANUAL_PROMPT,
+        candidate_source="manual_prompt",
+    )
+
+
+def _regenerate_shot_with_prompt(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    shot: StoryboardShot,
+    shot_id: int,
+    visual_input: dict[str, Any],
+    deepseek_key: str,
+    provider_credentials: Mapping[str, Any] | str | None,
+    task_logger: TaskLogger,
+    provider_selection: ProviderSelection | None = None,
+    provider_registry: VideoProviderRegistry | None = None,
+    safety_review: SafetyReview = review_prompt_safety,
+    video_generate: VideoGenerate = generate_video,
+    prompt_version_override: int | None,
+    generation_intent: GenerationIntent,
+    candidate_source: str,
+) -> Path:
     entry = checkpoint.shot_checkpoint(shot_id)
     status = checkpoint.shot_status(shot_id)
     approved_video = entry.get("approved_video_version")
@@ -388,7 +517,7 @@ def regenerate_shot_with_current_prompt(
         entry["visual_input_selected"] = True
         checkpoint.prepare_shot_generation(
             shot_id,
-            generation_intent=GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
+            generation_intent=generation_intent.value,
         )
     else:
         if status is not ShotStatus.APPROVED:
@@ -397,7 +526,12 @@ def regenerate_shot_with_current_prompt(
             )
         candidate = checkpoint.candidate_checkpoint(shot_id)
         candidate_status = checkpoint.candidate_status(shot_id)
-        if candidate_status is CandidateStatus.GENERATING:
+        if (
+            candidate_status is CandidateStatus.GENERATING
+            or bool(candidate.get("submission_unknown"))
+            or str(candidate.get("generation_phase") or "").upper()
+            == "SUBMISSION_UNKNOWN"
+        ):
             raise CurrentPromptRegenerationNotAllowed(
                 "A pending generation is already in progress."
             )
@@ -430,7 +564,8 @@ def regenerate_shot_with_current_prompt(
                     user_action="regenerate_current_prompt",
                 )
         prompt_version = int(
-            candidate.get("prompt_version")
+            prompt_version_override
+            or candidate.get("prompt_version")
             or entry.get("approved_prompt_version")
             or entry.get("active_prompt_version")
             or 0
@@ -447,13 +582,13 @@ def regenerate_shot_with_current_prompt(
                 "base_approved_video_version": entry.get("approved_video_version"),
                 "prompt_version": prompt_version,
                 "visual_input": visual,
-                "source": "same_prompt",
+                "source": candidate_source,
             }
         )
         entry["candidate"] = fresh
         checkpoint.prepare_candidate_generation(
             shot_id,
-            generation_intent=GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
+            generation_intent=generation_intent.value,
         )
 
     return continue_shot_generation(
@@ -494,7 +629,10 @@ def resume_shot_generation(
     candidate_lane = (
         candidate_version > 0
         and str(candidate.get("generation_intent") or "")
-        == GenerationIntent.REGENERATE_CURRENT_PROMPT.value
+        in {
+            GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
+            GenerationIntent.REGENERATE_MANUAL_PROMPT.value,
+        }
         and checkpoint.candidate_status(shot_id)
         in {CandidateStatus.GENERATING, CandidateStatus.FAILED}
     )

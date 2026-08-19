@@ -9,21 +9,24 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from project_manager import create_project_paths
+from project_manager import ProjectPaths, create_project_paths
 from project_state import ProjectCheckpoint, ProjectStateError
 from prompt_generator import PromptGenerationError
+from shot_storage import ShotStorageError, read_bundle_json, validate_bundle
 from shot_generation_workflow import (
     CurrentPromptRegenerationNotAllowed,
     InitialShotGenerationNotAllowed,
+    ManualPromptRegenerationNotAllowed,
     ShotGenerationResumeUnavailable,
     ShotGenerationWorkflowError,
     ShotPromptSafetyRejected,
     ShotPromptSafetyUnavailable,
     generate_initial_shot,
     regenerate_shot_with_current_prompt,
+    regenerate_shot_with_manual_prompt,
     resume_shot_generation,
 )
-from storyboard import Storyboard, StoryboardShot, VideoPromptPlan
+from storyboard import CreativeBrief, Storyboard, StoryboardShot, VideoPromptPlan
 from task_logger import TaskLogger
 from video_generation_request import ProviderSelection
 from video_generator import ProviderSubmissionUnknownError
@@ -102,6 +105,95 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return result if result > 0 else None
+
+
+def _resolve_completed_generation_version(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    shot_id: int,
+    output: Path,
+    expected_intent: GenerationIntent | None,
+) -> int:
+    """Reconcile a Core generation result with its durable review-ready Bundle."""
+
+    output_path = output.resolve(strict=True)
+    if not output_path.is_file() or output_path.stat().st_size <= 0:
+        raise ShotStorageError("Core generation output is missing or empty.")
+
+    entry = checkpoint.shot_checkpoint(shot_id)
+    generations = [
+        item
+        for item in entry.get("generation_versions", [])
+        if isinstance(item, Mapping)
+    ]
+    matches: list[tuple[int, Mapping[str, Any]]] = []
+    for generation_record in generations:
+        version = _positive_int(generation_record.get("video_version"))
+        if version is None:
+            continue
+        canonical = paths.shot_version_video_path(shot_id, version).resolve()
+        if canonical == output_path:
+            matches.append((version, generation_record))
+    if len(matches) != 1:
+        raise ShotStorageError("Core generation output has no unique durable version.")
+    version, generation_record = matches[0]
+
+    candidate = _mapping(entry.get("candidate"))
+    candidate_lane = (
+        str(candidate.get("status") or "").upper() == "WAITING_REVIEW"
+        and _positive_int(candidate.get("video_version")) == version
+    )
+    active_review_lane = (
+        str(entry.get("status") or "").upper() == "WAITING_REVIEW"
+        and _positive_int(entry.get("active_video_version")) == version
+    )
+    if candidate_lane == active_review_lane:
+        raise ShotStorageError("Completed generation is not in one review-ready lane.")
+
+    lane = candidate if candidate_lane else entry
+    lane_prompt_version = _positive_int(
+        lane.get("prompt_version")
+        if candidate_lane
+        else entry.get("active_prompt_version")
+    )
+    lane_intent = str(lane.get("generation_intent") or "")
+    record_intent = str(generation_record.get("generation_intent") or "")
+    expected_intent_value = (
+        "INITIAL_GENERATION"
+        if expected_intent is GenerationIntent.INITIAL
+        else expected_intent.value
+        if expected_intent is not None
+        else record_intent
+    )
+    if (
+        not expected_intent_value
+        or lane_intent != expected_intent_value
+        or record_intent != expected_intent_value
+    ):
+        raise ShotStorageError("Completed generation intent is inconsistent.")
+
+    bundle = validate_bundle(paths, shot_id, version, require_video=True)
+    read_bundle_json(paths, shot_id, version, "safety.json")
+    prompt = _mapping(bundle.get("prompt"))
+    generation = _mapping(bundle.get("generation"))
+    review = _mapping(bundle.get("review"))
+    prompt_version = _positive_int(prompt.get("prompt_version"))
+    if (
+        prompt_version is None
+        or prompt_version != lane_prompt_version
+        or prompt_version != _positive_int(generation_record.get("prompt_version"))
+        or checkpoint.prompt_version(shot_id, prompt_version) is None
+        or str(generation.get("status") or "").upper() != "WAITING_REVIEW"
+        or str(generation.get("generation_intent") or "") != expected_intent_value
+        or bool(generation.get("submission_unknown"))
+        or not generation.get("completed_at")
+        or str(generation_record.get("status") or "").upper() != "WAITING_REVIEW"
+        or not generation_record.get("completed_at")
+        or str(review.get("review_result") or "").upper() != "WAITING_REVIEW"
+    ):
+        raise ShotStorageError("Completed generation Bundle is inconsistent.")
+    return version
 
 
 class ShotGenerationActionService:
@@ -195,13 +287,23 @@ class ShotGenerationActionService:
     ) -> TaskRecord:
         if not payload.confirm_paid_call:
             raise PaidCallConfirmationRequired("paid call was not confirmed")
-        if payload.intent is not GenerationIntent.REGENERATE_CURRENT_PROMPT:
+        if payload.intent not in {
+            GenerationIntent.REGENERATE_CURRENT_PROMPT,
+            GenerationIntent.REGENERATE_MANUAL_PROMPT,
+        }:
             raise GenerationPreflightStale("regeneration intent is invalid")
         canonical_project_id = self._project_repository.get_project(project_id).project_id
         canonical_shot_id, _shot_number = normalize_shot_id(shot_id)
         preflight_payload = GenerationPreflightRequest.model_validate(
             payload.model_dump(
-                include={"intent", "model_selection", "requested_model", "visual_input"}
+                include={
+                    "intent",
+                    "model_selection",
+                    "requested_model",
+                    "visual_input",
+                    "base_prompt_version",
+                    "edited_prompt",
+                }
             )
         )
         current = self._preflight_service.preflight(
@@ -248,7 +350,7 @@ class ShotGenerationActionService:
         candidate_active = (
             candidate_status not in {"NONE", "EDITING"}
             and str(candidate.get("generation_intent") or "")
-            == "REGENERATE_CURRENT_PROMPT"
+            in {"REGENERATE_CURRENT_PROMPT", "REGENERATE_MANUAL_PROMPT"}
         )
         status = str(
             candidate.get("status") if candidate_active else entry.get("status") or "NOT_STARTED"
@@ -339,10 +441,18 @@ class ShotGenerationActionService:
             video_version=version,
             provider_submission_known=not submission_unknown,
             generation_intent=(
-                GenerationIntent.REGENERATE_CURRENT_PROMPT
+                GenerationIntent.REGENERATE_MANUAL_PROMPT
+                if str(
+                    candidate.get("generation_intent")
+                    if candidate_active
+                    else entry.get("generation_intent")
+                    or ""
+                ) == "REGENERATE_MANUAL_PROMPT"
+                else GenerationIntent.REGENERATE_CURRENT_PROMPT
                 if candidate_active
                 or (active_for_shot and active.operation is TaskOperation.SHOT_REGENERATE)
-                or str(entry.get("generation_intent") or "") == "REGENERATE_CURRENT_PROMPT"
+                or str(entry.get("generation_intent") or "")
+                in {"REGENERATE_CURRENT_PROMPT", "REGENERATE_MANUAL_PROMPT"}
                 else GenerationIntent.INITIAL
                 if entry.get("generation_intent")
                 else None
@@ -384,6 +494,7 @@ class ShotGenerationActionService:
             visual_input=visual_input,
             provider_selection=provider_selection,
             regenerate=regenerate,
+            preflight_payload=payload,
         )
 
     def _run_resume(self, project_id: str, shot_id: str) -> TaskResultReference:
@@ -399,6 +510,7 @@ class ShotGenerationActionService:
             visual_input=None,
             provider_selection=None,
             regenerate=False,
+            preflight_payload=None,
         )
 
     def _execute(
@@ -410,6 +522,7 @@ class ShotGenerationActionService:
         visual_input: dict[str, Any] | None,
         provider_selection: ProviderSelection | None,
         regenerate: bool,
+        preflight_payload: GenerationPreflightRequest | None,
     ) -> TaskResultReference:
         _canonical, shot_number = normalize_shot_id(shot_id)
         try:
@@ -422,6 +535,14 @@ class ShotGenerationActionService:
             )
             plan = VideoPromptPlan.model_validate_json(
                 paths.video_prompts_path().read_text(encoding="utf-8")
+            )
+            brief = (
+                CreativeBrief.model_validate_json(
+                    paths.creative_brief_path().read_text(encoding="utf-8")
+                )
+                if preflight_payload is not None
+                and preflight_payload.intent is GenerationIntent.REGENERATE_MANUAL_PROMPT
+                else None
             )
             shot = next(item for item in board.shots if item.shot_id == shot_number)
         except (OSError, StopIteration, ValidationError, ProjectStateError):
@@ -450,7 +571,34 @@ class ShotGenerationActionService:
                 )
                 if resume
                 else (
-                    regenerate_shot_with_current_prompt(
+                    regenerate_shot_with_manual_prompt(
+                        paths=paths,
+                        checkpoint=checkpoint,
+                        plan=plan,
+                        brief=brief,
+                        shot=shot,
+                        shot_id=shot_number,
+                        base_prompt_version=int(
+                            preflight_payload.base_prompt_version or 0
+                        ),
+                        edited_visual_prompt_core=str(
+                            preflight_payload.edited_prompt or ""
+                        ),
+                        visual_input=visual_input or none_visual_input(),
+                        deepseek_key=deepseek_key,
+                        provider_credentials=credentials,
+                        task_logger=logger,
+                        product_name=str(
+                            checkpoint.data.get("request", {}).get("product_name") or ""
+                        ) or None,
+                        provider_selection=provider_selection,
+                        provider_registry=registry,
+                    )
+                    if regenerate
+                    and preflight_payload is not None
+                    and preflight_payload.intent
+                    is GenerationIntent.REGENERATE_MANUAL_PROMPT
+                    else regenerate_shot_with_current_prompt(
                         paths=paths,
                         checkpoint=checkpoint,
                         plan=plan,
@@ -487,6 +635,7 @@ class ShotGenerationActionService:
         except (
             CurrentPromptRegenerationNotAllowed,
             InitialShotGenerationNotAllowed,
+            ManualPromptRegenerationNotAllowed,
             ShotGenerationResumeUnavailable,
         ):
             _task_failure("ACTION_NOT_ALLOWED", "当前镜头状态不允许执行此操作。")
@@ -517,14 +666,17 @@ class ShotGenerationActionService:
                 retryable=False,
             )
 
-        completed_entry = checkpoint.shot_checkpoint(shot_number)
-        completed_candidate = _mapping(completed_entry.get("candidate"))
-        version = _positive_int(
-            completed_candidate.get("video_version")
-            if regenerate or completed_candidate.get("status") == "WAITING_REVIEW"
-            else completed_entry.get("active_video_version")
-        )
-        if version is None or not output.is_file():
+        try:
+            version = _resolve_completed_generation_version(
+                paths=paths,
+                checkpoint=checkpoint,
+                shot_id=shot_number,
+                output=output,
+                expected_intent=(
+                    preflight_payload.intent if preflight_payload is not None else None
+                ),
+            )
+        except (OSError, TypeError, ValueError, ShotStorageError):
             _task_failure(
                 "SHOT_GENERATION_FAILED",
                 "镜头生成结果无法安全处理。",

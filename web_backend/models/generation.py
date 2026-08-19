@@ -21,6 +21,7 @@ class ModelSelectionMode(StrEnum):
 class GenerationIntent(StrEnum):
     INITIAL = "INITIAL"
     REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
+    REGENERATE_MANUAL_PROMPT = "REGENERATE_MANUAL_PROMPT"
 
 
 class GenerationVisualInputMode(StrEnum):
@@ -44,6 +45,10 @@ class GenerationIssueCode(StrEnum):
     INVALID_RESOLUTION = "INVALID_RESOLUTION"
     VISUAL_INPUT_ASSET_NOT_ALLOWED = "VISUAL_INPUT_ASSET_NOT_ALLOWED"
     VISUAL_INPUT_ASSET_COUNT_INVALID = "VISUAL_INPUT_ASSET_COUNT_INVALID"
+    PROMPT_EMPTY = "PROMPT_EMPTY"
+    PROMPT_INVALID = "PROMPT_INVALID"
+    PROMPT_UNCHANGED = "PROMPT_UNCHANGED"
+    PROMPT_BASE_STALE = "PROMPT_BASE_STALE"
 
 
 class GenerationIssue(ResponseModel):
@@ -59,6 +64,8 @@ class GenerationShotContext(ResponseModel):
     official_video_version: int | None = None
     pending_video_version: int | None = None
     next_video_version: int | None = None
+    base_video_version: int | None = None
+    next_prompt_version: int | None = None
 
 
 class GenerationModelOption(ResponseModel):
@@ -134,6 +141,8 @@ class GenerationPreflightRequest(BaseModel):
     model_selection: ModelSelectionMode
     requested_model: str | None = Field(default=None, max_length=200)
     visual_input: GenerationVisualInputRequest
+    base_prompt_version: int | None = Field(default=None, ge=1)
+    edited_prompt: str | None = Field(default=None, max_length=12000)
 
     @model_validator(mode="after")
     def validate_selection(self) -> "GenerationPreflightRequest":
@@ -142,6 +151,15 @@ class GenerationPreflightRequest(BaseModel):
                 raise ValueError("requested_model is required for MANUAL selection")
         elif self.requested_model is not None:
             raise ValueError("requested_model must be null for AUTO selection")
+        if self.intent is GenerationIntent.REGENERATE_MANUAL_PROMPT:
+            if self.base_prompt_version is None or self.edited_prompt is None:
+                raise ValueError(
+                    "base_prompt_version and edited_prompt are required for manual Prompt regeneration"
+                )
+        elif self.base_prompt_version is not None or self.edited_prompt is not None:
+            raise ValueError(
+                "manual Prompt fields are only valid for manual Prompt regeneration"
+            )
         return self
 
 

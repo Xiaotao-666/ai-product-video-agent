@@ -13,7 +13,15 @@ from project_state import ProjectCheckpoint, ProjectStage, ShotStatus, now_iso
 from prompt_generator import PromptSafetyReview, ProductVideoRequest
 from review_manager import ReviewRecorder, TaskCancelled
 from shot_approval_workflow import approve_shot_stage
-from storyboard import CreativeBrief, ShotVideoPrompt, StoryboardShot, VideoPromptPlan
+from storyboard import (
+    CreativeBrief,
+    GlobalConstraints,
+    ShotVideoPrompt,
+    StoryboardShot,
+    VideoPromptPlan,
+    compile_manual_visual_prompt,
+    extract_visual_prompt_core,
+)
 from task_logger import TaskLogger
 from video_history import video_history_menu
 
@@ -59,7 +67,9 @@ def create_prompt_version(
     user_feedback: str | None = None,
     parent_version: int | None = None,
     original_prompt: str | None = None,
+    visual_prompt_core: str | None = None,
     persist_plan: bool = True,
+    preserve_video_bundles: bool = False,
 ) -> dict:
     if source not in {"ai_generated", "ai_revision", "manual_edit"}:
         raise ShotReviewError(f"未知 Prompt 来源：{source}")
@@ -88,6 +98,11 @@ def create_prompt_version(
         "source": source,
         "created_at": now_iso(),
         "prompt": prompt,
+        "visual_prompt_core": (
+            visual_prompt_core.strip()
+            if isinstance(visual_prompt_core, str) and visual_prompt_core.strip()
+            else None
+        ),
         "original_prompt": original_prompt if source == "manual_edit" else None,
         "edited_prompt": prompt if source == "manual_edit" else None,
         "parent_version": parent,
@@ -96,9 +111,16 @@ def create_prompt_version(
         "safety_checked_at": None,
     }
     if persist_plan:
-        _prompt_item(plan, shot_id).video_prompt = prompt
+        item = _prompt_item(plan, shot_id)
+        item.video_prompt = prompt
+        if payload["visual_prompt_core"] is not None:
+            item.visual_prompt_core = payload["visual_prompt_core"]
         _persist_prompt_plan(paths, plan)
-    checkpoint.save_prompt_version(shot_id, payload)
+    (
+        checkpoint.save_prompt_version_metadata(shot_id, payload)
+        if preserve_video_bundles
+        else checkpoint.save_prompt_version(shot_id, payload)
+    )
     if task_logger is not None:
         task_logger.event(
             "PROMPT_VERSION_CREATED",
@@ -110,6 +132,56 @@ def create_prompt_version(
             generation_count=entry.get("generation_count", 0),
         )
     return payload
+
+
+def create_manual_prompt_version(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    shot: StoryboardShot,
+    shot_id: int,
+    base_prompt_version: int,
+    edited_visual_prompt_core: str,
+    task_logger: TaskLogger | None,
+    global_constraints: GlobalConstraints | None = None,
+    product_name: str | None = None,
+) -> dict:
+    """Create one immutable manual Prompt version from the current active base."""
+
+    entry = checkpoint.shot_checkpoint(shot_id)
+    active_version = int(entry.get("active_prompt_version") or 0)
+    if active_version <= 0 or active_version != int(base_prompt_version):
+        raise ShotReviewError("手动编辑所基于的 Prompt version 已发生变化。")
+    original = checkpoint.prompt_version(shot_id, active_version)
+    if not isinstance(original, dict) or not str(original.get("prompt") or "").strip():
+        raise ShotReviewError("当前 Prompt version 无法用于手动编辑。")
+    original_core = str(
+        original.get("visual_prompt_core")
+        or extract_visual_prompt_core(str(original["prompt"]))
+    ).strip()
+    edited_core = str(edited_visual_prompt_core or "").strip()
+    final_prompt = compile_manual_visual_prompt(
+        edited_core,
+        shot,
+        global_constraints,
+        product_name,
+    )
+    if edited_core == original_core:
+        raise ShotReviewError("Prompt 没有发生变化。")
+    return create_prompt_version(
+        paths,
+        checkpoint,
+        plan,
+        shot_id,
+        final_prompt,
+        "manual_edit",
+        task_logger,
+        parent_version=active_version,
+        original_prompt=str(original["prompt"]),
+        visual_prompt_core=edited_core,
+        preserve_video_bundles=True,
+    )
 
 
 def create_prompt_plan_versions(
@@ -156,6 +228,12 @@ def create_prompt_plan_versions(
                     "source": source,
                     "created_at": now_iso(),
                     "prompt": prompt,
+                    "visual_prompt_core": (
+                        item.visual_prompt_core.strip()
+                        if isinstance(item.visual_prompt_core, str)
+                        and item.visual_prompt_core.strip()
+                        else extract_visual_prompt_core(prompt)
+                    ),
                     "original_prompt": None,
                     "edited_prompt": None,
                     "parent_version": parent,
@@ -206,6 +284,10 @@ def ensure_initial_prompt_versions(
             "ai_generated",
             task_logger,
             parent_version=None,
+            visual_prompt_core=(
+                item.visual_prompt_core
+                or extract_visual_prompt_core(item.video_prompt)
+            ),
             persist_plan=persist_plan,
         )
 
@@ -251,7 +333,7 @@ def save_safety_to_active_prompt(
     payload["safety_is_safe"] = safety.is_safe
     payload["safety_risk_notes"] = safety.risk_notes
     payload["safety_checked_at"] = now_iso()
-    checkpoint.save_prompt_version(shot_id, payload)
+    checkpoint.save_prompt_version_metadata(shot_id, payload)
 
 
 def active_prompt_safety(

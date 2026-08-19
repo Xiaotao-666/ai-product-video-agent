@@ -1766,6 +1766,57 @@ describe("API client", () => {
     expect(String(init.body).toLowerCase()).not.toContain("api_key");
   });
 
+  it("preserves manual Prompt intent, text, and Backend-owned next versions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(responseOf({
+      ready: true,
+      shot: {
+        shot_id: "shot_01",
+        duration_seconds: 6,
+        prompt_version: 1,
+        resolution: "768P",
+        official_video_version: 3,
+        pending_video_version: null,
+        next_video_version: 4,
+        base_video_version: 3,
+        next_prompt_version: 2,
+      },
+      resolved: {
+        provider: "minimax",
+        provider_display_name: "MiniMax",
+        model: "MiniMax-Hailuo-2.3",
+        model_display_name: "MiniMax Hailuo 2.3",
+        api_version: "v1",
+        generation_mode: "text_to_video",
+        generation_mode_display_name: "纯文本生成",
+        visual_input_mode: "none",
+        model_selection: "AUTO",
+      },
+      provider_available: true,
+      selected_asset_ids: [],
+      issues: [],
+      warnings: [],
+      paid_call_required: true,
+      preflight_fingerprint: "9".repeat(64),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      intent: "REGENERATE_MANUAL_PROMPT" as const,
+      base_prompt_version: 1,
+      edited_prompt: "edited visual core",
+      model_selection: "AUTO" as const,
+      requested_model: null,
+      visual_input: { mode: "none" as const, asset_ids: [] },
+    };
+    const result = await preflightShotGeneration("中文项目", "shot_01", payload);
+    expect(result.data.shot).toMatchObject({
+      base_video_version: 3,
+      next_prompt_version: 2,
+      next_video_version: 4,
+    });
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual(payload);
+  });
+
   it("starts and resumes Shot generation with only public request fields", async () => {
     const task = {
       task_id: "task_0123456789abcdef0123456789abcdef",

@@ -341,6 +341,9 @@ class WebBackendPhase3D2ShotGenerationTests(unittest.TestCase):
             self.assertEqual(response.headers["Location"], f"/api/tasks/{response.json()['task_id']}")
             task = self.wait_terminal(response.json()["task_id"])
         self.assertEqual(task.status.value, "SUCCEEDED")
+        self.assertEqual(task.result.resource_type, "SHOT_VIDEO")
+        self.assertEqual(task.result.resource_id, "shot_01")
+        self.assertEqual(task.result.version, 1)
         self.assertEqual((self.submit_calls, self.poll_calls, self.download_calls), (1, 1, 1))
         bundle = self.project_dir / "shots" / "shot_01" / "v001"
         self.assertEqual(
@@ -407,6 +410,7 @@ class WebBackendPhase3D2ShotGenerationTests(unittest.TestCase):
             resumed = self.client.post("/api/projects/project-a/shots/shot_01/generation/resume")
             terminal = self.wait_terminal(resumed.json()["task_id"])
         self.assertEqual(terminal.status.value, "SUCCEEDED")
+        self.assertEqual(terminal.result.version, 1)
         self.assertEqual(self.submit_calls, 1)
         project = json.loads((self.project_dir / "project.json").read_text(encoding="utf-8"))
         self.assertEqual(project["video_generation"]["shots"]["1"]["generation_count"], 1)
@@ -428,6 +432,7 @@ class WebBackendPhase3D2ShotGenerationTests(unittest.TestCase):
             resumed = self.client.post("/api/projects/project-a/shots/shot_01/generation/resume")
             terminal = self.wait_terminal(resumed.json()["task_id"])
         self.assertEqual(terminal.status.value, "SUCCEEDED")
+        self.assertEqual(terminal.result.version, 1)
         self.assertEqual(self.submit_calls, before_submit)
         self.assertEqual(self.poll_calls, before_poll)
 
@@ -448,6 +453,7 @@ class WebBackendPhase3D2ShotGenerationTests(unittest.TestCase):
             resumed = self.client.post("/api/projects/project-a/shots/shot_01/generation/resume")
             terminal = self.wait_terminal(resumed.json()["task_id"])
         self.assertEqual(terminal.status.value, "SUCCEEDED")
+        self.assertEqual(terminal.result.version, 1)
 
     def test_08_ambiguous_submit_is_not_resumable_and_never_auto_retries(self):
         ambiguous = VideoProviderError(

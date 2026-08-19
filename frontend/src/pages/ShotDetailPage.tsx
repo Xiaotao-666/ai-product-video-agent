@@ -121,6 +121,25 @@ function modelLabel(value: string | null): string {
     .replace("MiniMax-Hailuo", "MiniMax Hailuo");
 }
 
+function editablePromptCore(version: ShotVersion): string {
+  if (version.prompt.visual_prompt_core?.trim()) {
+    return version.prompt.visual_prompt_core.trim();
+  }
+  const finalPrompt = version.prompt.final_prompt?.trim() ?? "";
+  const markers = [
+    "[Composition Constraint]",
+    "[Global Hard Constraints]",
+    "[Text Overlay Constraint]",
+    "[Audio Constraint]",
+  ];
+  const positions = markers
+    .map((marker) => finalPrompt.indexOf(marker))
+    .filter((position) => position >= 0);
+  return positions.length > 0
+    ? finalPrompt.slice(0, Math.min(...positions)).trim()
+    : finalPrompt;
+}
+
 function VersionCard({
   projectId,
   shotId,
@@ -312,6 +331,7 @@ export function ShotDetailPage() {
     !pending &&
     ["NOT_STARTED", "GENERATING", "FAILED"].includes(shot.status);
   const showCurrentPromptRegeneration = Boolean(official || pending);
+  const manualPromptBase = pending ?? official;
 
   return (
     <main className="main-content shot-detail-page">
@@ -356,6 +376,20 @@ export function ShotDetailPage() {
           projectId={project.project_id}
           shotId={shot.shot_id}
           intent="REGENERATE_CURRENT_PROMPT"
+          onCompleted={loadShot}
+        />
+      )}
+
+      {manualPromptBase?.prompt.version && editablePromptCore(manualPromptBase) && (
+        <ShotGenerationPreparation
+          projectId={project.project_id}
+          shotId={shot.shot_id}
+          intent="REGENERATE_MANUAL_PROMPT"
+          manualPrompt={{
+            videoVersion: manualPromptBase.version,
+            promptVersion: manualPromptBase.prompt.version,
+            editablePrompt: editablePromptCore(manualPromptBase),
+          }}
           onCompleted={loadShot}
         />
       )}

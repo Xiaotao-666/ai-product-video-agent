@@ -407,9 +407,14 @@ export interface GenerationShotContext {
   official_video_version?: number | null;
   pending_video_version?: number | null;
   next_video_version?: number | null;
+  base_video_version?: number | null;
+  next_prompt_version?: number | null;
 }
 
-export type GenerationIntent = "INITIAL" | "REGENERATE_CURRENT_PROMPT";
+export type GenerationIntent =
+  | "INITIAL"
+  | "REGENERATE_CURRENT_PROMPT"
+  | "REGENERATE_MANUAL_PROMPT";
 
 export interface GenerationModelOption {
   model_id: string;
@@ -468,6 +473,8 @@ export interface GenerationPreflightRequest {
     mode: GenerationVisualInputMode;
     asset_ids: string[];
   };
+  base_prompt_version?: number | null;
+  edited_prompt?: string | null;
 }
 
 export interface ResolvedGeneration {

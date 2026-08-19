@@ -167,6 +167,28 @@ function renderPreparation() {
   );
 }
 
+function renderManualPreparation() {
+  return render(
+    <MemoryRouter>
+      <ShotGenerationPreparation
+        projectId="project-a"
+        shotId="shot_01"
+        intent="REGENERATE_MANUAL_PROMPT"
+        manualPrompt={{
+          videoVersion: 3,
+          promptVersion: 1,
+          editablePrompt: "original visual core",
+        }}
+      />
+    </MemoryRouter>,
+  );
+}
+
+function expectFact(container: HTMLElement, label: string, value: string) {
+  const term = within(container).getByText(label, { selector: "dt" });
+  expect(term.closest("div")).toHaveTextContent(value);
+}
+
 describe("ShotGenerationPreparation", () => {
   beforeEach(() => {
     mockOptions.mockReset();
@@ -226,10 +248,14 @@ describe("ShotGenerationPreparation", () => {
     );
     expect(await screen.findByRole("heading", { name: "用当前 Prompt 重新生成" })).toBeInTheDocument();
     expect(screen.getByText("当前正式版本会保留，只有新版本审核通过后才会替换。", { exact: false })).toBeInTheDocument();
+    expectFact(document.body, "将使用 Prompt", "v2");
+    expect(screen.queryByText("此次将创建", { selector: "dt" })).not.toBeInTheDocument();
     expect(screen.getAllByText("v2").length).toBeGreaterThanOrEqual(1);
     expect(mockOptions).toHaveBeenCalledWith("project-a", "shot_01", "REGENERATE_CURRENT_PROMPT");
     fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
-    await screen.findByRole("button", { name: "生成新的待审核版本" });
+    const summary = await screen.findByRole("region", { name: "生成前确认摘要" });
+    expectFact(summary, "将使用 Prompt", "v2");
+    expect(within(summary).queryByText("此次将创建", { selector: "dt" })).not.toBeInTheDocument();
     expect(mockPreflight).toHaveBeenCalledWith("project-a", "shot_01", expect.objectContaining({
       intent: "REGENERATE_CURRENT_PROMPT",
     }));
@@ -246,6 +272,8 @@ describe("ShotGenerationPreparation", () => {
     renderPreparation();
     expect(screen.getByText("正在读取生成选项…")).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "生成设置" })).toBeInTheDocument();
+    expectFact(document.body, "将使用 Prompt", "v2");
+    expect(screen.queryByText("基础 Prompt", { selector: "dt" })).not.toBeInTheDocument();
     expect(screen.getByText("v2")).toBeInTheDocument();
     expect(screen.getByText("6 秒")).toBeInTheDocument();
     expect(screen.getByText("完全根据提示词生成。")).toBeInTheDocument();
@@ -648,5 +676,432 @@ describe("ShotGenerationPreparation", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("项目当前正在执行其他操作");
     expect(screen.queryByText("排队中…")).not.toBeInTheDocument();
+  });
+
+  it("keeps a manual Prompt draft local and cancel performs zero write request", async () => {
+    mockOptions.mockResolvedValue({
+      data: {
+        ...options,
+        shot: {
+          ...options.shot,
+          prompt_version: 1,
+          official_video_version: 3,
+          base_video_version: 3,
+          next_prompt_version: 2,
+          next_video_version: 4,
+        },
+      },
+      correlationId: "req_manual_options",
+    });
+    renderManualPreparation();
+    expect(await screen.findByRole("heading", { name: "手动编辑 Prompt 并生成" })).toBeInTheDocument();
+    expect(mockOptions).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    expect(await screen.findByLabelText("视觉 Prompt 核心")).toHaveValue("original visual core");
+    expect(mockOptions).toHaveBeenCalledWith("project-a", "shot_01", "REGENERATE_MANUAL_PROMPT");
+    expect(screen.getByText("原 Prompt")).toBeInTheDocument();
+    expect(screen.getByText("修改后 Prompt")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("视觉 Prompt 核心"), {
+      target: { value: "edited local draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByLabelText("视觉 Prompt 核心")).not.toBeInTheDocument();
+    expect(mockPreflight).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("isolates an old successful initial generation from a new manual edit session", async () => {
+    const oldInitialTask = {
+      ...queuedTask,
+      status: "SUCCEEDED" as const,
+      started_at: "2026-08-20T00:18:50Z",
+      finished_at: "2026-08-20T00:21:20Z",
+    };
+    mockOptions.mockResolvedValue({
+      data: {
+        ...options,
+        shot: {
+          ...options.shot,
+          prompt_version: 1,
+          official_video_version: null,
+          pending_video_version: 1,
+          base_video_version: 1,
+          next_prompt_version: 2,
+          next_video_version: 2,
+        },
+      },
+      correlationId: "req_manual_options",
+    });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "WAITING_REVIEW",
+        resume_available: false, resume_kind: null, video_version: 1,
+        provider_submission_known: true, generation_intent: "INITIAL",
+      },
+      correlationId: "req_initial_status",
+    });
+    mockTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [oldInitialTask] },
+      correlationId: "req_old_initial_task",
+    });
+
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), {
+      target: { value: "edited manual visual core" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+
+    expect(await screen.findByRole("button", { name: "检查生成配置" })).toBeInTheDocument();
+    expectFact(document.body, "基础 Prompt", "v1");
+    expectFact(document.body, "此次将创建", "Prompt v2");
+    expectFact(document.body, "生成将使用", "Prompt v2");
+    expectFact(document.body, "此次将生成", "Video v2");
+    expect(screen.queryByText("将使用 Prompt", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("视频已生成，正在刷新镜头……")).not.toBeInTheDocument();
+    expect(screen.queryByText(/正在刷新镜头/)).not.toBeInTheDocument();
+    expect(mockPreflight).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("does not attach an unrelated current-Prompt regeneration to the manual session", async () => {
+    const unrelatedTask = {
+      ...queuedTask,
+      operation: "SHOT_REGENERATE" as const,
+      status: "RUNNING" as const,
+      started_at: "2026-08-20T00:30:00Z",
+    };
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "PROVIDER_RUNNING",
+        resume_available: false, resume_kind: null, video_version: 4,
+        provider_submission_known: true,
+        generation_intent: "REGENERATE_CURRENT_PROMPT",
+      },
+      correlationId: "req_current_regeneration_status",
+    });
+    mockTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [unrelatedTask] },
+      correlationId: "req_current_regeneration_task",
+    });
+
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), {
+      target: { value: "manual session draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+
+    expect(await screen.findByRole("button", { name: "检查生成配置" })).toBeEnabled();
+    expect(screen.queryByText("正在生成视频…")).not.toBeInTheDocument();
+    expect(mockTask).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("recovers only a running durable manual regeneration after F5", async () => {
+    const runningManualTask = {
+      ...queuedTask,
+      operation: "SHOT_REGENERATE" as const,
+      status: "RUNNING" as const,
+      started_at: "2026-08-20T00:35:00Z",
+    };
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "PROVIDER_RUNNING",
+        resume_available: false, resume_kind: null, video_version: 4,
+        provider_submission_known: true,
+        generation_intent: "REGENERATE_MANUAL_PROMPT",
+      },
+      correlationId: "req_manual_running_status",
+    });
+    mockTasks.mockResolvedValue({
+      data: {
+        project_id: "project-a",
+        tasks: [{ ...queuedTask, status: "SUCCEEDED" as const }, runningManualTask],
+      },
+      correlationId: "req_manual_running_task",
+    });
+    mockTask.mockResolvedValue({ data: runningManualTask, correlationId: "req_manual_poll" });
+
+    renderManualPreparation();
+
+    expect(await screen.findByText("正在生成视频…")).toBeInTheDocument();
+    expect(mockTask).toHaveBeenCalledWith(runningManualTask.task_id);
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("ignores an old failed Web task when the manual result is durably waiting review", async () => {
+    const failedManualTask = {
+      ...queuedTask,
+      operation: "SHOT_REGENERATE" as const,
+      status: "FAILED" as const,
+      started_at: "2026-08-20T00:40:00Z",
+      finished_at: "2026-08-20T00:43:00Z",
+      error: {
+        code: "SHOT_GENERATION_FAILED",
+        message: "镜头生成结果无法安全处理。",
+        retryable: false,
+      },
+    };
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "WAITING_REVIEW",
+        resume_available: false, resume_kind: null, video_version: 2,
+        provider_submission_known: true,
+        generation_intent: "REGENERATE_MANUAL_PROMPT",
+      },
+      correlationId: "req_reconciled_status",
+    });
+    mockTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [failedManualTask] },
+      correlationId: "req_failed_manual_task",
+    });
+
+    renderManualPreparation();
+
+    expect(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" })).toBeEnabled();
+    expect(screen.queryByText("镜头生成结果无法安全处理。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续生成" })).not.toBeInTheDocument();
+    expect(mockTask).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockResume).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("keeps a genuine failed generation visible when no review-ready result exists", async () => {
+    mockOptions.mockResolvedValue({
+      data: { ...options, eligible: false },
+      correlationId: "req_failed_options",
+    });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "FAILED",
+        resume_available: false, resume_kind: null, video_version: 1,
+        provider_submission_known: true,
+        generation_intent: "INITIAL",
+      },
+      correlationId: "req_failed_status",
+    });
+
+    renderPreparation();
+
+    expect(await screen.findByText("生成失败")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续生成" })).not.toBeInTheDocument();
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockResume).not.toHaveBeenCalled();
+  });
+
+  it("validates empty and unchanged manual drafts before preflight", async () => {
+    renderManualPreparation();
+    await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" });
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    const editor = await screen.findByLabelText("视觉 Prompt 核心");
+    fireEvent.change(editor, { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("不能为空");
+    fireEvent.change(editor, { target: { value: "original visual core" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("没有发生变化");
+    expect(mockPreflight).not.toHaveBeenCalled();
+  });
+
+  it("keeps Manual Prompt base and paid-generation versions explicit without writing", async () => {
+    const manualShot = {
+      ...options.shot,
+      prompt_version: 1,
+      official_video_version: null,
+      pending_video_version: 1,
+      base_video_version: 1,
+      next_prompt_version: 2,
+      next_video_version: 2,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: manualShot }, correlationId: "req_manual_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: manualShot }, correlationId: "req_manual_preflight" });
+
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), {
+      target: { value: "edited paid-generation semantics" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+
+    expectFact(document.body, "基础 Prompt", "v1");
+    expectFact(document.body, "此次将创建", "Prompt v2");
+    expectFact(document.body, "生成将使用", "Prompt v2");
+    expectFact(document.body, "当前正式 Video", "尚无");
+    expectFact(document.body, "此次将生成", "Video v2");
+    expect(screen.queryByText("将使用 Prompt", { selector: "dt" })).not.toBeInTheDocument();
+    expect(mockPreflight).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    const summary = await screen.findByRole("region", { name: "生成前确认摘要" });
+    expectFact(summary, "基础 Prompt", "v1");
+    expectFact(summary, "此次将创建", "Prompt v2");
+    expectFact(summary, "生成将使用", "Prompt v2");
+    expectFact(summary, "此次将生成", "Video v2");
+    expect(mockRegenerate).not.toHaveBeenCalled();
+
+    fireEvent.click(within(summary).getByRole("button", { name: "确认 Prompt 修改与生成配置" }));
+    const dialog = screen.getByRole("dialog", { name: "确认修改并生成" });
+    expectFact(dialog, "当前基础 Prompt", "v1");
+    expectFact(dialog, "将创建新 Prompt", "v2");
+    expectFact(dialog, "本次视频生成将使用", "Prompt v2");
+    expectFact(dialog, "将创建 Video", "v2");
+    expect(dialog).toHaveTextContent("本次将创建 Prompt v2，并使用 Prompt v2 生成 Video v2。");
+    expect(dialog).toHaveTextContent("确认后将调用付费视频模型。");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("preflights a manual edit with Backend-owned next Prompt and Video versions", async () => {
+    const manualShot = {
+      ...options.shot,
+      prompt_version: 1,
+      official_video_version: 3,
+      base_video_version: 3,
+      next_prompt_version: 2,
+      next_video_version: 4,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: manualShot }, correlationId: "req_manual_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: manualShot }, correlationId: "req_manual_preflight" });
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), {
+      target: { value: "edited hero product core" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+    expectFact(document.body, "基础 Prompt", "v1");
+    expectFact(document.body, "此次将创建", "Prompt v2");
+    expectFact(document.body, "生成将使用", "Prompt v2");
+    expectFact(document.body, "此次将生成", "Video v4");
+    expect(screen.queryByText("将使用 Prompt", { selector: "dt" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    const summary = await screen.findByRole("region", { name: "生成前确认摘要" });
+    expectFact(summary, "基础 Prompt", "v1");
+    expectFact(summary, "此次将创建", "Prompt v2");
+    expectFact(summary, "生成将使用", "Prompt v2");
+    expectFact(summary, "此次将生成", "Video v4");
+    expect(within(summary).queryByText("将使用 Prompt", { selector: "dt" })).not.toBeInTheDocument();
+    expect(mockPreflight).toHaveBeenCalledWith("project-a", "shot_01", {
+      intent: "REGENERATE_MANUAL_PROMPT",
+      base_prompt_version: 1,
+      edited_prompt: "edited hero product core",
+      model_selection: "AUTO",
+      requested_model: null,
+      visual_input: { mode: "none", asset_ids: [] },
+    });
+    fireEvent.click(within(summary).getByRole("button", { name: "确认 Prompt 修改与生成配置" }));
+    const dialog = screen.getByRole("dialog", { name: "确认修改并生成" });
+    expectFact(dialog, "当前基础 Prompt", "v1");
+    expectFact(dialog, "将创建新 Prompt", "v2");
+    expectFact(dialog, "本次视频生成将使用", "Prompt v2");
+    expectFact(dialog, "将创建 Video", "v4");
+    expect(dialog).toHaveTextContent("本次将创建 Prompt v2，并使用 Prompt v2 生成 Video v4。");
+    expect(dialog).toHaveTextContent("确认后将调用付费视频模型。");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("confirms one manual Prompt paid regeneration and keeps the 202 double-click guard", async () => {
+    const manualShot = {
+      ...options.shot,
+      prompt_version: 1,
+      official_video_version: 3,
+      base_video_version: 3,
+      next_prompt_version: 2,
+      next_video_version: 4,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: manualShot }, correlationId: "req_manual_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: manualShot }, correlationId: "req_manual_preflight" });
+    mockRegenerate.mockResolvedValue({
+      data: { ...queuedTask, operation: "SHOT_REGENERATE" },
+      correlationId: "req_manual_regenerate",
+    });
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), { target: { value: "edited hero product core" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认 Prompt 修改与生成配置" }));
+    const dialog = screen.getByRole("dialog", { name: "确认修改并生成" });
+    expect(dialog).toHaveTextContent("本次将创建 Prompt v2，并使用 Prompt v2 生成 Video v4。");
+    expect(dialog).toHaveTextContent("确认后将调用付费视频模型。");
+    const confirm = within(dialog).getByRole("button", { name: "确认修改并生成" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockRegenerate).toHaveBeenCalledTimes(1));
+    expect(mockRegenerate).toHaveBeenCalledWith("project-a", "shot_01", expect.objectContaining({
+      intent: "REGENERATE_MANUAL_PROMPT",
+      base_prompt_version: 1,
+      edited_prompt: "edited hero product core",
+      confirm_paid_call: true,
+    }));
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(await screen.findByText("排队中…")).toBeInTheDocument();
+  });
+
+  it("locks the paid action when a 202 body points at the wrong target", async () => {
+    const manualShot = {
+      ...options.shot,
+      prompt_version: 1,
+      official_video_version: 3,
+      base_video_version: 3,
+      next_prompt_version: 2,
+      next_video_version: 4,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: manualShot }, correlationId: "req_manual_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: manualShot }, correlationId: "req_manual_preflight" });
+    mockRegenerate.mockResolvedValue({
+      data: { ...queuedTask, operation: "SHOT_REGENERATE", target_id: "shot_02" },
+      correlationId: "req_wrong_target",
+    });
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), { target: { value: "edited hero product core" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认 Prompt 修改与生成配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认修改并生成" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请勿重复提交");
+    expect(mockRegenerate).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "确认 Prompt 修改与生成配置" })).toBeDisabled();
+  });
+
+  it("locks manual regeneration after an accepted 202 with an unreadable body", async () => {
+    const manualShot = {
+      ...options.shot,
+      prompt_version: 1,
+      official_video_version: 3,
+      base_video_version: 3,
+      next_prompt_version: 2,
+      next_video_version: 4,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: manualShot }, correlationId: "req_manual_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: manualShot }, correlationId: "req_manual_preflight" });
+    mockRegenerate.mockRejectedValue(new ApiClientError({
+      code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+      status: 202,
+      message: "请求已接受，但任务状态暂时无法读取。",
+      correlationId: "req_manual_uncertain",
+      requestAccepted: true,
+    }));
+    renderManualPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Prompt 并生成新版本" }));
+    fireEvent.change(await screen.findByLabelText("视觉 Prompt 核心"), { target: { value: "edited hero product core" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续检查生成配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认 Prompt 修改与生成配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认修改并生成" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请勿重复提交");
+    expect(screen.getByRole("button", { name: "确认 Prompt 修改与生成配置" })).toBeDisabled();
+    expect(mockRegenerate).toHaveBeenCalledTimes(1);
   });
 });

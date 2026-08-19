@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from project_manager import create_project_paths
+from storyboard import (
+    CreativeBrief,
+    StoryboardShot,
+    VideoPromptStructureError,
+    compile_manual_visual_prompt,
+    extract_visual_prompt_core,
+)
 from video_generation_request import ProviderSelection, VideoGenerationRequest
 from video_provider import VideoProvider, VideoProviderError
 from video_provider_registry import (
@@ -85,6 +92,10 @@ _ISSUE_MESSAGES = {
     GenerationIssueCode.INVALID_RESOLUTION: "当前视频分辨率不受所选模型支持。",
     GenerationIssueCode.VISUAL_INPUT_ASSET_NOT_ALLOWED: "不使用参考图时不能同时提交素材。",
     GenerationIssueCode.VISUAL_INPUT_ASSET_COUNT_INVALID: "当前 Visual Input 必须且只能选择一张图片。",
+    GenerationIssueCode.PROMPT_EMPTY: "修改后的视觉 Prompt 核心不能为空。",
+    GenerationIssueCode.PROMPT_INVALID: "修改后的视觉 Prompt 核心不符合当前项目约束。",
+    GenerationIssueCode.PROMPT_UNCHANGED: "Prompt 没有发生变化，无需创建新版本。",
+    GenerationIssueCode.PROMPT_BASE_STALE: "作为编辑基础的 Prompt Version 已发生变化。",
 }
 
 
@@ -119,6 +130,12 @@ class _ShotContext:
     public: GenerationShotContext
     project_dir: Path
     prompt: str
+    prompt_core: str
+    active_prompt_version: int | None
+    approved_prompt_version: int | None
+    storyboard_shot: StoryboardShot | None
+    creative_brief: CreativeBrief | None
+    product_name: str | None
     state_issues: tuple[GenerationIssue, ...]
 
 
@@ -181,6 +198,27 @@ class ShotGenerationPreflightService:
     ) -> GenerationPreflightResponse:
         context = self._context(project_id, shot_id, payload.intent)
         issues = list(context.state_issues)
+        effective_prompt = context.prompt
+        if payload.intent is GenerationIntent.REGENERATE_MANUAL_PROMPT:
+            if payload.base_prompt_version != context.active_prompt_version:
+                issues.append(_issue(GenerationIssueCode.PROMPT_BASE_STALE))
+            edited_core = str(payload.edited_prompt or "").strip()
+            if not edited_core:
+                issues.append(_issue(GenerationIssueCode.PROMPT_EMPTY))
+            elif edited_core == context.prompt_core:
+                issues.append(_issue(GenerationIssueCode.PROMPT_UNCHANGED))
+            elif context.storyboard_shot is None or context.creative_brief is None:
+                issues.append(_issue(GenerationIssueCode.PROMPT_INVALID))
+            else:
+                try:
+                    effective_prompt = compile_manual_visual_prompt(
+                        edited_core,
+                        context.storyboard_shot,
+                        context.creative_brief.global_constraints,
+                        context.product_name,
+                    )
+                except VideoPromptStructureError:
+                    issues.append(_issue(GenerationIssueCode.PROMPT_INVALID))
         selected_ids = list(payload.visual_input.asset_ids)
         mode = payload.visual_input.mode
         asset: ReferenceAssetRecord | None = None
@@ -256,7 +294,7 @@ class ShotGenerationPreflightService:
                 ):
                     request = VideoGenerationRequest(
                         shot_id=int(context.public.shot_id.removeprefix("shot_")),
-                        prompt=context.prompt,
+                        prompt=effective_prompt,
                         duration=context.public.duration_seconds,
                         resolution=context.public.resolution,
                         visual_input=visual_input,
@@ -299,6 +337,7 @@ class ShotGenerationPreflightService:
                 payload=payload,
                 resolved=resolved,
                 asset=asset,
+                effective_prompt=effective_prompt,
             )
         return GenerationPreflightResponse(
             ready=not issues,
@@ -319,6 +358,7 @@ class ShotGenerationPreflightService:
         payload: GenerationPreflightRequest,
         resolved: ResolvedGeneration,
         asset: ReferenceAssetRecord | None,
+        effective_prompt: str,
     ) -> str:
         material = {
             "project_id": project_id,
@@ -329,6 +369,21 @@ class ShotGenerationPreflightService:
             "next_video_version": context.public.next_video_version,
             "prompt_version": context.public.prompt_version,
             "prompt_sha256": hashlib.sha256(context.prompt.encode("utf-8")).hexdigest(),
+            "active_prompt_version": context.active_prompt_version,
+            "approved_prompt_version": context.approved_prompt_version,
+            "base_prompt_version": payload.base_prompt_version,
+            "base_prompt_core_sha256": hashlib.sha256(
+                context.prompt_core.encode("utf-8")
+            ).hexdigest(),
+            "edited_prompt_sha256": (
+                hashlib.sha256(str(payload.edited_prompt or "").encode("utf-8")).hexdigest()
+                if payload.intent is GenerationIntent.REGENERATE_MANUAL_PROMPT
+                else None
+            ),
+            "effective_prompt_sha256": hashlib.sha256(
+                effective_prompt.encode("utf-8")
+            ).hexdigest(),
+            "expected_next_prompt_version": context.public.next_prompt_version,
             "duration": context.public.duration_seconds,
             "resolution": context.public.resolution,
             "model_selection": payload.model_selection.value,
@@ -451,6 +506,10 @@ class ShotGenerationPreflightService:
             {},
         )
         prompt = str(prompt_record.get("prompt") or "").strip()
+        prompt_core = str(
+            prompt_record.get("visual_prompt_core")
+            or extract_visual_prompt_core(prompt)
+        ).strip()
         stages = _mapping(project.get("stages"))
         prompt_approved = (
             str(_mapping(stages.get("VIDEO_PROMPT")).get("status") or "").upper()
@@ -492,6 +551,9 @@ class ShotGenerationPreflightService:
                 shot_status == "APPROVED"
                 and approved_version is not None
                 and candidate_status != "GENERATING"
+                and not bool(candidate.get("submission_unknown"))
+                and str(candidate.get("generation_phase") or "").upper()
+                != "SUBMISSION_UNKNOWN"
             )
             if not (unapproved_review or approved_review):
                 issues.append(_issue(GenerationIssueCode.SHOT_NOT_READY))
@@ -512,6 +574,30 @@ class ShotGenerationPreflightService:
         pending_version = candidate_version or (
             active_version if approved_version is None and shot_status == "WAITING_REVIEW" else None
         )
+        prompt_versions = [
+            _positive_int(_mapping(item).get("version")) or 0
+            for item in (checkpoint.get("prompt_versions") or [])
+        ]
+        next_prompt_version = max(
+            [
+                _positive_int(checkpoint.get("prompt_version_count")) or 0,
+                *prompt_versions,
+            ]
+        ) + 1
+        storyboard_shot: StoryboardShot | None = None
+        creative_brief: CreativeBrief | None = None
+        product_name: str | None = None
+        if intent is GenerationIntent.REGENERATE_MANUAL_PROMPT:
+            try:
+                storyboard_shot = StoryboardShot.model_validate(dict(board_shot))
+                creative_brief = CreativeBrief.model_validate(
+                    dict(self._read_object(project_dir, ("concepts", "creative_brief.json")))
+                )
+                product_name = str(_mapping(project.get("request")).get("product_name") or "").strip() or None
+            except (TypeError, ValueError) as exc:
+                raise ProjectDataCorrupt(
+                    "manual Prompt validation context is invalid"
+                ) from exc
 
         return _ShotContext(
             public=GenerationShotContext(
@@ -522,9 +608,21 @@ class ShotGenerationPreflightService:
                 official_video_version=approved_version,
                 pending_video_version=pending_version,
                 next_video_version=next_version,
+                base_video_version=pending_version or approved_version or active_version,
+                next_prompt_version=(
+                    next_prompt_version
+                    if intent is GenerationIntent.REGENERATE_MANUAL_PROMPT
+                    else None
+                ),
             ),
             project_dir=project_dir,
             prompt=prompt or "unavailable",
+            prompt_core=prompt_core,
+            active_prompt_version=_positive_int(checkpoint.get("active_prompt_version")),
+            approved_prompt_version=_positive_int(checkpoint.get("approved_prompt_version")),
+            storyboard_shot=storyboard_shot,
+            creative_brief=creative_brief,
+            product_name=product_name,
             state_issues=tuple(self._unique_issues(issues)),
         )
 

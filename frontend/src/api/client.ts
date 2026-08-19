@@ -18,6 +18,7 @@ import type {
   ExportVoiceTimingSummary,
   FinalExportState,
   GenerationIssue,
+  GenerationIntent,
   GenerationModelOption,
   GenerationModelSelection,
   GenerationOptionsResponse,
@@ -1093,6 +1094,12 @@ function parseGenerationShotContext(
     next_video_version: isNullablePositiveInteger(value.next_video_version)
       ? value.next_video_version
       : null,
+    base_video_version: isNullablePositiveInteger(value.base_video_version)
+      ? value.base_video_version
+      : null,
+    next_prompt_version: isNullablePositiveInteger(value.next_prompt_version)
+      ? value.next_prompt_version
+      : null,
   };
 }
 
@@ -1316,6 +1323,7 @@ function parseShotGenerationStatus(
     generation_intent:
       value.generation_intent === "INITIAL"
       || value.generation_intent === "REGENERATE_CURRENT_PROMPT"
+      || value.generation_intent === "REGENERATE_MANUAL_PROMPT"
         ? value.generation_intent
         : null,
   };
@@ -2087,7 +2095,7 @@ export async function setOfficialShotVersion(
 export async function getShotGenerationOptions(
   projectId: string,
   shotId: string,
-  intent: "INITIAL" | "REGENERATE_CURRENT_PROMPT" = "INITIAL",
+  intent: GenerationIntent = "INITIAL",
 ): Promise<ApiResult<GenerationOptionsResponse>> {
   const result = await get<unknown>(
     `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/options${intent === "INITIAL" ? "" : `?intent=${encodeURIComponent(intent)}`}`,

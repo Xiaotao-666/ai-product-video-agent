@@ -1553,6 +1553,31 @@ def _extract_visual_prompt_core(video_prompt: str) -> str:
     )
 
 
+def extract_visual_prompt_core(video_prompt: str) -> str:
+    """Return the user-editable visual core from one compiled video Prompt."""
+
+    return _extract_visual_prompt_core(video_prompt)
+
+
+def compile_manual_visual_prompt(
+    visual_prompt_core: str,
+    shot: StoryboardShot,
+    global_constraints: GlobalConstraints | None = None,
+    product_name: str | None = None,
+) -> str:
+    """Validate one manual core and rebuild every deterministic control block."""
+
+    core = str(visual_prompt_core or "").strip()
+    _validate_visual_prompt_core(core, shot, global_constraints, product_name)
+    final_prompt = apply_video_overlay_constraints(
+        core,
+        shot,
+        global_constraints or _empty_global_constraints(),
+    )
+    _validate_final_video_prompt(final_prompt, shot, product_name)
+    return final_prompt
+
+
 def _shot_cue_bodies(shot: StoryboardShot) -> list[str]:
     return [
         cue.text.strip()
