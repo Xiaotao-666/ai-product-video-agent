@@ -23,6 +23,8 @@ interface ProjectTaskPollingOptions {
   projectId: string;
   isTask: (task: TaskRecord) => boolean;
   onTerminalRefresh: () => Promise<void>;
+  enabled?: boolean;
+  recoverLatestTerminalTask?: boolean;
 }
 
 export function isActiveTaskStatus(status: TaskStatus): boolean {
@@ -41,6 +43,8 @@ export function useProjectTaskPolling({
   projectId,
   isTask,
   onTerminalRefresh,
+  enabled = true,
+  recoverLatestTerminalTask = false,
 }: ProjectTaskPollingOptions) {
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [error, setError] = useState<TaskActionError | null>(null);
@@ -55,12 +59,23 @@ export function useProjectTaskPolling({
     setTerminalRefreshPending(false);
     handledTerminalTasks.current.clear();
 
+    if (!enabled) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     void getProjectTasks(projectId)
       .then((result) => {
         if (cancelled) return;
-        const recovered = result.data.tasks.find(
+        const activeTask = result.data.tasks.find(
           (candidate) => isTask(candidate) && isActiveTaskStatus(candidate.status),
         );
+        const recovered =
+          activeTask ??
+          (recoverLatestTerminalTask
+            ? result.data.tasks.find((candidate) => isTask(candidate))
+            : undefined);
         if (recovered) setTask(recovered);
       })
       .catch((caught) => {
@@ -73,10 +88,10 @@ export function useProjectTaskPolling({
     return () => {
       cancelled = true;
     };
-  }, [isTask, projectId]);
+  }, [enabled, isTask, projectId, recoverLatestTerminalTask]);
 
   useEffect(() => {
-    if (!task || !isActiveTaskStatus(task.status)) return;
+    if (!enabled || !task || !isActiveTaskStatus(task.status)) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -106,10 +121,10 @@ export function useProjectTaskPolling({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isTask, projectId, task]);
+  }, [enabled, isTask, projectId, task]);
 
   useEffect(() => {
-    if (!task || isActiveTaskStatus(task.status)) return;
+    if (!enabled || !task || isActiveTaskStatus(task.status)) return;
     if (handledTerminalTasks.current.has(task.task_id)) return;
     handledTerminalTasks.current.add(task.task_id);
     let cancelled = false;
@@ -127,9 +142,10 @@ export function useProjectTaskPolling({
     return () => {
       cancelled = true;
     };
-  }, [onTerminalRefresh, task]);
+  }, [enabled, onTerminalRefresh, task]);
 
   const attachToExistingTask = useCallback(async (): Promise<boolean> => {
+    if (!enabled) return false;
     const result = await getProjectTasks(projectId);
     const existing = result.data.tasks.find(
       (candidate) => isTask(candidate) && isActiveTaskStatus(candidate.status),
@@ -138,7 +154,7 @@ export function useProjectTaskPolling({
     setTask(existing);
     setError(null);
     return true;
-  }, [isTask, projectId]);
+  }, [enabled, isTask, projectId]);
 
   return {
     task,

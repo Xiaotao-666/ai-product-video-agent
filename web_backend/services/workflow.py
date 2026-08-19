@@ -77,6 +77,38 @@ class ProjectManifests:
     subtitle: Mapping[str, Any] | None = None
     music: Mapping[str, Any] | None = None
     export: Mapping[str, Any] | None = None
+    creative_exists: bool = False
+    storyboard_exists: bool = False
+    video_prompts_exist: bool = False
+    shot_artifacts_exist: bool = False
+
+
+def _failed_creative_is_retryable(
+    data: Mapping[str, Any],
+    manifests: ProjectManifests,
+) -> bool:
+    generation = _mapping(data.get("video_generation"))
+    downstream = (
+        "STORYBOARD",
+        "STORYBOARD_REVIEW",
+        "VIDEO_PROMPT",
+        "PROMPT_REVIEW",
+        "VIDEO_GENERATION",
+        "COMPLETED",
+    )
+    return (
+        _status(data.get("status")) == "FAILED"
+        and str(data.get("current_stage") or "").upper() == "CREATIVE"
+        and _stage_status(data, "CREATIVE") == "FAILED"
+        and _stage_status(data, "CREATIVE_REVIEW") == "NOT_STARTED"
+        and all(_stage_status(data, stage) == "NOT_STARTED" for stage in downstream)
+        and not generation.get("completed_shots")
+        and not generation.get("shots")
+        and not manifests.creative_exists
+        and not manifests.storyboard_exists
+        and not manifests.video_prompts_exist
+        and not manifests.shot_artifacts_exist
+    )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -317,7 +349,9 @@ def derive_workflow(
     else:
         phase = WorkflowPhase.POST_PRODUCTION
 
-    if phase is WorkflowPhase.POST_PRODUCTION:
+    if phase is WorkflowPhase.FAILED and _failed_creative_is_retryable(data, manifests):
+        available_actions = [AvailableAction.RETRY_GENERATE_CREATIVE]
+    elif phase is WorkflowPhase.POST_PRODUCTION:
         available_actions = [
             action
             for component, action in (

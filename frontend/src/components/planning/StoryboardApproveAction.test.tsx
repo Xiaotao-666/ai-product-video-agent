@@ -45,6 +45,7 @@ function renderAction(
     "REGENERATE_STORYBOARD",
   ],
   refresh = vi.fn().mockResolvedValue(undefined),
+  disabled = false,
 ) {
   return {
     refresh,
@@ -54,6 +55,7 @@ function renderAction(
           projectId="project-a"
           availableActions={availableActions}
           onApprovedRefresh={refresh}
+          disabled={disabled}
         />
       </MemoryRouter>,
     ),
@@ -100,6 +102,15 @@ describe("StoryboardApproveAction", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
+    expect(mockApprove).not.toHaveBeenCalled();
+  });
+
+  it("cannot approve while a Storyboard AI task is active", () => {
+    renderAction(undefined, undefined, true);
+    const approve = screen.getByRole("button", { name: "审核通过" });
+    expect(approve).toBeDisabled();
+    fireEvent.click(approve);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(mockApprove).not.toHaveBeenCalled();
   });
 

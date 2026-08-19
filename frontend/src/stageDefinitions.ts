@@ -91,6 +91,7 @@ const STAGE_KEYS: ReadonlySet<string> = new Set(
 const STAGE_ACTIONS: Record<StageKey, ReadonlySet<AvailableAction>> = {
   creative: new Set([
     "GENERATE_CREATIVE",
+    "RETRY_GENERATE_CREATIVE",
     "APPROVE_CREATIVE",
     "REVISE_CREATIVE",
     "REGENERATE_CREATIVE",

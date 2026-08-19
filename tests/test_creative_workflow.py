@@ -4,7 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 class CreativeWorkflowExtractionTests(unittest.TestCase):
@@ -412,6 +412,100 @@ class CreativeWorkflowExtractionTests(unittest.TestCase):
                     {},
                     self.logger,
                 )
+
+    def mark_failed_initial_creative(self) -> None:
+        from project_state import ProjectStage, StageStatus
+
+        self.checkpoint.update_stage(ProjectStage.CREATIVE, StageStatus.RUNNING)
+        self.checkpoint.fail(RuntimeError("mock initial Creative failure"))
+
+    def test_13_failed_initial_creative_retries_through_shared_core_callable(self):
+        from creative_workflow import retry_failed_creative_stage
+        from project_state import ProjectStage, StageStatus
+
+        self.mark_failed_initial_creative()
+        with patch(
+            "creative_workflow.generate_creative_brief",
+            return_value=self.brief(),
+        ) as provider:
+            result = retry_failed_creative_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                "mock-key",
+                self.logger,
+            )
+        provider.assert_called_once()
+        self.assertEqual(result, self.brief())
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.CREATIVE),
+            StageStatus.COMPLETED,
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.CREATIVE_REVIEW),
+            StageStatus.WAITING_REVIEW,
+        )
+
+    def test_14_failed_retry_rejects_canonical_without_mutating_checkpoint(self):
+        from creative_workflow import CreativeRecoveryError, retry_failed_creative_stage
+
+        self.mark_failed_initial_creative()
+        self.paths.save_json(self.paths.creative_brief_path(), self.brief().model_dump())
+        before = self.paths.project_state_path().read_bytes()
+        provider = Mock(side_effect=AssertionError("provider must not run"))
+        with patch("creative_workflow.generate_creative_brief", provider):
+            with self.assertRaises(CreativeRecoveryError):
+                retry_failed_creative_stage(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    self.logger,
+                )
+        provider.assert_not_called()
+        self.assertEqual(self.paths.project_state_path().read_bytes(), before)
+
+    def test_15_failed_retry_rejects_downstream_shot_artifact(self):
+        from creative_workflow import CreativeRecoveryError, retry_failed_creative_stage
+
+        self.mark_failed_initial_creative()
+        shot_artifact = self.paths.shot_dir(1) / "unexpected.bin"
+        shot_artifact.parent.mkdir(parents=True, exist_ok=True)
+        shot_artifact.write_bytes(b"artifact")
+        provider = Mock(side_effect=AssertionError("provider must not run"))
+        with patch("creative_workflow.generate_creative_brief", provider):
+            with self.assertRaises(CreativeRecoveryError):
+                retry_failed_creative_stage(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    self.logger,
+                )
+        provider.assert_not_called()
+
+    def test_16_cli_failed_resume_uses_the_shared_recovery_callable(self):
+        import main
+
+        class SharedRecoveryReached(RuntimeError):
+            pass
+
+        self.mark_failed_initial_creative()
+        with patch.object(
+            main,
+            "retry_failed_creative_stage",
+            side_effect=SharedRecoveryReached,
+        ) as shared:
+            with self.assertRaises(SharedRecoveryReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        shared.assert_called_once()
 
 
 if __name__ == "__main__":

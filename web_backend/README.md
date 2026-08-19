@@ -1,10 +1,9 @@
 # Web Backend Phase 1
 
 This directory contains the local FastAPI backend for the AI Product Video
-Agent. Creative generation, approval, targeted revision, full regeneration,
-and initial Storyboard generation are the currently executable planning
-actions. Storyboard review actions, video generation, assembly, and export
-actions remain unavailable.
+Agent. Creative and Storyboard generation, approval, targeted revision, and
+full regeneration are the currently executable planning actions. Video Prompt,
+video generation, assembly, and export actions remain unavailable.
 
 ## Local start
 
@@ -36,10 +35,13 @@ POST /api/projects
 GET  /api/projects/{project_id}
 GET  /api/projects/{project_id}/workflow
 POST /api/projects/{project_id}/planning/creative/generate
+POST /api/projects/{project_id}/planning/creative/retry
 POST /api/projects/{project_id}/planning/creative/approve
 POST /api/projects/{project_id}/planning/creative/revise
 POST /api/projects/{project_id}/planning/creative/regenerate
 POST /api/projects/{project_id}/planning/storyboard/generate
+POST /api/projects/{project_id}/planning/storyboard/revise
+POST /api/projects/{project_id}/planning/storyboard/regenerate
 POST /api/projects/{project_id}/planning/storyboard/approve
 ```
 
@@ -112,6 +114,13 @@ project tasks, validates `APPROVE_STORYBOARD` before and after acquiring the
 existing project write lock, then calls the shared Core approval transition.
 It creates no durable task, does not modify the Storyboard canonical, and does
 not generate Video Prompts or call any provider.
+
+Storyboard revise and regenerate are distinct durable operations. Revise uses
+the current canonical Storyboard plus bounded feedback; regenerate deliberately
+does not pass the old Storyboard or feedback to Core. Both reuse Core provider
+validation and deterministic Timeline Scheduler behavior, atomically replace
+the canonical only after validation, and return to `WAITING_REVIEW`. Feedback
+is not stored in Web task JSON, and neither action starts Video Prompt work.
 
 The Backend loads the same repository `.env` file as the CLI during server
 startup. Capability preflight checks only whether DeepSeek is configured and

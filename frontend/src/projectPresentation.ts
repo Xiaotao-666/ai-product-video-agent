@@ -46,6 +46,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export const AVAILABLE_ACTION_LABELS: Record<AvailableAction, string> = {
   GENERATE_CREATIVE: "生成创意",
+  RETRY_GENERATE_CREATIVE: "重新尝试生成",
   APPROVE_CREATIVE: "审核创意",
   REVISE_CREATIVE: "修改创意",
   REGENERATE_CREATIVE: "重新生成创意",

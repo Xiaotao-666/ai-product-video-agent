@@ -15,6 +15,7 @@ from creative_workflow import (
     approve_creative_stage,
     generate_creative_stage,
     regenerate_creative_stage,
+    retry_failed_creative_stage,
     revise_creative_stage,
 )
 from evaluation import EvaluationRecorder
@@ -60,16 +61,16 @@ from storyboard import (
     StoryboardError,
     VideoPromptPlan,
     generate_creative_brief,
-    generate_storyboard,
     generate_video_prompts,
     plan_shot_durations,
-    revise_storyboard,
     revise_shot_video_prompt,
     revise_video_prompts,
 )
 from storyboard_workflow import (
     approve_storyboard_stage,
     generate_storyboard_stage,
+    regenerate_storyboard_stage,
+    revise_storyboard_stage,
 )
 from shot_review import (
     ShotReviewError,
@@ -460,8 +461,19 @@ def run_pipeline(
     print(f"任务日志：{task_logger.task_log_path}")
 
     # Creative generation and review.
-    if checkpoint.stage_status(ProjectStage.CREATIVE) == StageStatus.COMPLETED:
+    creative_status = checkpoint.stage_status(ProjectStage.CREATIVE)
+    if creative_status == StageStatus.COMPLETED:
         brief = load_artifact(paths.creative_brief_path(), CreativeBrief, "Creative")
+    elif creative_status == StageStatus.FAILED:
+        brief = retry_failed_creative_stage(
+            paths,
+            request,
+            checkpoint,
+            deepseek_key,
+            task_logger,
+            evaluation_recorder=evaluation_recorder,
+            reference_asset_context=reference_asset_context,
+        )
     else:
         brief = generate_creative_stage(
             paths,
@@ -531,60 +543,31 @@ def run_pipeline(
             "Storyboard审核",
             board,
             recorder,
-            revise=lambda current, comment: _record_prompt_evaluation(
-                evaluation_recorder,
-                "storyboard",
-                revise_storyboard(
-                    request,
-                    brief,
-                    current,
-                    comment,
-                    deepseek_key,
-                    task_logger,
-                    persist_creative=lambda value: paths.save_json(
-                        paths.creative_brief_path(), value.model_dump()
-                    ),
-                    **_visual_kwargs(
-                        visual_analysis_result,
-                        visual_constraints,
-                        reference_asset_context,
-                    ),
-                ),
+            revise=lambda current, comment: revise_storyboard_stage(
+                paths,
                 request,
-                visual_analysis_result,
-                visual_constraints,
-                reference_asset_context,
-                operation="revise",
-                creative_brief=brief.model_dump(),
-                current_output=current.model_dump(),
-                user_feedback=comment,
+                checkpoint,
+                current,
+                comment,
+                deepseek_key,
+                task_logger,
+                approved_creative=brief,
+                evaluation_recorder=evaluation_recorder,
+                visual_analysis_result=visual_analysis_result,
+                visual_constraints=visual_constraints,
+                reference_asset_context=reference_asset_context,
             ),
-            regenerate=lambda: _record_prompt_evaluation(
-                evaluation_recorder,
-                "storyboard",
-                generate_storyboard(
-                    request,
-                    brief,
-                    deepseek_key,
-                    task_logger,
-                    **_visual_kwargs(
-                        visual_analysis_result,
-                        visual_constraints,
-                        reference_asset_context,
-                    ),
-                ),
+            regenerate=lambda: regenerate_storyboard_stage(
+                paths,
                 request,
-                visual_analysis_result,
-                visual_constraints,
-                reference_asset_context,
-                operation="regenerate",
-                creative_brief=brief.model_dump(),
-            ),
-            persist=lambda value: paths.save_json(
-                paths.storyboard_file_path(), value.model_dump()
-            ),
-            on_waiting=lambda: checkpoint.advance_to(
-                ProjectStage.STORYBOARD_REVIEW, StageStatus.WAITING_REVIEW
+                checkpoint,
+                deepseek_key,
+                task_logger,
+                approved_creative=brief,
+                evaluation_recorder=evaluation_recorder,
+                visual_analysis_result=visual_analysis_result,
+                visual_constraints=visual_constraints,
+                reference_asset_context=reference_asset_context,
             ),
             on_approved=lambda: approve_storyboard_stage(checkpoint),
             on_cancel=lambda: checkpoint.cancel(ProjectStage.STORYBOARD_REVIEW),

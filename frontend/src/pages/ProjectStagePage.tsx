@@ -25,6 +25,7 @@ import { CreativeGenerateAction } from "../components/planning/CreativeGenerateA
 import { CreativeApproveAction } from "../components/planning/CreativeApproveAction";
 import { StoryboardGenerateAction } from "../components/planning/StoryboardGenerateAction";
 import { StoryboardApproveAction } from "../components/planning/StoryboardApproveAction";
+import { StoryboardRevisionAction } from "../components/planning/StoryboardRevisionAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -107,6 +108,10 @@ export function ProjectStagePage() {
   const [storyboardRefresh, setStoryboardRefresh] =
     useState<StoryboardRefreshSnapshot | null>(null);
   const [hasStoryboard, setHasStoryboard] = useState<boolean | null>(null);
+  const [storyboardGenerateTaskActive, setStoryboardGenerateTaskActive] =
+    useState(false);
+  const [storyboardRevisionTaskActive, setStoryboardRevisionTaskActive] =
+    useState(false);
   const loadRequest = useRef(0);
 
   const loadStage = useCallback(async () => {
@@ -123,6 +128,8 @@ export function ProjectStagePage() {
     setCreativeTaskActive(false);
     setStoryboardRefresh(null);
     setHasStoryboard(null);
+    setStoryboardGenerateTaskActive(false);
+    setStoryboardRevisionTaskActive(false);
 
     try {
       const [detailResult, workflowResult] = await Promise.all([
@@ -310,6 +317,7 @@ export function ProjectStagePage() {
           (action) =>
             ![
               "APPROVE_CREATIVE",
+              "RETRY_GENERATE_CREATIVE",
               "REVISE_CREATIVE",
               "REGENERATE_CREATIVE",
             ].includes(action),
@@ -317,7 +325,12 @@ export function ProjectStagePage() {
       : validStageKey === "storyboard"
         ? stageActions.filter(
             (action) =>
-              !["GENERATE_STORYBOARD", "APPROVE_STORYBOARD"].includes(action),
+              ![
+                "GENERATE_STORYBOARD",
+                "APPROVE_STORYBOARD",
+                "REVISE_STORYBOARD",
+                "REGENERATE_STORYBOARD",
+              ].includes(action),
           )
         : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
@@ -410,11 +423,25 @@ export function ProjectStagePage() {
             availableActions={workflow.available_actions}
             hasStoryboard={hasStoryboard}
             onTerminalRefresh={refreshStoryboardState}
+            onActiveTaskChange={setStoryboardGenerateTaskActive}
           />
+          {(hasStoryboard === true ||
+            workflow.available_actions.includes("REVISE_STORYBOARD") ||
+            workflow.available_actions.includes("REGENERATE_STORYBOARD")) && (
+            <StoryboardRevisionAction
+              projectId={detail.project_id}
+              availableActions={workflow.available_actions}
+              onTerminalRefresh={refreshStoryboardState}
+              onActiveTaskChange={setStoryboardRevisionTaskActive}
+            />
+          )}
           <StoryboardApproveAction
             projectId={detail.project_id}
             availableActions={workflow.available_actions}
             onApprovedRefresh={refreshStoryboardState}
+            disabled={
+              storyboardGenerateTaskActive || storyboardRevisionTaskActive
+            }
           />
         </>
       )}
@@ -449,7 +476,7 @@ export function ProjectStagePage() {
           {validStageKey === "creative"
             ? "Creative 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
             : validStageKey === "storyboard"
-              ? "Storyboard 生成与审核通过以 Backend 当前状态为准；修改与重新生成仍仅展示，不会执行。"
+              ? "Storyboard 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
             : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>

@@ -90,9 +90,12 @@ const TASK_STATUSES: ReadonlySet<string> = new Set([
 ]);
 const TASK_OPERATIONS: ReadonlySet<string> = new Set([
   "CREATIVE_GENERATE",
+  "CREATIVE_RETRY",
   "CREATIVE_REVISE",
   "CREATIVE_REGENERATE",
   "STORYBOARD_GENERATE",
+  "STORYBOARD_REVISE",
+  "STORYBOARD_REGENERATE",
   "VIDEO_PROMPT_GENERATE",
   "SHOT_GENERATE",
   "ASSEMBLY",
@@ -120,6 +123,7 @@ const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
 ]);
 const AVAILABLE_ACTIONS: ReadonlySet<string> = new Set([
   "GENERATE_CREATIVE",
+  "RETRY_GENERATE_CREATIVE",
   "APPROVE_CREATIVE",
   "REVISE_CREATIVE",
   "REGENERATE_CREATIVE",
@@ -1691,11 +1695,64 @@ export async function generateCreative(
   };
 }
 
+export async function retryCreative(
+  projectId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/creative/retry`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
 export async function generateStoryboard(
   projectId: string,
 ): Promise<ApiResult<TaskRecord>> {
   const result = await request(
     `/api/projects/${encodeURIComponent(projectId)}/planning/storyboard/generate`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function reviseStoryboard(
+  projectId: string,
+  feedback: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/storyboard/revise`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ feedback }),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function regenerateStoryboard(
+  projectId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/storyboard/regenerate`,
     {
       method: "POST",
       headers: { Accept: "application/json" },

@@ -30,7 +30,10 @@ import {
   getVoice,
   getVoiceAudioUrl,
   regenerateCreative,
+  regenerateStoryboard,
+  retryCreative,
   reviseCreative,
+  reviseStoryboard,
 } from "./client";
 
 function responseOf(
@@ -1072,6 +1075,31 @@ describe("API client", () => {
     );
   });
 
+  it("submits failed Creative Retry with its explicit operation", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "CREATIVE_RETRY",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(queuedTask, 202, { "X-Correlation-ID": "req_retry" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await retryCreative("LEE柠檬");
+
+    expect(result.data.operation).toBe("CREATIVE_RETRY");
+    expect(result.correlationId).toBe("req_retry");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("submits Storyboard generation with POST and accepts a 202 task", async () => {
     const queuedTask = {
       ...taskPayload,
@@ -1097,6 +1125,58 @@ describe("API client", () => {
     );
     expect(fetchMock).toHaveBeenCalledWith(
       expect.any(String),
+      expect.not.objectContaining({ body: expect.anything() }),
+    );
+  });
+
+  it("submits Storyboard feedback in JSON and never places it in the URL", async () => {
+    const feedback = "保留3个镜头，第二镜头减少旁白";
+    const queuedTask = {
+      ...taskPayload,
+      operation: "STORYBOARD_REVISE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await reviseStoryboard("LEE柠檬", feedback);
+
+    expect(result.data.operation).toBe("STORYBOARD_REVISE");
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/storyboard/revise",
+    );
+    expect(url).not.toContain("%E4%BF%9D%E7%95%99");
+    expect(options).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ feedback }),
+      }),
+    );
+  });
+
+  it("submits Storyboard regeneration without a request body", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "STORYBOARD_REGENERATE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateStoryboard("LEE柠檬");
+
+    expect(result.data.operation).toBe("STORYBOARD_REGENERATE");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/storyboard/regenerate",
       expect.not.objectContaining({ body: expect.anything() }),
     );
   });

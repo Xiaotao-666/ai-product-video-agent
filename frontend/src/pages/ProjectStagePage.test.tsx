@@ -27,7 +27,9 @@ import {
   getVoice,
   getTask,
   regenerateCreative,
+  regenerateStoryboard,
   reviseCreative,
+  reviseStoryboard,
 } from "../api/client";
 import type {
   CreativeContentResponse,
@@ -60,7 +62,9 @@ vi.mock("../api/client", async (importOriginal) => {
     approveCreative: vi.fn(),
     approveStoryboard: vi.fn(),
     regenerateCreative: vi.fn(),
+    regenerateStoryboard: vi.fn(),
     reviseCreative: vi.fn(),
+    reviseStoryboard: vi.fn(),
   };
 });
 
@@ -82,7 +86,9 @@ const mockGetTask = vi.mocked(getTask);
 const mockApproveCreative = vi.mocked(approveCreative);
 const mockApproveStoryboard = vi.mocked(approveStoryboard);
 const mockRegenerateCreative = vi.mocked(regenerateCreative);
+const mockRegenerateStoryboard = vi.mocked(regenerateStoryboard);
 const mockReviseCreative = vi.mocked(reviseCreative);
+const mockReviseStoryboard = vi.mocked(reviseStoryboard);
 
 function storyboardContentResponse(
   status = "WAITING_REVIEW",
@@ -270,7 +276,9 @@ describe("ProjectStagePage", () => {
     mockApproveCreative.mockReset();
     mockApproveStoryboard.mockReset();
     mockRegenerateCreative.mockReset();
+    mockRegenerateStoryboard.mockReset();
     mockReviseCreative.mockReset();
+    mockReviseStoryboard.mockReset();
     mockGetProjectTasks.mockResolvedValue({
       data: { project_id: "LEE柠檬", tasks: [] },
       correlationId: "req_tasks",
@@ -763,11 +771,98 @@ describe("ProjectStagePage", () => {
     expect(screen.getAllByText("等待审核").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "生成分镜" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
-    expect(screen.getByText("修改分镜")).toBeInTheDocument();
-    expect(screen.getByText("重新生成分镜")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "修改分镜" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新生成分镜" })).not.toBeInTheDocument();
-    expect(screen.getByText(/修改与重新生成仍仅展示/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "修改分镜" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成分镜" })).toBeInTheDocument();
+    expect(screen.getByText(/修改、重新生成与审核操作均以 Backend/)).toBeInTheDocument();
+  });
+
+  it("keeps the old Storyboard visible during revise, disables Approve, then refreshes the new canonical", async () => {
+    const waiting = workflow({
+      workflow_phase: "STORYBOARD_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_STORYBOARD",
+        "REVISE_STORYBOARD",
+        "REGENERATE_STORYBOARD",
+      ],
+    });
+    waiting.stages.creative.status = "APPROVED";
+    waiting.stages.storyboard.status = "WAITING_REVIEW";
+    const updated = storyboardContentResponse();
+    updated.content!.shots[0].visual = "重新调度后的产品近景";
+    updated.content!.shots[0].voiceover_cues = [
+      { text: "新的旁白", start_offset: 3, end_offset: 5, position: null },
+    ];
+    mockGetProject.mockResolvedValue({
+      data: detail(waiting),
+      correlationId: "req_storyboard_project",
+    });
+    mockGetProjectWorkflow.mockResolvedValue({
+      data: waiting,
+      correlationId: "req_storyboard_workflow",
+    });
+    mockGetStoryboardContent
+      .mockResolvedValueOnce({
+        data: storyboardContentResponse(),
+        correlationId: "req_old_storyboard",
+      })
+      .mockResolvedValue({
+        data: updated,
+        correlationId: "req_new_storyboard",
+      });
+    let resolveRevise!: (
+      value: Awaited<ReturnType<typeof reviseStoryboard>>,
+    ) => void;
+    mockReviseStoryboard.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRevise = resolve;
+      }),
+    );
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/storyboard");
+    expect(
+      await screen.findByText("明亮黄色背景中的柠檬产品微距"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "修改分镜" }));
+    fireEvent.change(screen.getByLabelText("修改意见"), {
+      target: { value: "第二镜头减少旁白" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修改" }));
+
+    expect(screen.getByText("明亮黄色背景中的柠檬产品微距")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeDisabled();
+    expect(mockReviseStoryboard).toHaveBeenCalledWith(
+      "LEE柠檬",
+      "第二镜头减少旁白",
+    );
+
+    resolveRevise({
+      data: {
+        task_id: `task_${"r".repeat(32)}`,
+        project_id: "LEE柠檬",
+        operation: "STORYBOARD_REVISE",
+        status: "SUCCEEDED",
+        created_at: "2026-08-19T15:00:00Z",
+        started_at: "2026-08-19T15:00:01Z",
+        finished_at: "2026-08-19T15:00:02Z",
+        correlation_id: "req_storyboard_revise",
+        error: null,
+        result: {
+          resource_type: "STORYBOARD",
+          resource_id: "LEE柠檬",
+          version: null,
+        },
+      },
+      correlationId: "req_storyboard_revise",
+    });
+
+    expect(await screen.findByText("重新调度后的产品近景")).toBeInTheDocument();
+    expect(screen.getByText("新的旁白")).toBeInTheDocument();
+    expect(screen.getAllByText("等待审核").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeEnabled();
+    expect(mockGetStoryboardContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateStoryboard).not.toHaveBeenCalled();
+    expect(mockRegenerateStoryboard).not.toHaveBeenCalled();
   });
 
   it("approves Storyboard synchronously, refreshes durable state, and only navigates next", async () => {
@@ -813,10 +908,8 @@ describe("ProjectStagePage", () => {
 
     renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/storyboard");
     expect(await screen.findByText("明亮黄色背景中的柠檬产品微距")).toBeInTheDocument();
-    expect(screen.getByText("修改分镜")).toBeInTheDocument();
-    expect(screen.getByText("重新生成分镜")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "修改分镜" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新生成分镜" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "修改分镜" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新生成分镜" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "审核通过" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("确认通过当前分镜方案？");
     fireEvent.click(screen.getByRole("button", { name: "确认通过" }));

@@ -4,6 +4,7 @@ import {
   ApiClientError,
   generateCreative,
   regenerateCreative,
+  retryCreative,
   reviseCreative,
 } from "../../api/client";
 import type {
@@ -21,12 +22,14 @@ import type { TaskActionError } from "../../hooks/useProjectTaskPolling";
 const MAX_FEEDBACK_LENGTH = 4_000;
 const CREATIVE_TASK_OPERATIONS: ReadonlySet<TaskOperation> = new Set([
   "CREATIVE_GENERATE",
+  "CREATIVE_RETRY",
   "CREATIVE_REVISE",
   "CREATIVE_REGENERATE",
 ]);
 
 type CreativeTaskOperation =
   | "CREATIVE_GENERATE"
+  | "CREATIVE_RETRY"
   | "CREATIVE_REVISE"
   | "CREATIVE_REGENERATE";
 
@@ -52,14 +55,28 @@ function taskStatusCopy(
   if (submittingOperation === "CREATIVE_GENERATE") {
     return "正在提交创意生成任务…";
   }
-  if (task?.operation === "CREATIVE_GENERATE" && task.status === "QUEUED") {
+  if (submittingOperation === "CREATIVE_RETRY") {
+    return "正在提交重试任务…";
+  }
+  if (
+    (task?.operation === "CREATIVE_GENERATE" ||
+      task?.operation === "CREATIVE_RETRY") &&
+    task.status === "QUEUED"
+  ) {
     return "排队中…";
   }
   if (task?.operation === "CREATIVE_GENERATE" && task.status === "RUNNING") {
     return "正在生成创意…";
   }
+  if (task?.operation === "CREATIVE_RETRY" && task.status === "RUNNING") {
+    return "正在重新生成创意…";
+  }
   if (hasCreative) return "已生成";
-  if (!task || task.operation !== "CREATIVE_GENERATE") {
+  if (
+    !task ||
+    (task.operation !== "CREATIVE_GENERATE" &&
+      task.operation !== "CREATIVE_RETRY")
+  ) {
     return hasCreative === false ? "未开始" : "正在确认状态…";
   }
   if (task.status === "SUCCEEDED") return "生成成功";
@@ -103,10 +120,23 @@ function safeErrorCopy(error: TaskActionError): string {
   if (error.code === "ACTION_NOT_ALLOWED") {
     return "当前项目状态不允许执行此操作，请刷新后确认最新状态。";
   }
+  if (error.code === "CREATIVE_OUTPUT_INVALID") {
+    return "AI返回的创意内容未通过校验。";
+  }
   if (error.code === "NETWORK_ERROR") {
     return "无法连接本地 Backend，请确认服务已启动。";
   }
   return "Creative 请求暂时无法处理。";
+}
+
+function failedCreativeCopy(task: TaskRecord | null): string {
+  if (task?.error?.code === "CREATIVE_OUTPUT_INVALID") {
+    return "AI返回的创意内容未通过校验。";
+  }
+  if (task?.error?.code === "PROVIDER_REQUEST_FAILED") {
+    return "创意生成服务暂时不可用，请稍后重试。";
+  }
+  return "Creative生成未完成，可以重新尝试。";
 }
 
 export function CreativeGenerateAction({
@@ -123,6 +153,7 @@ export function CreativeGenerateAction({
   const [regenerateConfirming, setRegenerateConfirming] = useState(false);
   const submissionGuard = useRef(false);
   const canGenerate = availableActions.includes("GENERATE_CREATIVE");
+  const canRetry = availableActions.includes("RETRY_GENERATE_CREATIVE");
   const canRevise = availableActions.includes("REVISE_CREATIVE");
   const canRegenerate = availableActions.includes("REGENERATE_CREATIVE");
   const {
@@ -137,6 +168,7 @@ export function CreativeGenerateAction({
     projectId,
     isTask: isCreativeTask,
     onTerminalRefresh,
+    recoverLatestTerminalTask: true,
   });
   const busy = active || submittingOperation !== null || terminalRefreshPending;
   const normalizedFeedback = feedback.trim();
@@ -156,6 +188,7 @@ export function CreativeGenerateAction({
   const submit = async (operation: CreativeTaskOperation) => {
     const allowed =
       (operation === "CREATIVE_GENERATE" && canGenerate) ||
+      (operation === "CREATIVE_RETRY" && canRetry) ||
       (operation === "CREATIVE_REVISE" && canRevise) ||
       (operation === "CREATIVE_REGENERATE" && canRegenerate);
     if (
@@ -175,6 +208,8 @@ export function CreativeGenerateAction({
       const result =
         operation === "CREATIVE_GENERATE"
           ? await generateCreative(projectId)
+          : operation === "CREATIVE_RETRY"
+            ? await retryCreative(projectId)
           : operation === "CREATIVE_REVISE"
             ? await reviseCreative(projectId, normalizedFeedback)
             : await regenerateCreative(projectId);
@@ -216,6 +251,7 @@ export function CreativeGenerateAction({
     canGenerate &&
     !(task?.operation === "CREATIVE_GENERATE" && task.status === "SUCCEEDED") &&
     !active;
+  const showRetryButton = canRetry && hasCreative === false && !active;
   const statusCopy = taskStatusCopy(task, submittingOperation, hasCreative);
   const revisionTask =
     task &&
@@ -251,16 +287,20 @@ export function CreativeGenerateAction({
         </span>
       </div>
 
-      {task?.operation === "CREATIVE_GENERATE" &&
+      {((task &&
+        (task.operation === "CREATIVE_GENERATE" ||
+          task.operation === "CREATIVE_RETRY") &&
         task.status === "FAILED" &&
-        !hasCreative && (
+        !hasCreative) ||
+        (canRetry && hasCreative === false && !task)) && (
         <div className="creative-action-message creative-action-error" role="alert">
-          <strong>创意生成失败。</strong>
-          <span>{task.error?.message ?? "请刷新项目状态后重试。"}</span>
-          <small>错误编号：{task.correlation_id}</small>
+          <strong>Creative生成失败</strong>
+          <span>{failedCreativeCopy(task)}</span>
+          {task?.correlation_id && <small>错误编号：{task.correlation_id}</small>}
         </div>
       )}
-      {task?.operation === "CREATIVE_GENERATE" &&
+      {(task?.operation === "CREATIVE_GENERATE" ||
+        task?.operation === "CREATIVE_RETRY") &&
         task.status === "INTERRUPTED" &&
         !hasCreative && (
         <div className="creative-action-message" role="status">
@@ -287,7 +327,20 @@ export function CreativeGenerateAction({
             : "生成创意"}
         </button>
       )}
+      {showRetryButton && (
+        <button
+          className="primary-button"
+          type="button"
+          disabled={busy}
+          onClick={() => void submit("CREATIVE_RETRY")}
+        >
+          {submittingOperation === "CREATIVE_RETRY"
+            ? "正在提交…"
+            : "重新尝试生成"}
+        </button>
+      )}
       {!canGenerate &&
+        !canRetry &&
         !active &&
         hasCreative === false &&
         task?.status !== "SUCCEEDED" && (

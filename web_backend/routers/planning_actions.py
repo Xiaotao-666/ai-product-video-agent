@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from web_backend.dependencies import get_creative_action_service
 from web_backend.errors import registered_api_error
-from web_backend.models.planning import CreativeReviseRequest
+from web_backend.models.planning import CreativeReviseRequest, StoryboardReviseRequest
 from web_backend.models.projects import ProjectWorkflowResponse
 from web_backend.models.tasks import TaskOperation, TaskRecord
 from web_backend.repositories.project_repository import (
@@ -86,6 +86,41 @@ def generate_creative(
 ) -> TaskRecord:
     try:
         task = service.submit_generate(
+            project_id,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
+
+
+@router.post(
+    "/projects/{project_id}/planning/creative/retry",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.CREATIVE_RETRY),
+)
+def retry_creative(
+    project_id: str,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_retry(
             project_id,
             correlation_id=getattr(request.state, "correlation_id", None),
         )
@@ -197,6 +232,74 @@ def generate_storyboard(
 ) -> TaskRecord:
     try:
         task = service.submit_storyboard_generate(
+            project_id,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
+
+
+@router.post(
+    "/projects/{project_id}/planning/storyboard/revise",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.STORYBOARD_REVISE),
+)
+def revise_storyboard(
+    project_id: str,
+    payload: StoryboardReviseRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_storyboard_revise(
+            project_id,
+            feedback=payload.feedback,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
+
+
+@router.post(
+    "/projects/{project_id}/planning/storyboard/regenerate",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.STORYBOARD_REGENERATE),
+)
+def regenerate_storyboard(
+    project_id: str,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_storyboard_regenerate(
             project_id,
             correlation_id=getattr(request.state, "correlation_id", None),
         )

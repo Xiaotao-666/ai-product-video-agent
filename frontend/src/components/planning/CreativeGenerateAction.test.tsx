@@ -7,6 +7,7 @@ import {
   getProjectTasks,
   getTask,
   regenerateCreative,
+  retryCreative,
   reviseCreative,
 } from "../../api/client";
 import type {
@@ -26,6 +27,7 @@ vi.mock("../../api/client", async (importOriginal) => {
     getProjectTasks: vi.fn(),
     getTask: vi.fn(),
     regenerateCreative: vi.fn(),
+    retryCreative: vi.fn(),
     reviseCreative: vi.fn(),
   };
 });
@@ -34,6 +36,7 @@ const mockGenerate = vi.mocked(generateCreative);
 const mockProjectTasks = vi.mocked(getProjectTasks);
 const mockTask = vi.mocked(getTask);
 const mockRegenerate = vi.mocked(regenerateCreative);
+const mockRetry = vi.mocked(retryCreative);
 const mockRevise = vi.mocked(reviseCreative);
 const projectId = "project-a";
 
@@ -41,6 +44,7 @@ function record(
   status: TaskStatus,
   operation: TaskOperation = "CREATIVE_GENERATE",
   taskId = `task_${"a".repeat(32)}`,
+  errorCode = "PROVIDER_REQUEST_FAILED",
 ): TaskRecord {
   const active = status === "QUEUED" || status === "RUNNING";
   const failed = status === "FAILED" || status === "INTERRUPTED";
@@ -55,8 +59,13 @@ function record(
     correlation_id: "req_creative_task",
     error: failed
       ? {
-          code: status === "INTERRUPTED" ? "TASK_INTERRUPTED" : "PROVIDER_REQUEST_FAILED",
-          message: status === "INTERRUPTED" ? "任务已中断。" : "创意生成服务暂时不可用。",
+          code: status === "INTERRUPTED" ? "TASK_INTERRUPTED" : errorCode,
+          message:
+            status === "INTERRUPTED"
+              ? "任务已中断。"
+              : errorCode === "CREATIVE_OUTPUT_INVALID"
+                ? "AI返回的创意内容未通过校验，可以重新尝试生成。"
+                : "创意生成服务暂时不可用。",
           retryable: status === "FAILED",
         }
       : null,
@@ -115,6 +124,7 @@ describe("CreativeGenerateAction", () => {
     mockProjectTasks.mockReset();
     mockTask.mockReset();
     mockRegenerate.mockReset();
+    mockRetry.mockReset();
     mockRevise.mockReset();
     mockProjectTasks.mockResolvedValue({
       data: { project_id: projectId, tasks: [] },
@@ -138,6 +148,177 @@ describe("CreativeGenerateAction", () => {
     await flush();
     expect(screen.queryByRole("button", { name: "生成创意" })).not.toBeInTheDocument();
     expect(screen.getByText("当前项目状态不允许生成创意。")).toBeInTheDocument();
+  });
+
+  it("shows failed Creative recovery with safe validation copy after F5", async () => {
+    const failed = record(
+      "FAILED",
+      "CREATIVE_GENERATE",
+      `task_${"b".repeat(32)}`,
+      "CREATIVE_OUTPUT_INVALID",
+    );
+    failed.error!.message = "D:\\private\\raw validation traceback";
+    mockProjectTasks.mockResolvedValue({
+      data: { project_id: projectId, tasks: [failed] },
+      correlationId: null,
+    });
+    renderAction(["RETRY_GENERATE_CREATIVE"], false);
+    await flush();
+    expect(screen.getByText("Creative生成失败")).toBeInTheDocument();
+    expect(screen.getByText("AI返回的创意内容未通过校验。")).toBeInTheDocument();
+    expect(screen.getByText("错误编号：req_creative_task")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新尝试生成" })).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("D:\\private");
+    expect(document.body).not.toHaveTextContent("traceback");
+  });
+
+  it("does not show Retry unless Backend exposes RETRY_GENERATE_CREATIVE", async () => {
+    renderAction(["APPROVE_CREATIVE"], false);
+    await flush();
+    expect(
+      screen.queryByRole("button", { name: "重新尝试生成" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("submits Retry once and disables the button immediately", async () => {
+    let resolveSubmit!: (value: Awaited<ReturnType<typeof retryCreative>>) => void;
+    mockRetry.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSubmit = resolve;
+      }),
+    );
+    renderAction(["RETRY_GENERATE_CREATIVE"], false);
+    await flush();
+    const button = screen.getByRole("button", { name: "重新尝试生成" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(mockRetry).toHaveBeenCalledTimes(1);
+    expect(mockRetry).toHaveBeenCalledWith(projectId);
+    expect(screen.getByRole("button", { name: "正在提交…" })).toBeDisabled();
+    resolveSubmit({
+      data: record("QUEUED", "CREATIVE_RETRY"),
+      correlationId: "req_retry",
+    });
+    await flush();
+    expect(screen.getByText("排队中…")).toBeInTheDocument();
+  });
+
+  it("polls Retry through RUNNING without fake progress", async () => {
+    mockRetry.mockResolvedValue({
+      data: record("QUEUED", "CREATIVE_RETRY"),
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record("RUNNING", "CREATIVE_RETRY"),
+      correlationId: null,
+    });
+    renderAction(["RETRY_GENERATE_CREATIVE"], false);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "重新尝试生成" }));
+    await flush();
+    await advancePoll();
+    expect(screen.getByText("正在重新生成创意…")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d+%/);
+  });
+
+  it("refreshes Creative after Retry succeeds", async () => {
+    mockRetry.mockResolvedValue({
+      data: record("QUEUED", "CREATIVE_RETRY"),
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record("SUCCEEDED", "CREATIVE_RETRY"),
+      correlationId: null,
+    });
+    const { onTerminalRefresh, rerenderCreative } = renderAction(
+      ["RETRY_GENERATE_CREATIVE"],
+      false,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "重新尝试生成" }));
+    await flush();
+    await advancePoll();
+    await flush();
+    expect(onTerminalRefresh).toHaveBeenCalledTimes(1);
+    rerenderCreative(true);
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重新尝试生成" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps manual Retry available after another invalid output", async () => {
+    mockRetry.mockResolvedValue({
+      data: record("QUEUED", "CREATIVE_RETRY"),
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record(
+        "FAILED",
+        "CREATIVE_RETRY",
+        `task_${"c".repeat(32)}`,
+        "CREATIVE_OUTPUT_INVALID",
+      ),
+      correlationId: null,
+    });
+    renderAction(["RETRY_GENERATE_CREATIVE"], false);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "重新尝试生成" }));
+    await flush();
+    await advancePoll();
+    expect(screen.getByText("AI返回的创意内容未通过校验。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新尝试生成" })).toBeInTheDocument();
+    expect(mockRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers an active Retry after F5 and never auto-submits", async () => {
+    mockProjectTasks.mockResolvedValue({
+      data: {
+        project_id: projectId,
+        tasks: [record("RUNNING", "CREATIVE_RETRY")],
+      },
+      correlationId: null,
+    });
+    mockTask.mockResolvedValue({
+      data: record("INTERRUPTED", "CREATIVE_RETRY"),
+      correlationId: null,
+    });
+    const { onTerminalRefresh } = renderAction(
+      ["RETRY_GENERATE_CREATIVE"],
+      false,
+    );
+    await flush();
+    expect(screen.getByText("正在重新生成创意…")).toBeInTheDocument();
+    await advancePoll();
+    await flush();
+    expect(screen.getByText("上次生成任务被中断。")).toBeInTheDocument();
+    expect(onTerminalRefresh).toHaveBeenCalledTimes(1);
+    expect(mockRetry).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "重新尝试生成" })).toBeInTheDocument();
+  });
+
+  it("PROJECT_BUSY Retry attaches to an existing Creative Retry task", async () => {
+    mockProjectTasks
+      .mockResolvedValueOnce({
+        data: { project_id: projectId, tasks: [] },
+        correlationId: null,
+      })
+      .mockResolvedValueOnce({
+        data: {
+          project_id: projectId,
+          tasks: [record("RUNNING", "CREATIVE_RETRY")],
+        },
+        correlationId: null,
+      });
+    mockRetry.mockRejectedValue(
+      new ApiClientError({ message: "busy", status: 409, code: "PROJECT_BUSY" }),
+    );
+    renderAction(["RETRY_GENERATE_CREATIVE"], false);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "重新尝试生成" }));
+    await flush();
+    expect(screen.getByText("正在重新生成创意…")).toBeInTheDocument();
+    expect(screen.queryByText("项目当前正在执行其他任务。")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -247,7 +428,7 @@ describe("CreativeGenerateAction", () => {
     await flush();
     await advancePoll();
     expect(screen.getByText("生成失败")).toBeInTheDocument();
-    expect(screen.getByText("创意生成失败。")).toBeInTheDocument();
+    expect(screen.getByText("Creative生成失败")).toBeInTheDocument();
     expect(screen.getByText("错误编号：req_creative_task")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("Traceback");
   });
@@ -294,7 +475,7 @@ describe("CreativeGenerateAction", () => {
     rerenderCreative(true);
     expect(screen.getByText("已生成")).toBeInTheDocument();
     expect(screen.queryByText("生成失败")).not.toBeInTheDocument();
-    expect(screen.queryByText("创意生成失败。")).not.toBeInTheDocument();
+    expect(screen.queryByText("Creative生成失败")).not.toBeInTheDocument();
   });
 
   it("recovers an active Creative task after page refresh and resumes polling", async () => {

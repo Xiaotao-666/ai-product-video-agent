@@ -425,6 +425,271 @@ class StoryboardWorkflowExtractionTests(unittest.TestCase):
         self.assertFalse(self.paths.storyboard_file_path().exists())
         self.assertFalse(self.paths.video_prompts_path().exists())
 
+    def test_12_shared_revise_reschedules_and_returns_to_waiting_review(self):
+        from evaluation import EvaluationRecorder
+        from project_state import ProjectStage, StageStatus
+        from storyboard import schedule_av_timeline
+        from storyboard_workflow import revise_storyboard_stage
+
+        self.mark_storyboard_waiting_review()
+        revised_payload = self.planning_payload()
+        revised_payload["shots"][1]["visual"] = "新增产品微距特写"
+        feedback = "保留镜头数量，第二镜头增加产品微距；前2秒不要字幕。"
+        with (
+            patch(
+                "storyboard.deepseek_json_request",
+                return_value=revised_payload,
+            ) as provider,
+            patch(
+                "storyboard.schedule_av_timeline",
+                wraps=schedule_av_timeline,
+            ) as scheduler,
+        ):
+            result = revise_storyboard_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.board(),
+                feedback,
+                "mock-key",
+                self.logger,
+                approved_creative=self.brief,
+                evaluation_recorder=EvaluationRecorder(self.paths),
+            )
+
+        provider.assert_called_once()
+        scheduler.assert_called_once()
+        self.assertIn(feedback, provider.call_args.args[2])
+        self.assertEqual(result.shots[1].visual, "新增产品微距特写")
+        self.assertGreaterEqual(result.shots[0].subtitle_cues[0].start_offset, 2)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD),
+            StageStatus.COMPLETED,
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD_REVIEW),
+            StageStatus.WAITING_REVIEW,
+        )
+        self.assertFalse(self.paths.video_prompts_path().exists())
+        evaluation = json.loads(
+            self.paths.evaluation_prompt_path("storyboard").read_text(encoding="utf-8")
+        )["records"][-1]
+        self.assertEqual(evaluation["operation"], "revise")
+        self.assertEqual(evaluation["input_fields"]["user_feedback"], feedback)
+
+    def test_13_shared_regenerate_is_clean_and_reschedules(self):
+        from project_state import ProjectStage, StageStatus
+        from storyboard import schedule_av_timeline
+        from storyboard_workflow import regenerate_storyboard_stage
+
+        old_board = self.board().model_copy(deep=True)
+        old_board.shots[0].visual = "OLD_STORYBOARD_DIRECTION"
+        self.paths.save_json(
+            self.paths.storyboard_file_path(),
+            old_board.model_dump(),
+        )
+        self.checkpoint.update_stage(ProjectStage.STORYBOARD, StageStatus.COMPLETED)
+        self.checkpoint.update_stage(
+            ProjectStage.STORYBOARD_REVIEW,
+            StageStatus.WAITING_REVIEW,
+        )
+        regenerated_payload = self.planning_payload()
+        regenerated_payload["shots"][0]["visual"] = "全新产品开场"
+        with (
+            patch(
+                "storyboard.deepseek_json_request",
+                return_value=regenerated_payload,
+            ) as provider,
+            patch(
+                "storyboard.schedule_av_timeline",
+                wraps=schedule_av_timeline,
+            ) as scheduler,
+        ):
+            result = regenerate_storyboard_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                "mock-key",
+                self.logger,
+                approved_creative=self.brief,
+            )
+
+        provider.assert_called_once()
+        scheduler.assert_called_once()
+        self.assertNotIn("OLD_STORYBOARD_DIRECTION", provider.call_args.args[2])
+        self.assertEqual(result.shots[0].visual, "全新产品开场")
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD_REVIEW),
+            StageStatus.WAITING_REVIEW,
+        )
+        self.assertFalse(self.paths.video_prompts_path().exists())
+
+    def test_14_revision_failures_preserve_old_canonical_and_state(self):
+        from storyboard import StoryboardError
+        from storyboard_workflow import (
+            regenerate_storyboard_stage,
+            revise_storyboard_stage,
+        )
+
+        self.mark_storyboard_waiting_review()
+        board_before = self.paths.storyboard_file_path().read_bytes()
+        creative_before = self.paths.creative_brief_path().read_bytes()
+        for callable_, provider_name, arguments in (
+            (
+                revise_storyboard_stage,
+                "storyboard_workflow.revise_storyboard",
+                (self.board(), "请修改第二镜头"),
+            ),
+            (
+                regenerate_storyboard_stage,
+                "storyboard_workflow.generate_storyboard",
+                (),
+            ),
+        ):
+            with (
+                patch(provider_name, side_effect=StoryboardError("SCHEDULE_UNSATISFIABLE")),
+                self.assertRaises(StoryboardError),
+            ):
+                callable_(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    *arguments,
+                    "mock-key",
+                    self.logger,
+                    approved_creative=self.brief,
+                )
+            self.assertEqual(self.paths.storyboard_file_path().read_bytes(), board_before)
+            self.assertEqual(self.paths.creative_brief_path().read_bytes(), creative_before)
+
+    def test_15_storyboard_save_failure_rolls_back_feedback_constraint(self):
+        from project_manager import ProjectDirectoryError
+        from storyboard_workflow import revise_storyboard_stage
+
+        self.mark_storyboard_waiting_review()
+        board_before = self.paths.storyboard_file_path().read_bytes()
+        creative_before = self.paths.creative_brief_path().read_bytes()
+        revised_payload = self.planning_payload()
+        with (
+            patch(
+                "storyboard.deepseek_json_request",
+                return_value=revised_payload,
+            ),
+            patch(
+                "storyboard_workflow._commit_storyboard_revision",
+                side_effect=ProjectDirectoryError("simulated save failure"),
+            ),
+            self.assertRaises(ProjectDirectoryError),
+        ):
+            revise_storyboard_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.board(),
+                "前3秒不要字幕",
+                "mock-key",
+                self.logger,
+                approved_creative=self.brief,
+            )
+        self.assertEqual(self.paths.storyboard_file_path().read_bytes(), board_before)
+        self.assertEqual(self.paths.creative_brief_path().read_bytes(), creative_before)
+
+    def test_16_invalid_review_state_rejects_both_before_provider(self):
+        from storyboard_workflow import (
+            StoryboardStageStateError,
+            regenerate_storyboard_stage,
+            revise_storyboard_stage,
+        )
+
+        with (
+            patch("storyboard_workflow.revise_storyboard") as revise_provider,
+            self.assertRaises(StoryboardStageStateError),
+        ):
+            revise_storyboard_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                self.board(),
+                "feedback",
+                "mock-key",
+                self.logger,
+            )
+        with (
+            patch("storyboard_workflow.generate_storyboard") as regenerate_provider,
+            self.assertRaises(StoryboardStageStateError),
+        ):
+            regenerate_storyboard_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                "mock-key",
+                self.logger,
+            )
+        revise_provider.assert_not_called()
+        regenerate_provider.assert_not_called()
+
+    def test_17_cli_revision_callback_uses_shared_core_callable(self):
+        import main
+
+        self.mark_storyboard_waiting_review()
+
+        class SharedRevisionReached(RuntimeError):
+            pass
+
+        def revise_from_gate(_title, artifact, _cancel, initial, _recorder, **kwargs):
+            self.assertEqual(artifact, "storyboard")
+            kwargs["revise"](initial, "feedback")
+
+        with (
+            patch.object(main, "human_review_gate", side_effect=revise_from_gate),
+            patch.object(
+                main,
+                "revise_storyboard_stage",
+                side_effect=SharedRevisionReached,
+            ) as shared,
+        ):
+            with self.assertRaises(SharedRevisionReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        shared.assert_called_once()
+
+    def test_18_cli_regenerate_callback_uses_shared_core_callable(self):
+        import main
+
+        self.mark_storyboard_waiting_review()
+
+        class SharedRegenerateReached(RuntimeError):
+            pass
+
+        def regenerate_from_gate(_title, artifact, _cancel, _initial, _recorder, **kwargs):
+            self.assertEqual(artifact, "storyboard")
+            kwargs["regenerate"]()
+
+        with (
+            patch.object(main, "human_review_gate", side_effect=regenerate_from_gate),
+            patch.object(
+                main,
+                "regenerate_storyboard_stage",
+                side_effect=SharedRegenerateReached,
+            ) as shared,
+        ):
+            with self.assertRaises(SharedRegenerateReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        shared.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -487,6 +487,7 @@ class WebBackendPhase3A3BCreativeRevisionTests(unittest.TestCase):
             "/api/projects/{project_id}/planning/creative/generate": (
                 "CREATIVE_GENERATE"
             ),
+            "/api/projects/{project_id}/planning/creative/retry": "CREATIVE_RETRY",
             "/api/projects/{project_id}/planning/creative/revise": "CREATIVE_REVISE",
             "/api/projects/{project_id}/planning/creative/regenerate": (
                 "CREATIVE_REGENERATE"

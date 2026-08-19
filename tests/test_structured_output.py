@@ -14,6 +14,7 @@ from prompt_generator import (
     MAX_JSON_REQUEST_ATTEMPTS,
     ProductVideoRequest,
     PromptGenerationError,
+    StructuredOutputExhaustedError,
     strict_json_loads,
 )
 from storyboard import (
@@ -174,6 +175,7 @@ class StructuredOutputTests(unittest.TestCase):
                 try:
                     generate_video_prompts(request(), brief(), board(), "mock-key", logger)
                 except PromptGenerationError as exc:
+                    self.assertIsInstance(exc, StructuredOutputExhaustedError)
                     checkpoint.fail(exc)
                 else:
                     self.fail("Expected PromptGenerationError")

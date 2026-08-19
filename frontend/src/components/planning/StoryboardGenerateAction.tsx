@@ -14,6 +14,7 @@ interface StoryboardGenerateActionProps {
   availableActions: AvailableAction[];
   hasStoryboard: boolean | null;
   onTerminalRefresh: () => Promise<void>;
+  onActiveTaskChange?: (active: boolean) => void;
 }
 
 function isStoryboardGenerateTask(task: TaskRecord): boolean {
@@ -57,6 +58,7 @@ export function StoryboardGenerateAction({
   availableActions,
   hasStoryboard,
   onTerminalRefresh,
+  onActiveTaskChange,
 }: StoryboardGenerateActionProps) {
   const [submitting, setSubmitting] = useState(false);
   const submissionGuard = useRef(false);
@@ -73,12 +75,18 @@ export function StoryboardGenerateAction({
     projectId,
     isTask: isStoryboardGenerateTask,
     onTerminalRefresh,
+    enabled: canGenerate || hasStoryboard === false,
   });
   const busy = submitting || active || terminalRefreshPending;
 
   useEffect(() => {
     setSubmitting(false);
   }, [projectId]);
+
+  useEffect(() => {
+    onActiveTaskChange?.(busy);
+    return () => onActiveTaskChange?.(false);
+  }, [busy, onActiveTaskChange]);
 
   const submit = async () => {
     if (submissionGuard.current || !canGenerate || active) return;

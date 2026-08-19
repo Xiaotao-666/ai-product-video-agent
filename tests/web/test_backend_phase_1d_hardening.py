@@ -311,15 +311,19 @@ class WebBackendPhase1DHardeningTests(unittest.TestCase):
         self.assertEqual(payload["workflow_phase"], "COMPLETED")
         self.assertEqual(payload["available_actions"], [])
 
-    def test_23_failed_and_cancelled_projects_have_no_actions(self):
-        for status in ("FAILED", "CANCELLED"):
+    def test_23_only_recoverable_initial_creative_failed_exposes_retry(self):
+        expected = {
+            "FAILED": ["RETRY_GENERATE_CREATIVE"],
+            "CANCELLED": [],
+        }
+        for status, actions in expected.items():
             with self.subTest(status=status):
                 data = base_project(project_id=f"project-{status.casefold()}")
                 data["status"] = status
                 data["stages"]["CREATIVE"]["status"] = status
                 self.projects_root = Path(self.temp.name) / status.casefold()
                 payload = self.workflow_for(data)
-                self.assertEqual(payload["available_actions"], [])
+                self.assertEqual(payload["available_actions"], actions)
 
     def test_24_actions_never_expose_candidate_terminology(self):
         from web_backend.models.projects import AvailableAction

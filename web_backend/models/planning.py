@@ -15,6 +15,14 @@ class CreativeReviseRequest(BaseModel):
     feedback: str = Field(min_length=1, max_length=4000)
 
 
+class StoryboardReviseRequest(BaseModel):
+    """Bounded Storyboard feedback; no hidden action mode is accepted."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    feedback: str = Field(min_length=1, max_length=4000)
+
+
 class CreativeNarrationPlan(ResponseModel):
     enabled: bool
     tone: str | None = None

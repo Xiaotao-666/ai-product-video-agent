@@ -39,6 +39,10 @@ _MANIFEST_PATHS = {
     "music": ("music", "music_manifest.json"),
     "export": ("exports", "export_manifest.json"),
 }
+_PLANNING_ARTIFACT_PATHS = {
+    "creative_exists": ("concepts", "creative_brief.json"),
+    "storyboard_exists": ("storyboard", "storyboard.json"),
+}
 
 
 class ProjectRepositoryError(RuntimeError):
@@ -367,7 +371,7 @@ class ProjectRepository:
         return record.data
 
     def _load_manifests(self, record: _ProjectRecord) -> ProjectManifests:
-        loaded: dict[str, Mapping[str, Any] | None] = {}
+        loaded: dict[str, Any] = {}
         for name, parts in _MANIFEST_PATHS.items():
             path = record.directory_path.joinpath(*parts)
             if not path.exists():
@@ -389,7 +393,49 @@ class ProjectRepository:
             if not isinstance(payload, Mapping):
                 raise ProjectDataCorrupt("manifest is not an object")
             loaded[name] = payload
+
+        for name, parts in _PLANNING_ARTIFACT_PATHS.items():
+            loaded[name] = self._managed_path_exists(record, *parts)
+        loaded["video_prompts_exist"] = any(
+            self._managed_path_exists(record, "storyboard", filename)
+            for filename in (
+                "video_prompts.json",
+                "video_prompt_generation_progress.json",
+            )
+        )
+        loaded["shot_artifacts_exist"] = self._shot_artifacts_exist(record)
         return ProjectManifests(**loaded)
+
+    @staticmethod
+    def _managed_path_exists(record: _ProjectRecord, *parts: str) -> bool:
+        path = record.directory_path.joinpath(*parts)
+        if not path.exists():
+            return False
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ProjectDataCorrupt("managed artifact cannot be resolved") from exc
+        if not _is_within(resolved, record.directory_path):
+            raise ProjectDataCorrupt("managed artifact escaped project directory")
+        return True
+
+    @staticmethod
+    def _shot_artifacts_exist(record: _ProjectRecord) -> bool:
+        shots = record.directory_path / "shots"
+        if not shots.exists():
+            return False
+        try:
+            resolved = shots.resolve(strict=True)
+        except OSError as exc:
+            raise ProjectDataCorrupt("Shot storage cannot be resolved") from exc
+        if not _is_within(resolved, record.directory_path):
+            raise ProjectDataCorrupt("Shot storage escaped project directory")
+        if not resolved.is_dir():
+            return True
+        try:
+            return any(path.is_file() or path.is_symlink() for path in resolved.rglob("*"))
+        except OSError as exc:
+            raise ProjectDataCorrupt("Shot storage is unreadable") from exc
 
     def _project_name(self, record: _ProjectRecord) -> str:
         assert record.data is not None

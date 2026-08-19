@@ -50,9 +50,12 @@ export type TaskStatus =
 
 export type TaskOperation =
   | "CREATIVE_GENERATE"
+  | "CREATIVE_RETRY"
   | "CREATIVE_REVISE"
   | "CREATIVE_REGENERATE"
   | "STORYBOARD_GENERATE"
+  | "STORYBOARD_REVISE"
+  | "STORYBOARD_REGENERATE"
   | "VIDEO_PROMPT_GENERATE"
   | "SHOT_GENERATE"
   | "ASSEMBLY"
@@ -134,6 +137,7 @@ export interface FinalExportState extends ComponentState {
 
 export type AvailableAction =
   | "GENERATE_CREATIVE"
+  | "RETRY_GENERATE_CREATIVE"
   | "APPROVE_CREATIVE"
   | "REVISE_CREATIVE"
   | "REGENERATE_CREATIVE"

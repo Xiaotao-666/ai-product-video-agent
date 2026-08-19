@@ -26,6 +26,51 @@ class CreativeRevisionError(RuntimeError):
     """Raised when a persisted Creative cannot be revised safely."""
 
 
+class CreativeRecoveryError(RuntimeError):
+    """Raised when a failed initial Creative generation is not safely retryable."""
+
+
+def _require_failed_creative_retry_allowed(
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+) -> None:
+    if (
+        checkpoint.current_stage is not ProjectStage.CREATIVE
+        or checkpoint.stage_status(ProjectStage.CREATIVE) is not StageStatus.FAILED
+        or checkpoint.stage_status(ProjectStage.CREATIVE_REVIEW)
+        is not StageStatus.NOT_STARTED
+    ):
+        raise CreativeRecoveryError("Creative is not in a retryable failed state")
+
+    planning_artifacts = (
+        paths.creative_brief_path(),
+        paths.storyboard_file_path(),
+        paths.video_prompts_path(),
+        paths.video_prompt_generation_progress_path(),
+    )
+    if any(path.exists() for path in planning_artifacts):
+        raise CreativeRecoveryError("Creative retry requires no planning artifacts")
+    if any(path.is_file() for path in paths.shots_dir.rglob("*")):
+        raise CreativeRecoveryError("Creative retry requires no Shot artifacts")
+
+    downstream_stages = (
+        ProjectStage.STORYBOARD,
+        ProjectStage.STORYBOARD_REVIEW,
+        ProjectStage.VIDEO_PROMPT,
+        ProjectStage.PROMPT_REVIEW,
+        ProjectStage.VIDEO_GENERATION,
+        ProjectStage.COMPLETED,
+    )
+    if any(
+        checkpoint.stage_status(stage) is not StageStatus.NOT_STARTED
+        for stage in downstream_stages
+    ):
+        raise CreativeRecoveryError("Creative retry requires untouched downstream stages")
+    generation = checkpoint.data.get("video_generation") or {}
+    if generation.get("completed_shots") or generation.get("shots"):
+        raise CreativeRecoveryError("Creative retry requires no Shot checkpoint data")
+
+
 def approve_creative_stage(checkpoint: ProjectCheckpoint) -> None:
     """Approve the persisted Creative review without starting Storyboard.
 
@@ -98,6 +143,30 @@ def generate_creative_stage(
     )
     task_logger.event("CREATIVE_GENERATED", "创意方案生成成功")
     return brief
+
+
+def retry_failed_creative_stage(
+    paths: ProjectPaths,
+    request: ProductVideoRequest,
+    checkpoint: ProjectCheckpoint,
+    deepseek_key: str,
+    task_logger: TaskLogger,
+    *,
+    evaluation_recorder: EvaluationRecorder | None = None,
+    reference_asset_context: dict[str, Any] | None = None,
+) -> CreativeBrief:
+    """Retry one failed initial Creative generation through the shared Core state machine."""
+
+    _require_failed_creative_retry_allowed(paths, checkpoint)
+    return generate_creative_stage(
+        paths,
+        request,
+        checkpoint,
+        deepseek_key,
+        task_logger,
+        evaluation_recorder=evaluation_recorder,
+        reference_asset_context=reference_asset_context,
+    )
 
 
 def load_creative_brief(paths: ProjectPaths) -> CreativeBrief:

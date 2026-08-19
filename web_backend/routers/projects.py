@@ -13,6 +13,7 @@ from web_backend.dependencies import (
     get_project_repository,
     get_project_service,
     get_shot_repository,
+    get_task_service,
 )
 from web_backend.models.planning import (
     CreativeContentResponse,
@@ -28,12 +29,14 @@ from web_backend.models.postproduction import (
     VoiceDetail,
 )
 from web_backend.models.projects import (
+    AvailableAction,
     ProjectDetail,
     ProjectCreateRequest,
     ProjectCreateResponse,
     ProjectListResponse,
     ProjectWorkflowResponse,
 )
+from web_backend.services.tasks import TaskService
 from web_backend.models.shots import ShotDetail, ShotListResponse
 from web_backend.services.projects import (
     InvalidProjectName,
@@ -121,6 +124,26 @@ def _media_response(path, media_type: str) -> FileResponse:
     )
 
 
+def _hide_retry_action_while_task_active(
+    workflow,
+    project_id: str,
+    task_service: TaskService,
+):
+    if AvailableAction.RETRY_GENERATE_CREATIVE not in workflow.available_actions:
+        return workflow
+    if task_service.active_for_project(project_id) is None:
+        return workflow
+    return workflow.model_copy(
+        update={
+            "available_actions": [
+                action
+                for action in workflow.available_actions
+                if action is not AvailableAction.RETRY_GENERATE_CREATIVE
+            ]
+        }
+    )
+
+
 @router.post(
     "/projects",
     response_model=ProjectCreateResponse,
@@ -156,9 +179,16 @@ async def list_projects(
 async def get_project(
     project_id: str,
     repository: Annotated[ProjectRepository, Depends(get_project_repository)],
+    task_service: Annotated[TaskService, Depends(get_task_service)],
 ) -> ProjectDetail:
     try:
-        return repository.get_project(project_id)
+        detail = repository.get_project(project_id)
+        workflow = _hide_retry_action_while_task_active(
+            detail.workflow,
+            detail.project_id,
+            task_service,
+        )
+        return detail.model_copy(update={"workflow": workflow})
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
 
@@ -170,9 +200,15 @@ async def get_project(
 async def get_project_workflow(
     project_id: str,
     repository: Annotated[ProjectRepository, Depends(get_project_repository)],
+    task_service: Annotated[TaskService, Depends(get_task_service)],
 ) -> ProjectWorkflowResponse:
     try:
-        return repository.get_workflow(project_id)
+        workflow = repository.get_workflow(project_id)
+        return _hide_retry_action_while_task_active(
+            workflow,
+            workflow.project_id,
+            task_service,
+        )
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
 

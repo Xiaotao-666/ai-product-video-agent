@@ -39,6 +39,10 @@ class PromptGenerationError(RuntimeError):
     """Raised when DeepSeek cannot return a usable structured result."""
 
 
+class StructuredOutputExhaustedError(PromptGenerationError):
+    """Raised after every structured-output validation attempt is rejected."""
+
+
 def extract_api_error(response: requests.Response) -> str:
     try:
         payload = response.json()
@@ -349,9 +353,9 @@ def deepseek_json_request(
             if task_logger:
                 task_logger.error(exc, stage=raw_stage)
             raise PromptGenerationError(f"DeepSeek API 响应结构无效：{exc}") from exc
-    raise PromptGenerationError(
+    raise StructuredOutputExhaustedError(
         f"DeepSeek 连续 {MAX_JSON_REQUEST_ATTEMPTS} 次返回无效结构化 JSON：{last_format_error}"
-    )
+    ) from last_format_error
 
 
 SAFETY_REVIEW_INSTRUCTION = """

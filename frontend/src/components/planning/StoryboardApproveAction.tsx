@@ -10,6 +10,7 @@ interface StoryboardApproveActionProps {
   projectId: string;
   availableActions: AvailableAction[];
   onApprovedRefresh: () => Promise<void>;
+  disabled?: boolean;
 }
 
 interface ActionError {
@@ -48,6 +49,7 @@ export function StoryboardApproveAction({
   projectId,
   availableActions,
   onApprovedRefresh,
+  disabled = false,
 }: StoryboardApproveActionProps) {
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -68,7 +70,7 @@ export function StoryboardApproveAction({
   }, [projectId]);
 
   const submit = async () => {
-    if (submissionGuard.current || !canApprove) return;
+    if (submissionGuard.current || !canApprove || disabled) return;
     submissionGuard.current = true;
     setSubmitting(true);
     setError(null);
@@ -119,7 +121,7 @@ export function StoryboardApproveAction({
           <button
             className="primary-button"
             type="button"
-            disabled={submitting}
+            disabled={submitting || disabled}
             onClick={() => {
               setError(null);
               setConfirming(true);
@@ -138,7 +140,7 @@ export function StoryboardApproveAction({
             <button
               className="secondary-button"
               type="button"
-              disabled={submitting}
+              disabled={submitting || disabled}
               onClick={() => setConfirming(false)}
             >
               取消
@@ -146,7 +148,7 @@ export function StoryboardApproveAction({
             <button
               className="primary-button"
               type="button"
-              disabled={submitting}
+              disabled={submitting || disabled}
               onClick={submit}
             >
               {submitting ? "审核中…" : "确认通过"}
