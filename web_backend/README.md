@@ -47,6 +47,7 @@ POST /api/projects/{project_id}/planning/video-prompts/generate
 POST /api/projects/{project_id}/planning/video-prompts/revise
 POST /api/projects/{project_id}/planning/video-prompts/regenerate
 GET /api/projects/{project_id}/references
+POST /api/projects/{project_id}/references
 GET /api/projects/{project_id}/references/{asset_id}/image
 GET /api/projects/{project_id}/shots/{shot_id}/generation/options
 POST /api/projects/{project_id}/shots/{shot_id}/generation/preflight
@@ -142,3 +143,20 @@ pointer is untouched, review remains `WAITING_REVIEW`, and no Shot video starts.
 The Backend loads the same repository `.env` file as the CLI during server
 startup. Capability preflight checks only whether DeepSeek is configured and
 never returns the credential. Automated tests mock the Core Provider call.
+
+## Project Reference Asset Library
+
+Reference images are project-level, provider-neutral assets stored by the
+existing Core `ReferenceAssetManager`. The synchronous multipart upload accepts
+one file per request, runs the Core format, size, dimension, integrity,
+SHA-256 deduplication, and stable `ref_###` allocation rules under the existing
+per-project write lock, and returns only a path-free public DTO. GET list and
+preview remain strictly read-only.
+
+Uploading an asset does not choose `reference_asset` or `first_frame`, does not
+advance workflow state, and does not create a durable task. The same stable
+`asset_id` can later be selected explicitly for either Shot visual-input mode.
+The manifest remains purpose- and provider-neutral. This phase creates no
+analysis resource or status and performs no Vision, LLM, image-model, video,
+TTS, or FFmpeg call; any future multimodal analysis must remain a separate
+resource keyed by the existing `asset_id`.

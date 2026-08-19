@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
 
 from web_backend.dependencies import (
     get_reference_asset_repository,
+    get_reference_asset_upload_service,
     get_shot_generation_preflight_service,
 )
 from web_backend.errors import registered_api_error
@@ -17,6 +18,7 @@ from web_backend.models.generation import (
     GenerationPreflightRequest,
     GenerationPreflightResponse,
     ReferenceAssetListResponse,
+    ReferenceAssetUploadResponse,
 )
 from web_backend.repositories.project_repository import (
     InvalidProjectId,
@@ -35,6 +37,16 @@ from web_backend.repositories.shot_repository import InvalidShotId, ShotNotFound
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
+from web_backend.services.reference_assets import (
+    InvalidReferenceFile,
+    ReferenceAssetUploadError,
+    ReferenceAssetUploadService,
+    ReferenceFileTooLarge,
+    ReferenceImageInvalid,
+    ReferenceImportFailed,
+    ReferenceUploadBusy,
+    UnsupportedReferenceImageFormat,
+)
 
 
 router = APIRouter(tags=["shot-generation"])
@@ -50,6 +62,12 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {
     InvalidReferenceAssetId: "INVALID_REFERENCE_ASSET_ID",
     ReferenceAssetNotFound: "REFERENCE_ASSET_NOT_FOUND",
     ReferenceAssetDataCorrupt: "REFERENCE_ASSET_DATA_CORRUPT",
+    InvalidReferenceFile: "INVALID_REFERENCE_FILE",
+    UnsupportedReferenceImageFormat: "UNSUPPORTED_IMAGE_FORMAT",
+    ReferenceImageInvalid: "REFERENCE_IMAGE_INVALID",
+    ReferenceFileTooLarge: "REFERENCE_FILE_TOO_LARGE",
+    ReferenceImportFailed: "REFERENCE_IMPORT_FAILED",
+    ReferenceUploadBusy: "PROJECT_BUSY",
 }
 
 
@@ -73,6 +91,24 @@ def list_reference_assets(
     try:
         return repository.list_assets(project_id)
     except ProjectRepositoryError as error:
+        _raise_mapped(error)
+
+
+@router.post(
+    "/projects/{project_id}/references",
+    response_model=ReferenceAssetUploadResponse,
+    status_code=201,
+)
+def upload_reference_asset(
+    project_id: str,
+    file: Annotated[UploadFile, File(...)],
+    service: Annotated[
+        ReferenceAssetUploadService, Depends(get_reference_asset_upload_service)
+    ],
+) -> ReferenceAssetUploadResponse:
+    try:
+        return service.upload(project_id, file)
+    except (ProjectRepositoryError, ReferenceAssetUploadError) as error:
         _raise_mapped(error)
 
 
@@ -167,4 +203,3 @@ def generation_preflight(
         return service.preflight(project_id, shot_id, payload)
     except ProjectRepositoryError as error:
         _raise_mapped(error)
-

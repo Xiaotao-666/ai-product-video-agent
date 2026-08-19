@@ -150,6 +150,31 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "REFERENCE_ASSET_DATA_CORRUPT": ErrorDefinition(
         422, "REFERENCE_ERROR", "REFERENCE_ASSET_DATA_CORRUPT", "参考素材无法安全读取。"
     ),
+    "INVALID_REFERENCE_FILE": ErrorDefinition(
+        422, "REFERENCE_ERROR", "INVALID_REFERENCE_FILE", "参考素材文件为空或无效。"
+    ),
+    "UNSUPPORTED_IMAGE_FORMAT": ErrorDefinition(
+        415,
+        "REFERENCE_ERROR",
+        "UNSUPPORTED_IMAGE_FORMAT",
+        "仅支持 JPG、JPEG、PNG 和 WebP 图片。",
+    ),
+    "REFERENCE_IMAGE_INVALID": ErrorDefinition(
+        422, "REFERENCE_ERROR", "REFERENCE_IMAGE_INVALID", "图片内容无法安全读取。"
+    ),
+    "REFERENCE_FILE_TOO_LARGE": ErrorDefinition(
+        413,
+        "REFERENCE_ERROR",
+        "REFERENCE_FILE_TOO_LARGE",
+        "参考素材超过 20MB 大小限制。",
+    ),
+    "REFERENCE_IMPORT_FAILED": ErrorDefinition(
+        500,
+        "REFERENCE_ERROR",
+        "REFERENCE_IMPORT_FAILED",
+        "参考素材导入失败，请稍后重试。",
+        retryable=True,
+    ),
     "ASSEMBLY_DATA_CORRUPT": ErrorDefinition(
         422, "ASSEMBLY_ERROR", "ASSEMBLY_DATA_CORRUPT", "合片数据无法读取。"
     ),

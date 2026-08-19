@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   ApiClientError,
@@ -14,6 +15,7 @@ import type {
   GenerationVisualInputMode,
   ReferenceAsset,
 } from "../../api/types";
+import { projectWorkspacePath } from "../../stageDefinitions";
 
 
 interface Props {
@@ -246,7 +248,10 @@ export function ShotGenerationPreparation({ projectId, shotId }: Props) {
             <div className="reference-selector">
               <h3>选择项目已有素材</h3>
               {assets.length === 0 ? (
-                <p className="stage-empty-copy">当前项目暂无参考素材。</p>
+                <p className="stage-empty-copy">
+                  当前项目暂无参考素材。可先
+                  <Link to={projectWorkspacePath(projectId)}>前往项目素材库添加</Link>。
+                </p>
               ) : (
                 <div className="reference-grid">
                   {assets.map((asset) => (

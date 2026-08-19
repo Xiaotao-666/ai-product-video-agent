@@ -20,6 +20,7 @@ from web_backend.repositories.task_repository import TaskRepository
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
+from web_backend.services.reference_assets import ReferenceAssetUploadService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
@@ -46,6 +47,10 @@ def get_shot_repository(request: Request) -> ShotRepository:
 
 def get_reference_asset_repository(request: Request) -> ReferenceAssetRepository:
     return request.app.state.reference_asset_repository
+
+
+def get_reference_asset_upload_service(request: Request) -> ReferenceAssetUploadService:
+    return request.app.state.reference_asset_upload_service
 
 
 def get_postproduction_repository(request: Request) -> PostProductionRepository:

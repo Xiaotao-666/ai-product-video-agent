@@ -179,6 +179,16 @@ class ReferenceAssetManager:
         if not source.is_file():
             raise ReferenceAssetError(f"Reference image does not exist: {source}")
         image_type, width, height = inspect_image(source)
+        expected_image_type = {
+            ".jpg": "jpeg",
+            ".jpeg": "jpeg",
+            ".png": "png",
+            ".webp": "webp",
+        }[source.suffix.lower()]
+        if image_type != expected_image_type:
+            raise ReferenceAssetError(
+                "Reference image extension does not match its decoded format."
+            )
         digest = _sha256(source)
         manifest = self._load_manifest()
         for existing in manifest["assets"]:
@@ -227,7 +237,11 @@ class ReferenceAssetManager:
             "added_at": _now_iso(),
         }
         manifest["assets"].append(record)
-        self._save_manifest(manifest)
+        try:
+            self._save_manifest(manifest)
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
         if self.task_logger:
             self.task_logger.event(
                 "REFERENCE_ASSET_IMPORTED",

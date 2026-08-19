@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 import {
   getReferenceAssets,
@@ -126,7 +127,9 @@ const ready: GenerationPreflightResponse = {
 
 function renderPreparation() {
   return render(
-    <ShotGenerationPreparation projectId="project-a" shotId="shot_01" />,
+    <MemoryRouter>
+      <ShotGenerationPreparation projectId="project-a" shotId="shot_01" />
+    </MemoryRouter>,
   );
 }
 
@@ -199,7 +202,11 @@ describe("ShotGenerationPreparation", () => {
     renderPreparation();
     await screen.findByRole("heading", { name: "生成设置" });
     fireEvent.click(screen.getByRole("radio", { name: /主体参考/ }));
-    expect(screen.getByText("当前项目暂无参考素材。")).toBeInTheDocument();
+    expect(screen.getByText(/当前项目暂无参考素材/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往项目素材库添加" })).toHaveAttribute(
+      "href",
+      "/projects/project-a",
+    );
     expect(screen.queryByText(/上传/)).not.toBeInTheDocument();
   });
 
@@ -266,4 +273,3 @@ describe("ShotGenerationPreparation", () => {
     expect(mockPreflight).not.toHaveBeenCalled();
   });
 });
-

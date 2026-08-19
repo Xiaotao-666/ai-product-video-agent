@@ -42,6 +42,7 @@ import {
   reviseCreative,
   reviseStoryboard,
   reviseVideoPrompts,
+  uploadReferenceAsset,
 } from "./client";
 
 function responseOf(
@@ -1583,6 +1584,37 @@ describe("API client", () => {
     expect(getReferenceImageUrl("中文项目", "ref_001")).toBe(
       "http://127.0.0.1:8000/api/projects/%E4%B8%AD%E6%96%87%E9%A1%B9%E7%9B%AE/references/ref_001/image",
     );
+  });
+
+  it("uploads one reference with FormData and lets the browser set its boundary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf({
+        asset_id: "ref_001",
+        filename: "ref_001.png",
+        media_type: "image/png",
+        width: 640,
+        height: 480,
+        deduplicated: false,
+      }, 201),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["png-bytes"], "product.png", { type: "image/png" });
+
+    const result = await uploadReferenceAsset("中文项目", file);
+
+    expect(result.data.asset_id).toBe("ref_001");
+    expect(result.data.deduplicated).toBe(false);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "http://127.0.0.1:8000/api/projects/%E4%B8%AD%E6%96%87%E9%A1%B9%E7%9B%AE/references",
+    );
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    const uploaded = (init.body as FormData).get("file") as File;
+    expect(uploaded.name).toBe(file.name);
+    expect(uploaded.size).toBe(file.size);
+    expect(init.headers).toEqual({ Accept: "application/json" });
+    expect(JSON.stringify(init.headers).toLowerCase()).not.toContain("content-type");
   });
 
   it("posts only the selected preflight configuration and parses the resolved route", async () => {

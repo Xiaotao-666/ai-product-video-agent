@@ -434,6 +434,10 @@ export interface ReferenceAsset {
   height: number;
 }
 
+export interface ReferenceAssetUploadResponse extends ReferenceAsset {
+  deduplicated: boolean;
+}
+
 export interface ReferenceAssetListResponse {
   project_id: string;
   assets: ReferenceAsset[];

@@ -7,7 +7,11 @@ import {
 } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { ApiClientError, createProject } from "../api/client";
+import {
+  ApiClientError,
+  createProject,
+  uploadReferenceAsset,
+} from "../api/client";
 import type { CreateProjectRequest } from "../api/types";
 
 interface ProjectFormValues {
@@ -20,7 +24,12 @@ interface ProjectFormValues {
 }
 
 type ProjectFormErrors = Partial<Record<keyof ProjectFormValues, string>>;
-type SubmissionState = "idle" | "submitting" | "success";
+type SubmissionState =
+  | "idle"
+  | "creating"
+  | "uploading"
+  | "partial-failure"
+  | "success";
 
 const INITIAL_VALUES: ProjectFormValues = {
   product_name: "",
@@ -74,6 +83,29 @@ function globalErrorMessage(code: string): string {
   }
 }
 
+function safeFileLabel(file: File): string {
+  return file.name.split(/[\\/]/).pop()?.slice(0, 160) || "未命名图片";
+}
+
+function referenceUploadErrorMessage(code: string): string {
+  switch (code) {
+    case "INVALID_REFERENCE_FILE":
+      return "所选文件为空或无效。";
+    case "UNSUPPORTED_IMAGE_FORMAT":
+      return "仅支持 JPG、JPEG、PNG 和 WebP 图片。";
+    case "REFERENCE_IMAGE_INVALID":
+      return "图片内容无法读取，请选择有效图片。";
+    case "REFERENCE_FILE_TOO_LARGE":
+      return "图片超过 20MB 大小限制。";
+    case "PROJECT_BUSY":
+      return "项目正在执行其他操作，请稍后重试。";
+    case "NETWORK_ERROR":
+      return "无法连接 Backend，请确认本地服务已启动。";
+    default:
+      return "部分参考素材上传失败。";
+  }
+}
+
 export function CreateProjectPage() {
   const navigate = useNavigate();
   const [values, setValues] = useState<ProjectFormValues>(INITIAL_VALUES);
@@ -82,6 +114,10 @@ export function CreateProjectPage() {
   const [correlationId, setCorrelationId] = useState<string | null>(null);
   const [submissionState, setSubmissionState] =
     useState<SubmissionState>("idle");
+  const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
+  const [failedReferenceFiles, setFailedReferenceFiles] = useState<File[]>([]);
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const submittingRef = useRef(false);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -103,6 +139,40 @@ export function CreateProjectPage() {
       setGlobalError(null);
       setCorrelationId(null);
     };
+
+  const scheduleProjectsRedirect = () => {
+    setSubmissionState("success");
+    redirectTimerRef.current = setTimeout(() => {
+      navigate("/projects", { replace: true });
+    }, 350);
+  };
+
+  const uploadReferences = async (projectId: string, files: File[]) => {
+    const failures: File[] = [];
+    let lastError: ApiClientError | null = null;
+    for (const [index, file] of files.entries()) {
+      setUploadProgress(`正在上传参考素材 ${index + 1} / ${files.length}…`);
+      try {
+        await uploadReferenceAsset(projectId, file);
+      } catch (error) {
+        failures.push(file);
+        if (error instanceof ApiClientError) lastError = error;
+      }
+    }
+    setUploadProgress(null);
+    setFailedReferenceFiles(failures);
+    if (failures.length > 0) {
+      setSubmissionState("partial-failure");
+      setGlobalError(
+        `项目已创建，但 ${failures.length} 张参考素材上传失败。${lastError ? referenceUploadErrorMessage(lastError.code) : ""}`,
+      );
+      setCorrelationId(lastError?.correlationId ?? null);
+      submittingRef.current = false;
+      return false;
+    }
+    scheduleProjectsRedirect();
+    return true;
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -128,17 +198,20 @@ export function CreateProjectPage() {
     };
 
     submittingRef.current = true;
-    setSubmissionState("submitting");
+    setSubmissionState("creating");
     setErrors({});
     setGlobalError(null);
     setCorrelationId(null);
 
     try {
-      await createProject(request);
-      setSubmissionState("success");
-      redirectTimerRef.current = setTimeout(() => {
-        navigate("/projects", { replace: true });
-      }, 350);
+      const created = await createProject(request);
+      setCreatedProjectId(created.data.project_id);
+      if (referenceFiles.length === 0) {
+        scheduleProjectsRedirect();
+      } else {
+        setSubmissionState("uploading");
+        await uploadReferences(created.data.project_id, referenceFiles);
+      }
     } catch (error) {
       submittingRef.current = false;
       setSubmissionState("idle");
@@ -161,10 +234,26 @@ export function CreateProjectPage() {
     }
   };
 
-  const submitting = submissionState !== "idle";
+  const retryFailedUploads = async () => {
+    if (
+      !createdProjectId ||
+      failedReferenceFiles.length === 0 ||
+      submittingRef.current
+    ) {
+      return;
+    }
+    submittingRef.current = true;
+    setSubmissionState("uploading");
+    setGlobalError(null);
+    setCorrelationId(null);
+    await uploadReferences(createdProjectId, failedReferenceFiles);
+  };
+
+  const busy = submissionState === "creating" || submissionState === "uploading";
+  const projectAlreadyCreated = createdProjectId !== null;
 
   return (
-    <main className="main-content create-project-page" aria-busy={submitting}>
+    <main className="main-content create-project-page" aria-busy={busy}>
       <div className="create-page-content">
         <Link className="back-link" to="/projects">
           <span aria-hidden="true">←</span>
@@ -192,6 +281,15 @@ export function CreateProjectPage() {
             <div className="form-success" role="status" aria-live="polite">
               <strong>项目创建成功</strong>
               <span>正在返回 Projects…</span>
+            </div>
+          )}
+
+          {(submissionState === "creating" || submissionState === "uploading") && (
+            <div className="form-success" role="status" aria-live="polite">
+              <strong>
+                {submissionState === "creating" ? "正在创建项目…" : "项目创建成功"}
+              </strong>
+              <span>{uploadProgress ?? "正在准备参考素材…"}</span>
             </div>
           )}
 
@@ -223,6 +321,36 @@ export function CreateProjectPage() {
                 <span className="field-error" id="product-name-error">
                   {errors.product_name}
                 </span>
+              )}
+            </div>
+
+            <div className="form-field form-field-wide reference-file-field">
+              <label htmlFor="reference-files">参考素材（可选）</label>
+              <input
+                id="reference-files"
+                name="reference_files"
+                type="file"
+                accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                multiple
+                disabled={busy || projectAlreadyCreated}
+                onChange={(event) => {
+                  setReferenceFiles(Array.from(event.target.files ?? []));
+                  setFailedReferenceFiles([]);
+                  setGlobalError(null);
+                  setCorrelationId(null);
+                }}
+              />
+              <span className="field-help">
+                可上传产品、包装、品牌或角色参考图。素材将保存到项目素材库，可在后续 AI 理解和视频生成阶段复用。
+              </span>
+              {referenceFiles.length > 0 && (
+                <ul className="selected-reference-files" aria-label="已选择参考素材">
+                  {referenceFiles.map((file, index) => (
+                    <li key={`${file.name}-${file.size}-${index}`}>
+                      {safeFileLabel(file)}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
@@ -348,25 +476,47 @@ export function CreateProjectPage() {
           )}
 
           <div className="form-actions">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => navigate("/projects")}
-              disabled={submitting}
-            >
-              取消
-            </button>
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={submitting}
-            >
-              {submissionState === "submitting"
-                ? "创建中…"
-                : submissionState === "success"
-                  ? "创建成功"
-                  : "创建项目"}
-            </button>
+            {submissionState === "partial-failure" && createdProjectId ? (
+              <>
+                <Link
+                  className="secondary-button"
+                  to={`/projects/${encodeURIComponent(createdProjectId)}`}
+                >
+                  进入项目
+                </Link>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void retryFailedUploads()}
+                >
+                  重试失败图片
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => navigate("/projects")}
+                  disabled={busy}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={busy || projectAlreadyCreated}
+                >
+                  {submissionState === "creating"
+                    ? "创建中…"
+                    : submissionState === "uploading"
+                      ? "上传素材中…"
+                      : submissionState === "success"
+                        ? "创建成功"
+                        : "创建项目"}
+                </button>
+              </>
+            )}
           </div>
         </form>
       </div>

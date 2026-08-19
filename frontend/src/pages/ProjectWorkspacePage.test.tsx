@@ -6,10 +6,13 @@ import {
   ApiClientError,
   getProject,
   getProjectWorkflow,
+  getReferenceAssets,
+  uploadReferenceAsset,
 } from "../api/client";
 import type {
   ProjectDetail,
   ProjectWorkflowResponse,
+  ReferenceAssetListResponse,
   WorkflowState,
 } from "../api/types";
 import { ProjectWorkspacePage } from "./ProjectWorkspacePage";
@@ -20,11 +23,20 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     getProject: vi.fn(),
     getProjectWorkflow: vi.fn(),
+    getReferenceAssets: vi.fn(),
+    uploadReferenceAsset: vi.fn(),
   };
 });
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockGetReferenceAssets = vi.mocked(getReferenceAssets);
+const mockUploadReferenceAsset = vi.mocked(uploadReferenceAsset);
+
+const emptyReferences: ReferenceAssetListResponse = {
+  project_id: "LEE柠檬",
+  assets: [],
+};
 
 function StageRouteProbe() {
   const { projectId, stageKey } = useParams();
@@ -133,6 +145,23 @@ describe("ProjectWorkspacePage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
     mockGetProjectWorkflow.mockReset();
+    mockGetReferenceAssets.mockReset();
+    mockUploadReferenceAsset.mockReset();
+    mockGetReferenceAssets.mockResolvedValue({
+      data: emptyReferences,
+      correlationId: "req_references",
+    });
+    mockUploadReferenceAsset.mockResolvedValue({
+      data: {
+        asset_id: "ref_001",
+        filename: "ref_001.png",
+        media_type: "image/png",
+        width: 640,
+        height: 480,
+        deduplicated: false,
+      },
+      correlationId: "req_upload",
+    });
     resolveWorkspace();
   });
 
@@ -166,6 +195,48 @@ describe("ProjectWorkspacePage", () => {
     expect(screen.getByText("清爽、明亮、年轻")).toBeInTheDocument();
     expect(screen.getByText("用于新品社交媒体推广")).toBeInTheDocument();
     expect(screen.getByText(/避免出现人物/)).toBeInTheDocument();
+  });
+
+  it("shows the project-level Reference Library empty state", async () => {
+    renderWorkspace();
+    expect(await screen.findByRole("heading", { name: "项目素材" })).toBeInTheDocument();
+    expect(
+      await screen.findByText("项目素材库尚为空。可以现在添加，也可以稍后再添加。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/上传不会自动设为某个镜头/)).toBeInTheDocument();
+    expect(mockGetReferenceAssets).toHaveBeenCalledWith("LEE柠檬");
+  });
+
+  it("uploads into the Project Library and refreshes preview without page reload", async () => {
+    mockGetReferenceAssets
+      .mockResolvedValueOnce({ data: emptyReferences, correlationId: "req_empty" })
+      .mockResolvedValueOnce({
+        data: {
+          project_id: "LEE柠檬",
+          assets: [{
+            asset_id: "ref_001",
+            filename: "ref_001.png",
+            media_type: "image/png",
+            width: 640,
+            height: 480,
+          }],
+        },
+        correlationId: "req_after_upload",
+      });
+    renderWorkspace();
+    await screen.findByRole("heading", { name: "项目素材" });
+    const image = new File(["png"], "product.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText(/添加参考素材/), {
+      target: { files: [image] },
+    });
+    await waitFor(() => expect(mockUploadReferenceAsset).toHaveBeenCalledWith("LEE柠檬", image));
+    const preview = await screen.findByRole("img", { name: "ref_001.png 参考图预览" });
+    expect(preview).toHaveAttribute(
+      "src",
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/references/ref_001/image",
+    );
+    expect(mockGetReferenceAssets).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("已添加 1 张参考素材。")).toBeInTheDocument();
   });
 
   it("shows 未填写 for empty or absent optional request values", async () => {

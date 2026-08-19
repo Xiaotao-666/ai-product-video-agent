@@ -8,6 +8,7 @@ import {
 } from "../api/client";
 import type { ProjectDetail, ProjectWorkflowResponse } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { ReferenceAssetLibrary } from "../components/ReferenceAssetLibrary";
 import { WorkflowStageItem } from "../components/WorkflowStageItem";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -259,6 +260,8 @@ export function ProjectWorkspacePage() {
           ))}
         </dl>
       </section>
+
+      <ReferenceAssetLibrary projectId={detail.project_id} />
 
       <section className="workspace-section" aria-labelledby="workflow-title">
         <div className="workspace-section-heading">

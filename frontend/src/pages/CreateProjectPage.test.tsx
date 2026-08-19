@@ -2,7 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiClientError, createProject } from "../api/client";
+import {
+  ApiClientError,
+  createProject,
+  uploadReferenceAsset,
+} from "../api/client";
 import type {
   ApiResult,
   CreateProjectResponse,
@@ -11,10 +15,11 @@ import { CreateProjectPage } from "./CreateProjectPage";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
-  return { ...actual, createProject: vi.fn() };
+  return { ...actual, createProject: vi.fn(), uploadReferenceAsset: vi.fn() };
 });
 
 const mockCreateProject = vi.mocked(createProject);
+const mockUploadReferenceAsset = vi.mocked(uploadReferenceAsset);
 
 const createdProject: CreateProjectResponse = {
   project_id: "project-new",
@@ -85,7 +90,19 @@ function safeError(code: string, correlationId = "req_error") {
 describe("CreateProjectPage", () => {
   beforeEach(() => {
     mockCreateProject.mockReset();
+    mockUploadReferenceAsset.mockReset();
     mockCreateProject.mockResolvedValue(successfulResult());
+    mockUploadReferenceAsset.mockResolvedValue({
+      data: {
+        asset_id: "ref_001",
+        filename: "ref_001.png",
+        media_type: "image/png",
+        width: 1,
+        height: 1,
+        deduplicated: false,
+      },
+      correlationId: "req_reference",
+    });
   });
 
   it("renders the create project page", () => {
@@ -110,6 +127,9 @@ describe("CreateProjectPage", () => {
     );
     expect(screen.getByLabelText("视觉风格 *")).toBeInTheDocument();
     expect(screen.getByLabelText("视频目的 *")).toBeInTheDocument();
+    expect(screen.getByLabelText("参考素材（可选）")).toHaveAttribute(
+      "multiple",
+    );
   });
 
   it("does not submit an empty product name", () => {
@@ -154,6 +174,83 @@ describe("CreateProjectPage", () => {
     fillValidForm();
     submitForm();
     await waitFor(() => expect(mockCreateProject).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps reference upload optional and does not change project create JSON", async () => {
+    renderCreatePage();
+    fillValidForm();
+    submitForm();
+    await waitFor(() => expect(mockCreateProject).toHaveBeenCalledTimes(1));
+    expect(mockUploadReferenceAsset).not.toHaveBeenCalled();
+  });
+
+  it("creates once, then uploads multiple selected references in order", async () => {
+    renderCreatePage();
+    fillValidForm();
+    const first = new File(["first"], "front.png", { type: "image/png" });
+    const second = new File(["second"], "packaging.webp", { type: "image/webp" });
+    fireEvent.change(screen.getByLabelText("参考素材（可选）"), {
+      target: { files: [first, second] },
+    });
+    expect(screen.getByText("front.png")).toBeInTheDocument();
+    expect(screen.getByText("packaging.webp")).toBeInTheDocument();
+    submitForm();
+    await waitFor(() => expect(mockUploadReferenceAsset).toHaveBeenCalledTimes(2));
+    expect(mockCreateProject).toHaveBeenCalledTimes(1);
+    expect(mockUploadReferenceAsset.mock.calls).toEqual([
+      ["project-new", first],
+      ["project-new", second],
+    ]);
+  });
+
+  it("keeps the created project and retries only failed images", async () => {
+    const failed = new ApiClientError({
+      message: "safe",
+      code: "REFERENCE_IMAGE_INVALID",
+      correlationId: "req_upload_failed",
+    });
+    mockUploadReferenceAsset
+      .mockResolvedValueOnce({
+        data: {
+          asset_id: "ref_001",
+          filename: "ref_001.png",
+          media_type: "image/png",
+          width: 1,
+          height: 1,
+          deduplicated: false,
+        },
+        correlationId: "req_first",
+      })
+      .mockRejectedValueOnce(failed)
+      .mockResolvedValueOnce({
+        data: {
+          asset_id: "ref_002",
+          filename: "ref_002.png",
+          media_type: "image/png",
+          width: 1,
+          height: 1,
+          deduplicated: false,
+        },
+        correlationId: "req_retry",
+      });
+    renderCreatePage();
+    fillValidForm();
+    const first = new File(["first"], "front.png", { type: "image/png" });
+    const second = new File(["second"], "bad.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("参考素材（可选）"), {
+      target: { files: [first, second] },
+    });
+    submitForm();
+    expect(await screen.findByText(/项目已创建，但 1 张参考素材上传失败/)).toBeInTheDocument();
+    expect(mockCreateProject).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("link", { name: "进入项目" })).toHaveAttribute(
+      "href",
+      "/projects/project-new",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重试失败图片" }));
+    await waitFor(() => expect(mockUploadReferenceAsset).toHaveBeenCalledTimes(3));
+    expect(mockUploadReferenceAsset.mock.calls[2]).toEqual(["project-new", second]);
+    expect(mockCreateProject).toHaveBeenCalledTimes(1);
   });
 
   it("disables the submit button while creating", async () => {

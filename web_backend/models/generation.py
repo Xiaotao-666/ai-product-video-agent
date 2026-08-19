@@ -93,6 +93,10 @@ class ReferenceAssetPublic(ResponseModel):
     height: int
 
 
+class ReferenceAssetUploadResponse(ReferenceAssetPublic):
+    deduplicated: bool
+
+
 class ReferenceAssetListResponse(ResponseModel):
     project_id: str
     assets: list[ReferenceAssetPublic]
@@ -153,4 +157,3 @@ class GenerationPreflightResponse(ResponseModel):
     issues: list[GenerationIssue]
     warnings: list[GenerationIssue]
     paid_call_required: bool = True
-

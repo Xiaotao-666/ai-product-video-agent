@@ -34,6 +34,7 @@ import type {
   ProjectRequest,
   ReferenceAsset,
   ReferenceAssetListResponse,
+  ReferenceAssetUploadResponse,
   ResolvedGeneration,
   ProjectSummary,
   ProjectWorkflowResponse,
@@ -1191,6 +1192,19 @@ function parseReferenceAssets(
   };
 }
 
+function parseReferenceAssetUpload(
+  value: unknown,
+  correlationId: string | null,
+): ReferenceAssetUploadResponse {
+  if (!isRecord(value) || typeof value.deduplicated !== "boolean") {
+    return invalidResponse("Backend 返回了无法读取的素材上传结果。", correlationId);
+  }
+  return {
+    ...parseReferenceAsset(value, correlationId),
+    deduplicated: value.deduplicated,
+  };
+}
+
 function parseResolvedGeneration(
   value: unknown,
   correlationId: string | null,
@@ -1858,6 +1872,26 @@ export async function getReferenceAssets(
   );
   return {
     data: parseReferenceAssets(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function uploadReferenceAsset(
+  projectId: string,
+  file: File,
+): Promise<ApiResult<ReferenceAssetUploadResponse>> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/references`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: form,
+    },
+  );
+  return {
+    data: parseReferenceAssetUpload(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

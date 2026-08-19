@@ -35,6 +35,7 @@ from web_backend.routers.tasks import router as tasks_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
+from web_backend.services.reference_assets import ReferenceAssetUploadService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
@@ -77,6 +78,11 @@ def _initialize_local_resources(application: FastAPI) -> None:
     )
     application.state.reference_asset_repository = ReferenceAssetRepository(
         application.state.project_repository
+    )
+    application.state.reference_asset_upload_service = ReferenceAssetUploadService(
+        application.state.project_repository,
+        application.state.reference_asset_repository,
+        lock_manager,
     )
     application.state.postproduction_repository = PostProductionRepository(
         application.state.project_repository
