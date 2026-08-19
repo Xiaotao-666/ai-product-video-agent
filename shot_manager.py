@@ -55,9 +55,15 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_prompt_payload(
-    checkpoint: ProjectCheckpoint, payload: dict
+    checkpoint: ProjectCheckpoint,
+    payload: dict,
+    *,
+    preserve_bundle_snapshots: bool = False,
 ) -> None:
-    checkpoint.save_prompt_version(int(payload["shot_id"]), payload)
+    if preserve_bundle_snapshots:
+        checkpoint.save_prompt_version_metadata(int(payload["shot_id"]), payload)
+    else:
+        checkpoint.save_prompt_version(int(payload["shot_id"]), payload)
 
 
 def _prompt_version_payload(
@@ -519,8 +525,8 @@ def approve_candidate(
     paths: ProjectPaths,
     checkpoint: ProjectCheckpoint,
     plan: VideoPromptPlan,
-    recorder: ReviewRecorder,
-    task_logger: TaskLogger,
+    recorder: ReviewRecorder | None,
+    task_logger: TaskLogger | None,
     shot_id: int,
     *,
     selection_source: str = "new_version_review",
@@ -551,7 +557,13 @@ def approve_candidate(
         )
         old_payload["review_result"] = "SUPERSEDED_APPROVED"
         old_payload["reviewed_at"] = now_iso()
-        _write_prompt_payload(checkpoint, old_payload)
+        _write_prompt_payload(
+            checkpoint,
+            old_payload,
+            preserve_bundle_snapshots=(
+                selection_source == "historical_version_selection"
+            ),
+        )
     previous_new_prompt_result = new_prompt_payload.get("review_result")
     if previous_new_prompt_result and previous_new_prompt_result != "APPROVED":
         new_prompt_payload.setdefault("review_history", []).append(
@@ -564,7 +576,13 @@ def approve_candidate(
         )
     new_prompt_payload["review_result"] = "APPROVED"
     new_prompt_payload["reviewed_at"] = now_iso()
-    _write_prompt_payload(checkpoint, new_prompt_payload)
+    _write_prompt_payload(
+        checkpoint,
+        new_prompt_payload,
+        preserve_bundle_snapshots=(
+            selection_source == "historical_version_selection"
+        ),
+    )
     review_action = (
         "historical_version_selected"
         if selection_source == "historical_version_selection"
@@ -590,60 +608,66 @@ def approve_candidate(
                 }
             )
             break
-    checkpoint.save()
-    update_generation_snapshot(
-        paths,
-        shot_id,
-        int(new_video),
-        selected_as_approved_at=selected_at,
-        previous_approved_version=old_video,
-        selection_source=selection_source,
-    )
+    if selection_source != "historical_version_selection":
+        checkpoint.save()
+        update_generation_snapshot(
+            paths,
+            shot_id,
+            int(new_video),
+            selected_as_approved_at=selected_at,
+            previous_approved_version=old_video,
+            selection_source=selection_source,
+        )
     final_exists = any(paths.videos_dir.glob("*.mp4"))
     if final_exists:
         checkpoint.mark_assembly_needs_update(shot_id, old_video, new_video)
-    recorder.record_shot_action(
-        shot_id,
-        "candidate_approved",
-        old_approved_prompt_version=old_prompt,
-        old_approved_video_version=old_video,
-        candidate_prompt_version=new_prompt,
-        candidate_video_version=new_video,
-    )
-    task_logger.event(
-        "CANDIDATE_APPROVED",
-        shot_id=shot_id,
-        old_approved_prompt_version=old_prompt,
-        old_approved_video_version=old_video,
-        candidate_prompt_version=new_prompt,
-        candidate_video_version=new_video,
-    )
-    if selection_source == "historical_version_selection":
+    if recorder:
         recorder.record_shot_action(
             shot_id,
-            "historical_version_selected_as_approved",
-            previous_approved_version=old_video,
-            selected_video_version=new_video,
-            selected_prompt_version=new_prompt,
-            selection_source=selection_source,
-            selected_at=selected_at,
+            "candidate_approved",
+            old_approved_prompt_version=old_prompt,
+            old_approved_video_version=old_video,
+            candidate_prompt_version=new_prompt,
+            candidate_video_version=new_video,
         )
+    if task_logger:
         task_logger.event(
-            "SHOT_OFFICIAL_VERSION_SELECTED",
+            "CANDIDATE_APPROVED",
             shot_id=shot_id,
-            previous_approved_version=old_video,
-            selected_video_version=new_video,
-            selected_prompt_version=new_prompt,
-            selection_source=selection_source,
+            old_approved_prompt_version=old_prompt,
+            old_approved_video_version=old_video,
+            candidate_prompt_version=new_prompt,
+            candidate_video_version=new_video,
         )
-    task_logger.event(
-        "APPROVED_VERSION_REPLACED",
-        shot_id=shot_id,
-        old_approved_prompt_version=old_prompt,
-        old_approved_video_version=old_video,
-        new_approved_prompt_version=new_prompt,
-        new_approved_video_version=new_video,
-    )
+    if selection_source == "historical_version_selection":
+        if recorder:
+            recorder.record_shot_action(
+                shot_id,
+                "historical_version_selected_as_approved",
+                previous_approved_version=old_video,
+                selected_video_version=new_video,
+                selected_prompt_version=new_prompt,
+                selection_source=selection_source,
+                selected_at=selected_at,
+            )
+        if task_logger:
+            task_logger.event(
+                "SHOT_OFFICIAL_VERSION_SELECTED",
+                shot_id=shot_id,
+                previous_approved_version=old_video,
+                selected_video_version=new_video,
+                selected_prompt_version=new_prompt,
+                selection_source=selection_source,
+            )
+    if task_logger:
+        task_logger.event(
+            "APPROVED_VERSION_REPLACED",
+            shot_id=shot_id,
+            old_approved_prompt_version=old_prompt,
+            old_approved_video_version=old_video,
+            new_approved_prompt_version=new_prompt,
+            new_approved_video_version=new_video,
+        )
     if final_exists:
         print(f"\nShot {shot_id:02d} 已更新。")
         print("当前完整视频仍使用旧版镜头，完整视频需要重新合片。")
@@ -653,10 +677,12 @@ def select_historical_version_as_approved(
     paths: ProjectPaths,
     checkpoint: ProjectCheckpoint,
     plan: VideoPromptPlan,
-    recorder: ReviewRecorder,
-    task_logger: TaskLogger,
+    recorder: ReviewRecorder | None,
+    task_logger: TaskLogger | None,
     shot_id: int,
     target: VideoVersionInfo,
+    *,
+    validated_target: VideoVersionInfo | None = None,
 ) -> None:
     """Use the existing Candidate transaction without exposing it in the UI."""
     create_historical_candidate(
@@ -666,6 +692,7 @@ def select_historical_version_as_approved(
         target.video_version,
         task_logger,
         recorder,
+        validated_target=validated_target,
     )
     approve_candidate(
         paths,
@@ -676,6 +703,145 @@ def select_historical_version_as_approved(
         shot_id,
         selection_source="historical_version_selection",
     )
+
+
+_INCOMPLETE_GENERATION_STATES = {
+    "NOT_STARTED",
+    "QUEUED",
+    "GENERATING",
+    "SUBMITTING",
+    "PROVIDER_RUNNING",
+    "READY_TO_DOWNLOAD",
+    "DOWNLOADING",
+    "LOCAL_FINALIZING",
+    "FAILED",
+    "INTERRUPTED",
+    "SUBMISSION_UNKNOWN",
+}
+_RESTORABLE_GENERATION_STATES = {
+    "WAITING_REVIEW",
+    "APPROVED",
+    "REJECTED",
+    "COMPLETED",
+}
+
+
+def set_historical_video_as_official(
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    shot_id: int,
+    target_version: int,
+    *,
+    recorder: ReviewRecorder | None = None,
+    task_logger: TaskLogger | None = None,
+) -> VideoVersionInfo:
+    """Promote one complete historical Bundle through the existing Core transaction."""
+
+    entry = checkpoint.shot_checkpoint(shot_id)
+    generation = next(
+        (
+            item
+            for item in entry.get("generation_versions", [])
+            if int(item.get("video_version") or 0) == int(target_version)
+        ),
+        None,
+    )
+    if generation is None:
+        raise ShotManagerError("目标历史视频版本不存在。")
+
+    required_paths = {
+        "video.mp4": paths.shot_version_video_path(shot_id, target_version),
+        "prompt.json": paths.shot_version_prompt_path(shot_id, target_version),
+        "generation.json": paths.shot_version_generation_path(shot_id, target_version),
+        "review.json": paths.shot_version_review_path(shot_id, target_version),
+    }
+    missing = [
+        name
+        for name, path in required_paths.items()
+        if not path.is_file() or (name == "video.mp4" and path.stat().st_size <= 0)
+    ]
+    if missing:
+        raise ShotManagerError("目标历史视频版本 Bundle 不完整。")
+
+    prompt_snapshot = _read_json(required_paths["prompt.json"])
+    generation_snapshot = _read_json(required_paths["generation.json"])
+    review_snapshot = _read_json(required_paths["review.json"])
+    try:
+        for payload in (prompt_snapshot, generation_snapshot, review_snapshot):
+            if int(payload.get("shot_id") or 0) != int(shot_id):
+                raise ShotManagerError("目标历史视频版本不属于当前镜头。")
+            if int(payload.get("video_version") or 0) != int(target_version):
+                raise ShotManagerError("目标历史视频版本 Bundle 映射不一致。")
+        prompt_version = int(prompt_snapshot.get("prompt_version") or 0)
+        generation_prompt_version = int(
+            generation_snapshot.get("prompt_version") or 0
+        )
+        checkpoint_prompt_version = int(generation.get("prompt_version") or 0)
+    except (TypeError, ValueError) as error:
+        raise ShotManagerError("目标历史视频版本 Bundle 映射无效。") from error
+    if (
+        prompt_version <= 0
+        or prompt_version != generation_prompt_version
+        or prompt_version != checkpoint_prompt_version
+        or checkpoint.prompt_version(shot_id, prompt_version) is None
+    ):
+        raise ShotManagerError("目标历史视频版本的 Prompt 绑定不完整。")
+
+    generation_state = str(
+        generation_snapshot.get("generation_phase")
+        or generation_snapshot.get("status")
+        or generation.get("generation_phase")
+        or generation.get("status")
+        or "UNKNOWN"
+    ).upper()
+    if (
+        bool(generation_snapshot.get("submission_unknown"))
+        or bool(generation.get("submission_unknown"))
+        or generation_state in _INCOMPLETE_GENERATION_STATES
+        or generation_state not in _RESTORABLE_GENERATION_STATES
+    ):
+        raise ShotManagerError("目标历史视频版本尚未完整生成，不能设为正式版本。")
+
+    target_path = required_paths["video.mp4"]
+    target = VideoVersionInfo(
+        video_version=int(target_version),
+        prompt_version=prompt_version,
+        prompt_source=str(prompt_snapshot.get("prompt_source") or "unknown"),
+        created_at=(
+            generation_snapshot.get("created_at")
+            or generation_snapshot.get("submitted_at")
+        ),
+        provider_task_id=generation.get("provider_task_id"),
+        file_id=generation.get("file_id"),
+        video_path=target_path,
+        review_result=str(review_snapshot.get("review_result") or "UNKNOWN"),
+        is_active=int(entry.get("active_video_version") or 0) == int(target_version),
+        is_approved=int(entry.get("approved_video_version") or 0) == int(target_version),
+        exists=True,
+        visual_input_mode="none",
+        visual_input_source=None,
+        reference_asset_ids=(),
+        generation_mode=str(generation_snapshot.get("generation_mode") or "unknown"),
+        provider_model=str(generation_snapshot.get("provider_model") or "unknown"),
+        provider_api_version=str(
+            generation_snapshot.get("provider_api_version") or "unknown"
+        ),
+        provider=str(generation_snapshot.get("provider") or "unknown"),
+        selection_mode=str(generation_snapshot.get("selection_mode") or "legacy"),
+        credential_env_name=None,
+    )
+    select_historical_version_as_approved(
+        paths,
+        checkpoint,
+        plan,
+        recorder,
+        task_logger,
+        shot_id,
+        target,
+        validated_target=target,
+    )
+    return target
 
 
 def show_history(paths: ProjectPaths, checkpoint: ProjectCheckpoint, shot_id: int) -> None:

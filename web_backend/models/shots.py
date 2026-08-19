@@ -13,6 +13,13 @@ class ShotVersionRole(StrEnum):
     HISTORY = "HISTORY"
 
 
+class ShotVersionHistoryReason(StrEnum):
+    PREVIOUSLY_APPROVED = "PREVIOUSLY_APPROVED"
+    SUPERSEDED = "SUPERSEDED"
+    EXPLICITLY_REJECTED = "EXPLICITLY_REJECTED"
+    UNKNOWN = "UNKNOWN"
+
+
 class ShotVisualInputMode(StrEnum):
     NONE = "NONE"
     FIRST_FRAME = "FIRST_FRAME"
@@ -51,6 +58,7 @@ class ShotVersion(ResponseModel):
     version: int
     role: ShotVersionRole
     review_status: str
+    history_reason: ShotVersionHistoryReason | None = None
     created_at: str | None = None
     prompt: ShotPromptSummary
     generation: ShotGenerationSummary

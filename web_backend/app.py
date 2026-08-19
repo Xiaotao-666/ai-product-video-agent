@@ -41,6 +41,7 @@ from web_backend.services.shot_generation_preflight import (
 )
 from web_backend.services.shot_generation import ShotGenerationActionService
 from web_backend.services.shot_approval import ShotApprovalService
+from web_backend.services.shot_versions import ShotVersionService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
@@ -119,6 +120,12 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.capability_service,
     )
     application.state.shot_approval_service = ShotApprovalService(
+        application.state.project_repository,
+        application.state.shot_repository,
+        application.state.task_service,
+        lock_manager,
+    )
+    application.state.shot_version_service = ShotVersionService(
         application.state.project_repository,
         application.state.shot_repository,
         application.state.task_service,

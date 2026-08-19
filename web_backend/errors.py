@@ -130,6 +130,12 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
         "ACTION_NOT_ALLOWED",
         "当前项目状态不允许执行此操作。",
     ),
+    "PENDING_VERSION_REQUIRES_REVIEW": ErrorDefinition(
+        409,
+        "ACTION_ERROR",
+        "PENDING_VERSION_REQUIRES_REVIEW",
+        "请先处理当前待审核新版本，再切换正式历史版本。",
+    ),
     "CAPABILITY_UNAVAILABLE": ErrorDefinition(
         503,
         "CAPABILITY_ERROR",

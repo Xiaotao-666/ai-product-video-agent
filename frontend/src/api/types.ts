@@ -327,6 +327,11 @@ export interface VideoPromptsContentResponse {
 }
 
 export type ShotVersionRole = "OFFICIAL" | "PENDING_REVIEW" | "HISTORY";
+export type ShotVersionHistoryReason =
+  | "PREVIOUSLY_APPROVED"
+  | "SUPERSEDED"
+  | "EXPLICITLY_REJECTED"
+  | "UNKNOWN";
 
 export type ShotVisualInputMode =
   | "NONE"
@@ -365,6 +370,7 @@ export interface ShotVersion {
   version: number;
   role: ShotVersionRole;
   review_status: string;
+  history_reason?: ShotVersionHistoryReason | null;
   created_at: string | null;
   prompt: ShotPromptSummary;
   generation: ShotGenerationSummary;

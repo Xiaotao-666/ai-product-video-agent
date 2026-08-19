@@ -111,12 +111,33 @@
 
 .shot-review-label {
   flex: 0 0 auto;
+  padding: 3px 0;
+  color: #4f5c67;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.shot-version-role-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin: 0 0 8px;
   padding: 6px 10px;
   border-radius: 999px;
-  color: #4f5c67;
   background: #edf1f3;
-  font-size: 12px;
-  font-weight: 700;
+  color: #34414d;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.shot-version-role-official {
+  background: #e8f1cf;
+  color: #465d18;
+}
+
+.shot-version-role-pending_review {
+  background: #f7edc5;
+  color: #725c0f;
 }
 
 .shot-video-panel {
@@ -169,6 +190,66 @@
 .shot-history-list {
   display: grid;
   gap: 18px;
+}
+
+.shot-history-item {
+  display: grid;
+  gap: 12px;
+}
+
+.shot-set-official-action {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 0 4px 8px;
+}
+
+.shot-set-official-blocked {
+  color: #68747d;
+  line-height: 1.6;
+}
+
+.shot-version-selection-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.shot-version-selection-summary div {
+  padding: 10px;
+  border: 1px solid #e8ddba;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.shot-version-selection-summary dt,
+.shot-version-selection-summary dd {
+  margin: 0;
+}
+
+.shot-version-selection-summary dt {
+  color: #68747d;
+  font-size: 11px;
+}
+
+.shot-version-selection-summary dd {
+  margin-top: 4px;
+  font-weight: 700;
+}
+
+.shot-set-official-action ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #566169;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+@media (max-width: 640px) {
+  .shot-version-selection-summary {
+    grid-template-columns: 1fr;
+  }
 }
 
 .shot-generation-preparation {

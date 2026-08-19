@@ -15,12 +15,14 @@ from project_manager import create_project_paths
 from project_state import CandidateStatus, ProjectCheckpoint, ShotStatus
 from review_manager import ReviewRecorder
 from shot_manager import (
+    ShotManagerError,
     _version_comparison_menu,
     manage_approved_shot,
     select_historical_version_as_approved,
+    set_historical_video_as_official,
     shot_management_menu,
 )
-from shot_storage import write_review_snapshot
+from shot_storage import ensure_bundle_placeholders, write_review_snapshot
 from storyboard import (
     CreativeBrief,
     ShotVideoPrompt,
@@ -124,6 +126,25 @@ class ShotVersionSelectionUXTests(unittest.TestCase):
     def _add_video(
         self, shot_id: int, video_version: int, prompt_version: int, result: str
     ) -> None:
+        ensure_bundle_placeholders(
+            self.paths,
+            shot_id,
+            video_version,
+            prompt_payload={
+                "version": prompt_version,
+                "prompt": f"prompt-{shot_id}-v{prompt_version}",
+                "source": "ai_generated" if prompt_version == 1 else "manual_edit",
+            },
+            generation_payload={
+                "video_version": video_version,
+                "prompt_version": prompt_version,
+                "status": result,
+                "generation_phase": result,
+                "provider": "minimax",
+                "provider_model": "MiniMax-H3",
+            },
+            review_result=result,
+        )
         path = self.paths.shot_version_video_path(shot_id, video_version)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"shot-{shot_id}-video-{video_version}".encode())
@@ -422,6 +443,82 @@ class ShotVersionSelectionUXTests(unittest.TestCase):
             )
         self.assertFalse(confirmed)
         self.assertEqual(opened, [2])
+
+    def test_33_shared_core_callable_switches_all_active_and_approved_pointers(self):
+        set_historical_video_as_official(
+            self.paths,
+            self.checkpoint,
+            self.plan,
+            1,
+            1,
+        )
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["active_video_version"], 1)
+        self.assertEqual(entry["approved_video_version"], 1)
+        self.assertEqual(entry["active_prompt_version"], 1)
+        self.assertEqual(entry["approved_prompt_version"], 1)
+        self.assertEqual(entry["generation_count"], 2)
+        self.assertEqual(entry["candidate"]["status"], "NONE")
+
+    def test_34_shared_core_callable_is_reversible_and_preserves_bundles(self):
+        before = {
+            (version, name): (self.paths.shot_version_dir(1, version) / name).read_bytes()
+            for version in (1, 2)
+            for name in ("video.mp4", "prompt.json", "generation.json")
+        }
+        set_historical_video_as_official(
+            self.paths, self.checkpoint, self.plan, 1, 1
+        )
+        set_historical_video_as_official(
+            self.paths, self.checkpoint, self.plan, 1, 2
+        )
+        entry = self.checkpoint.shot_checkpoint(1)
+        self.assertEqual(entry["approved_video_version"], 2)
+        self.assertEqual(entry["approved_prompt_version"], 2)
+        self.assertEqual(entry["generation_count"], 2)
+        for key, expected in before.items():
+            self.assertEqual(
+                (self.paths.shot_version_dir(1, key[0]) / key[1]).read_bytes(),
+                expected,
+            )
+
+    def test_35_shared_core_callable_requires_a_complete_successful_bundle(self):
+        self.paths.shot_version_generation_path(1, 1).unlink()
+        with self.assertRaisesRegex(ShotManagerError, "Bundle"):
+            set_historical_video_as_official(
+                self.paths, self.checkpoint, self.plan, 1, 1
+            )
+        self.assertEqual(self.checkpoint.shot_checkpoint(1)["approved_video_version"], 2)
+
+    def test_36_shared_core_callable_rejects_pending_before_switching(self):
+        create_historical_candidate(
+            self.paths, self.checkpoint, 1, 1, self.logger, self.recorder
+        )
+        with self.assertRaises(VideoHistoryError):
+            set_historical_video_as_official(
+                self.paths, self.checkpoint, self.plan, 1, 1
+            )
+        self.assertEqual(self.checkpoint.shot_checkpoint(1)["approved_video_version"], 2)
+
+    def test_37_shared_core_callable_marks_only_existing_assembly_stale(self):
+        before = deepcopy(self.checkpoint.data["assembly"])
+        set_historical_video_as_official(
+            self.paths, self.checkpoint, self.plan, 1, 1
+        )
+        self.assertEqual(self.checkpoint.data["assembly"], before)
+
+    def test_38_shared_core_callable_preserves_rejected_history_on_reapproval(self):
+        before = json.loads(
+            self.paths.shot_version_review_path(1, 1).read_text(encoding="utf-8")
+        )["history"]
+        set_historical_video_as_official(
+            self.paths, self.checkpoint, self.plan, 1, 1
+        )
+        review = json.loads(
+            self.paths.shot_version_review_path(1, 1).read_text(encoding="utf-8")
+        )
+        self.assertEqual(review["history"][: len(before)], before)
+        self.assertEqual(review["review_result"], "APPROVED")
 
 
 if __name__ == "__main__":

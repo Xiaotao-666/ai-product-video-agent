@@ -329,6 +329,14 @@ class ProjectCheckpoint:
         self._sync_shot_storage()
         self.project.save_json(self.path, self.data)
 
+    def save_checkpoint_metadata(self) -> None:
+        """Persist project.json without rewriting immutable Shot Bundle snapshots."""
+
+        self.data["project_schema_version"] = 2
+        self.data.pop("schema_version", None)
+        self.data["updated_at"] = now_iso()
+        self.project.save_json(self.path, self.data)
+
     def _save_generation_state(
         self,
         shot_id: int,
@@ -931,6 +939,14 @@ class ProjectCheckpoint:
     def save_prompt_version(self, shot_id: int, payload: dict[str, Any]) -> None:
         self._apply_prompt_version(shot_id, payload)
         self.save()
+
+    def save_prompt_version_metadata(
+        self, shot_id: int, payload: dict[str, Any]
+    ) -> None:
+        """Persist Prompt pointer/review metadata without rewriting version Bundles."""
+
+        self._apply_prompt_version(shot_id, payload)
+        self.save_checkpoint_metadata()
 
     def save_prompt_versions(
         self, versions_by_shot: list[tuple[int, dict[str, Any]]]
@@ -1571,7 +1587,10 @@ class ProjectCheckpoint:
         generation["historical_candidate_selected_at"] = timestamp
         generation["updated_at"] = timestamp
         entry["updated_at"] = timestamp
-        self.save()
+        from shot_storage import sync_shot_manifest_from_checkpoint
+
+        sync_shot_manifest_from_checkpoint(self.project, shot_id, entry)
+        self.save_checkpoint_metadata()
 
     def all_shots_approved(self, shot_ids: list[int]) -> bool:
         return all(self.shot_status(shot_id) == ShotStatus.APPROVED for shot_id in shot_ids)

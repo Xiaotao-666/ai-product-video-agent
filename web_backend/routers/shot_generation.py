@@ -13,6 +13,7 @@ from web_backend.dependencies import (
     get_shot_approval_service,
     get_shot_generation_action_service,
     get_shot_generation_preflight_service,
+    get_shot_version_service,
 )
 from web_backend.errors import registered_api_error
 from web_backend.models.generation import (
@@ -42,12 +43,18 @@ from web_backend.repositories.reference_asset_repository import (
 )
 from web_backend.repositories.shot_repository import (
     InvalidShotId,
+    InvalidShotVersion,
     ShotDataCorrupt,
     ShotNotFound,
 )
 from web_backend.services.shot_approval import (
     ShotApprovalNotAllowed,
     ShotApprovalService,
+)
+from web_backend.services.shot_versions import (
+    HistoricalVersionSelectionNotAllowed,
+    PendingVersionRequiresReview,
+    ShotVersionService,
 )
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
@@ -81,6 +88,7 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {
     ProjectDataCorrupt: "PROJECT_DATA_CORRUPT",
     ProjectDataUnsupported: "PROJECT_DATA_UNSUPPORTED",
     InvalidShotId: "INVALID_SHOT_ID",
+    InvalidShotVersion: "INVALID_SHOT_VERSION",
     ShotNotFound: "SHOT_NOT_FOUND",
     ShotDataCorrupt: "SHOT_DATA_CORRUPT",
     InvalidReferenceAssetId: "INVALID_REFERENCE_ASSET_ID",
@@ -398,6 +406,48 @@ def approve_shot(
     except ProjectRepositoryError as error:
         _raise_mapped(error)
     except ShotApprovalNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/versions/{video_version}/set-official",
+    response_model=ShotDetail,
+    status_code=200,
+    responses={
+        200: {
+            "description": "Existing historical video selected as the official version.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "project_id": "0123456789abcdef0123456789abcdef",
+                        "shot_id": "shot_01",
+                        "status": "APPROVED",
+                        "official_version": 1,
+                        "pending_review_version": None,
+                        "version_count": 3,
+                        "generation_count": 3,
+                        "versions": [],
+                    }
+                }
+            },
+        }
+    },
+)
+def set_official_shot_version(
+    project_id: str,
+    shot_id: str,
+    video_version: str,
+    service: Annotated[ShotVersionService, Depends(get_shot_version_service)],
+) -> ShotDetail:
+    try:
+        return service.set_official(project_id, shot_id, video_version)
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except PendingVersionRequiresReview as error:
+        raise registered_api_error("PENDING_VERSION_REQUIRES_REVIEW") from error
+    except HistoricalVersionSelectionNotAllowed as error:
         raise registered_api_error("ACTION_NOT_ALLOWED") from error
     except ProjectBusy as error:
         raise registered_api_error("PROJECT_BUSY") from error

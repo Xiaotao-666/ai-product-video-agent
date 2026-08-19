@@ -11,12 +11,14 @@ import {
 import type {
   ProjectDetail,
   ShotDetail,
+  ShotGenerationStatusResponse,
   ShotVersion,
   ShotVisualInputMode,
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ShotGenerationPreparation } from "../components/shots/ShotGenerationPreparation";
 import { ShotApproveAction } from "../components/shots/ShotApproveAction";
+import { ShotSetOfficialAction } from "../components/shots/ShotSetOfficialAction";
 import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import { projectStagePath, projectWorkspacePath } from "../stageDefinitions";
 
@@ -26,6 +28,7 @@ type PageState = "loading" | "success" | "error";
 interface PageData {
   project: ProjectDetail;
   shot: ShotDetail;
+  generationStatus: ShotGenerationStatusResponse;
 }
 
 interface PageError {
@@ -34,8 +37,8 @@ interface PageError {
 }
 
 const REVIEW_LABELS: Record<string, string> = {
-  APPROVED: "已审核",
-  REJECTED: "已拒绝",
+  APPROVED: "已审核通过",
+  REJECTED: "此前未成为正式版本",
   WAITING_REVIEW: "等待审核",
   GENERATING: "生成中",
   FAILED: "失败",
@@ -44,6 +47,25 @@ const REVIEW_LABELS: Record<string, string> = {
   HISTORY: "历史记录",
   UNKNOWN: "未记录",
 };
+
+function reviewLabel(version: ShotVersion): string {
+  if (version.role !== "HISTORY") {
+    return REVIEW_LABELS[version.review_status] ?? "未记录";
+  }
+  if (version.history_reason === "PREVIOUSLY_APPROVED") {
+    return "曾审核通过";
+  }
+  if (version.history_reason === "SUPERSEDED") {
+    return "已被后续版本替代";
+  }
+  if (version.history_reason === "EXPLICITLY_REJECTED") {
+    return "曾由用户明确不采用";
+  }
+  if (version.review_status === "APPROVED") {
+    return "曾审核通过";
+  }
+  return "此前未成为正式版本";
+}
 
 const PROMPT_SOURCE_LABELS: Record<string, string> = {
   ai_generated: "AI 生成",
@@ -120,14 +142,16 @@ function VersionCard({
     >
       <div className="shot-version-heading">
         <div>
-          <p className="page-kicker">{roleLabel}</p>
+          <p className={`shot-version-role-badge shot-version-role-${version.role.toLowerCase()}`}>
+            {roleLabel}
+          </p>
           <h3>
             Video v{version.version} / Prompt{" "}
             {version.prompt.version ? `v${version.prompt.version}` : "未记录"}
           </h3>
         </div>
         <span className="shot-review-label">
-          {REVIEW_LABELS[version.review_status] ?? "未记录"}
+          {reviewLabel(version)}
         </span>
       </div>
 
@@ -208,7 +232,11 @@ export function ShotDetailPage() {
           code: "INVALID_RESPONSE",
         });
       }
-      setData({ project: projectResult.data, shot: shotResult.data });
+      setData({
+        project: projectResult.data,
+        shot: shotResult.data,
+        generationStatus: generationStatusResult.data,
+      });
       setState("success");
     } catch (error) {
       setLoadError({
@@ -262,11 +290,21 @@ export function ShotDetailPage() {
     );
   }
 
-  const { project, shot } = data;
+  const { project, shot, generationStatus } = data;
   const status = statusPresentation(shot.status);
   const official = shot.versions.find((version) => version.role === "OFFICIAL");
   const pending = shot.versions.find((version) => version.role === "PENDING_REVIEW");
-  const history = shot.versions.filter((version) => version.role === "HISTORY");
+  const history = shot.versions
+    .filter((version) => version.role === "HISTORY")
+    .sort((left, right) => right.version - left.version);
+  const generationIsActive = [
+    "QUEUED",
+    "SUBMITTING",
+    "PROVIDER_RUNNING",
+    "READY_TO_DOWNLOAD",
+    "DOWNLOADING",
+    "LOCAL_FINALIZING",
+  ].includes(generationStatus.state);
   const workspacePath = projectWorkspacePath(project.project_id);
   const canonicalShotsPath = projectStagePath(project.project_id, "shots");
   const showInitialGenerationPreparation =
@@ -365,12 +403,32 @@ export function ShotDetailPage() {
         {history.length > 0 ? (
           <div className="shot-history-list">
             {history.map((version) => (
-              <VersionCard
-                key={version.version}
-                projectId={project.project_id}
-                shotId={shot.shot_id}
-                version={version}
-              />
+              <div className="shot-history-item" key={version.version}>
+                <VersionCard
+                  projectId={project.project_id}
+                  shotId={shot.shot_id}
+                  version={version}
+                />
+                {official && (
+                  <ShotSetOfficialAction
+                    projectId={project.project_id}
+                    shotId={shot.shot_id}
+                    version={version.version}
+                    promptVersion={version.prompt.version}
+                    currentOfficialVersion={official.version}
+                    blockedReason={
+                      pending
+                        ? "PENDING_REVIEW"
+                        : generationIsActive
+                          ? "ACTIVE_GENERATION"
+                          : !version.video_available
+                            ? "INCOMPLETE_VERSION"
+                            : null
+                    }
+                    onSelectedRefresh={loadShot}
+                  />
+                )}
+              </div>
             ))}
           </div>
         ) : (

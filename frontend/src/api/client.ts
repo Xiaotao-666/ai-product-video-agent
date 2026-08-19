@@ -50,6 +50,7 @@ import type {
   ShotStageState,
   ShotSummary,
   ShotVersion,
+  ShotVersionHistoryReason,
   ShotVersionRole,
   ShotVisualInputMode,
   StageState,
@@ -81,6 +82,12 @@ const SHOT_VERSION_ROLES: ReadonlySet<string> = new Set([
   "OFFICIAL",
   "PENDING_REVIEW",
   "HISTORY",
+]);
+const SHOT_VERSION_HISTORY_REASONS: ReadonlySet<string> = new Set([
+  "PREVIOUSLY_APPROVED",
+  "SUPERSEDED",
+  "EXPLICITLY_REJECTED",
+  "UNKNOWN",
 ]);
 const SHOT_VISUAL_INPUT_MODES: ReadonlySet<string> = new Set([
   "NONE",
@@ -940,6 +947,10 @@ function parseShotVersion(
     typeof value.role !== "string" ||
     !SHOT_VERSION_ROLES.has(value.role) ||
     typeof value.review_status !== "string" ||
+    (value.history_reason !== undefined &&
+      value.history_reason !== null &&
+      (typeof value.history_reason !== "string" ||
+        !SHOT_VERSION_HISTORY_REASONS.has(value.history_reason))) ||
     !isNullableString(value.created_at) ||
     typeof value.video_available !== "boolean"
   ) {
@@ -950,6 +961,10 @@ function parseShotVersion(
     role: value.role as ShotVersionRole,
     review_status:
       parseContentText(value.review_status, correlationId) ?? "UNKNOWN",
+    history_reason:
+      value.history_reason == null
+        ? null
+        : (value.history_reason as ShotVersionHistoryReason),
     created_at: parseContentText(value.created_at, correlationId),
     prompt: parseShotPrompt(value.prompt, correlationId),
     generation: parseShotGeneration(value.generation, correlationId),
@@ -2040,6 +2055,24 @@ export async function approveShot(
 ): Promise<ApiResult<ShotDetail>> {
   const result = await request(
     `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/approve`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseShotDetailResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function setOfficialShotVersion(
+  projectId: string,
+  shotId: string,
+  videoVersion: number,
+): Promise<ApiResult<ShotDetail>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/versions/${encodeURIComponent(String(videoVersion))}/set-official`,
     {
       method: "POST",
       headers: { Accept: "application/json" },

@@ -11,6 +11,7 @@ import {
   getShot,
   getShotGenerationOptions,
   getShotGenerationStatus,
+  setOfficialShotVersion,
 } from "../api/client";
 import type { ProjectDetail, ShotDetail } from "../api/types";
 import { ShotDetailPage } from "./ShotDetailPage";
@@ -27,6 +28,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getShotGenerationOptions: vi.fn(),
     getProjectTasks: vi.fn(),
     getShotGenerationStatus: vi.fn(),
+    setOfficialShotVersion: vi.fn(),
   };
 });
 
@@ -37,6 +39,7 @@ const mockGetReferenceAssets = vi.mocked(getReferenceAssets);
 const mockGetShotGenerationOptions = vi.mocked(getShotGenerationOptions);
 const mockGetProjectTasks = vi.mocked(getProjectTasks);
 const mockGetShotGenerationStatus = vi.mocked(getShotGenerationStatus);
+const mockSetOfficialShotVersion = vi.mocked(setOfficialShotVersion);
 
 const project: ProjectDetail = {
   project_id: "LEE柠檬",
@@ -117,6 +120,7 @@ const shot: ShotDetail = {
       version: 1,
       role: "HISTORY",
       review_status: "REJECTED",
+      history_reason: "SUPERSEDED",
       created_at: "2026-08-18T12:01:00+08:00",
       prompt: {
         version: 1,
@@ -126,6 +130,38 @@ const shot: ShotDetail = {
       },
       generation: { model: "MiniMax-Hailuo-2.3", visual_input_mode: "NONE" },
       video_available: false,
+    },
+  ],
+};
+
+const switchableShot: ShotDetail = {
+  ...shot,
+  pending_review_version: null,
+  version_count: 2,
+  versions: [
+    shot.versions[1],
+    {
+      ...shot.versions[2],
+      review_status: "APPROVED",
+      history_reason: "PREVIOUSLY_APPROVED",
+      video_available: true,
+    },
+  ],
+};
+
+const switchedShot: ShotDetail = {
+  ...switchableShot,
+  official_version: 1,
+  versions: [
+    {
+      ...switchableShot.versions[1],
+      role: "OFFICIAL",
+      history_reason: null,
+    },
+    {
+      ...switchableShot.versions[0],
+      role: "HISTORY",
+      history_reason: "PREVIOUSLY_APPROVED",
     },
   ],
 };
@@ -188,6 +224,7 @@ describe("ShotDetailPage", () => {
     mockGetShotGenerationOptions.mockReset();
     mockGetProjectTasks.mockReset();
     mockGetShotGenerationStatus.mockReset();
+    mockSetOfficialShotVersion.mockReset();
     mockGetProject.mockResolvedValue({ data: project, correlationId: "req_project" });
     mockApproveShot.mockResolvedValue({ data: approvedInitialShot, correlationId: "req_approve" });
     mockGetShot.mockResolvedValue({ data: shot, correlationId: "req_shot" });
@@ -235,6 +272,10 @@ describe("ShotDetailPage", () => {
         paid_call_required: true,
       },
       correlationId: "req_options",
+    });
+    mockSetOfficialShotVersion.mockResolvedValue({
+      data: switchedShot,
+      correlationId: "req_set_official",
     });
   });
 
@@ -304,11 +345,60 @@ describe("ShotDetailPage", () => {
     expect(screen.queryByRole("heading", { name: "待审核新版本", level: 2 })).not.toBeInTheDocument();
   });
 
-  it("shows rejected history instead of hiding it", async () => {
+  it("labels a superseded history version without implying user rejection", async () => {
     renderPage();
     const section = (await screen.findByRole("heading", { name: "历史版本", level: 2 })).closest("section");
-    expect(within(section!).getByText("已拒绝")).toBeInTheDocument();
+    expect(within(section!).getByText("已被后续版本替代")).toBeInTheDocument();
+    expect(within(section!).queryByText("已拒绝")).not.toBeInTheDocument();
     expect(within(section!).getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+  });
+
+  it("shows role-first history labels and blocks switching while pending exists", async () => {
+    renderPage();
+    const historySection = (await screen.findByRole("heading", { name: "历史版本", level: 2 })).closest("section");
+    expect(within(historySection!).getAllByText("历史版本").length).toBeGreaterThanOrEqual(2);
+    expect(within(historySection!).getByRole("button", { name: "设为正式版本" })).toBeDisabled();
+    expect(within(historySection!).getByText(/请先处理当前待审核新版本/)).toBeInTheDocument();
+    const officialSection = screen.getByRole("heading", { name: "当前正式版本", level: 2 }).closest("section");
+    expect(within(officialSection!).queryByRole("button", { name: "设为正式版本" })).not.toBeInTheDocument();
+  });
+
+  it("sets a playable history version official, refreshes, and defaults to it", async () => {
+    mockGetShot
+      .mockResolvedValueOnce({ data: switchableShot, correlationId: "req_before_switch" })
+      .mockResolvedValue({ data: switchedShot, correlationId: "req_after_switch" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "设为正式版本" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("当前正式版本v2");
+    expect(dialog).toHaveTextContent("目标版本v1");
+    expect(dialog).toHaveTextContent("目标 PromptPrompt v1");
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认设为正式版本" }));
+    await waitFor(() => expect(mockGetShot).toHaveBeenCalledTimes(2));
+    expect(mockSetOfficialShotVersion).toHaveBeenCalledTimes(1);
+    expect(mockSetOfficialShotVersion).toHaveBeenCalledWith("LEE柠檬", "shot_01", 1);
+    const officialSection = screen.getByRole("heading", { name: "当前正式版本", level: 2 }).closest("section");
+    expect(within(officialSection!).getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+    expect(within(officialSection!).getByLabelText("Video v1 预览")).toHaveAttribute("controls");
+    const historySection = screen.getByRole("heading", { name: "历史版本", level: 2 }).closest("section");
+    expect(within(historySection!).getByRole("heading", { name: "Video v2 / Prompt v2" })).toBeInTheDocument();
+    expect(screen.getByText("3", { selector: "dd" })).toBeInTheDocument();
+  });
+
+  it("blocks historical switching while generation is active", async () => {
+    mockGetShot.mockResolvedValue({ data: switchableShot, correlationId: "req_switchable" });
+    mockGetShotGenerationStatus.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", shot_id: "shot_01", state: "PROVIDER_RUNNING",
+        resume_available: false, resume_kind: null, video_version: 4,
+        provider_submission_known: true,
+      },
+      correlationId: "req_running",
+    });
+    renderPage();
+    expect(await screen.findByRole("button", { name: "设为正式版本" })).toBeDisabled();
+    expect(screen.getByText(/镜头生成任务进行中/)).toBeInTheDocument();
+    expect(mockSetOfficialShotVersion).not.toHaveBeenCalled();
   });
 
   it("keeps the Video and bound Prompt versions together", async () => {

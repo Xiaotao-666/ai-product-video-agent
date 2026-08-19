@@ -383,15 +383,26 @@ def create_historical_candidate(
     checkpoint: ProjectCheckpoint,
     shot_id: int,
     target_version: int,
-    task_logger: TaskLogger,
+    task_logger: TaskLogger | None,
     recorder: ReviewRecorder | None = None,
+    *,
+    validated_target: VideoVersionInfo | None = None,
 ) -> VideoVersionInfo:
     if checkpoint.shot_status(shot_id) != ShotStatus.APPROVED:
         raise VideoHistoryError("只有已通过的 Shot 可以选择历史正式版本。")
     if checkpoint.candidate_status(shot_id) != CandidateStatus.NONE:
         raise VideoHistoryError("当前 Shot 已存在待处理的新版本，请先完成审核。")
-    versions = {item.video_version: item for item in video_version_history(paths, checkpoint, shot_id)}
-    target = versions.get(int(target_version))
+    if validated_target is not None and validated_target.video_version != int(
+        target_version
+    ):
+        raise VideoHistoryError("已验证的历史版本与目标版本不一致。")
+    target = validated_target
+    if target is None:
+        versions = {
+            item.video_version: item
+            for item in video_version_history(paths, checkpoint, shot_id)
+        }
+        target = versions.get(int(target_version))
     if target is None:
         raise VideoHistoryError(f"Video v{target_version} 不存在于版本记录中。")
     if target.is_approved:
@@ -409,13 +420,14 @@ def create_historical_candidate(
         provider_task_id=target.provider_task_id,
         file_id=target.file_id,
     )
-    task_logger.event(
-        "HISTORICAL_VIDEO_CANDIDATE_CREATED",
-        shot_id=shot_id,
-        candidate_video_version=target.video_version,
-        candidate_prompt_version=target.prompt_version,
-        generation_count=checkpoint.shot_checkpoint(shot_id).get("generation_count", 0),
-    )
+    if task_logger:
+        task_logger.event(
+            "HISTORICAL_VIDEO_CANDIDATE_CREATED",
+            shot_id=shot_id,
+            candidate_video_version=target.video_version,
+            candidate_prompt_version=target.prompt_version,
+            generation_count=checkpoint.shot_checkpoint(shot_id).get("generation_count", 0),
+        )
     if recorder:
         recorder.record_shot_action(
             shot_id,

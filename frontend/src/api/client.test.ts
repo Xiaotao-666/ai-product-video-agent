@@ -4,6 +4,7 @@ import {
   ApiClientError,
   approveCreative,
   approveShot,
+  setOfficialShotVersion,
   approveStoryboard,
   approveVideoPrompts,
   createProject,
@@ -861,6 +862,55 @@ describe("API client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining(
         "/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots/shot_01/approve",
+      ),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("posts one historical set-official request and parses history metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf({
+        project_id: "LEE柠檬",
+        shot_id: "shot_01",
+        status: "APPROVED",
+        official_version: 1,
+        pending_review_version: null,
+        version_count: 2,
+        generation_count: 3,
+        versions: [
+          {
+            version: 1,
+            role: "OFFICIAL",
+            review_status: "APPROVED",
+            history_reason: null,
+            created_at: null,
+            prompt: { version: 1, source: "ai_generated", visual_prompt_core: null, final_prompt: "p1" },
+            generation: { model: "MiniMax-Hailuo-2.3", visual_input_mode: "NONE" },
+            video_available: true,
+          },
+          {
+            version: 3,
+            role: "HISTORY",
+            review_status: "APPROVED",
+            history_reason: "PREVIOUSLY_APPROVED",
+            created_at: null,
+            prompt: { version: 2, source: "ai_revision", visual_prompt_core: null, final_prompt: "p2" },
+            generation: { model: "MiniMax-Hailuo-2.3", visual_input_mode: "NONE" },
+            video_available: true,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await setOfficialShotVersion("LEE柠檬", "shot_01", 1);
+
+    expect(result.data.official_version).toBe(1);
+    expect(result.data.versions[1].history_reason).toBe("PREVIOUSLY_APPROVED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots/shot_01/versions/1/set-official",
       ),
       expect.objectContaining({ method: "POST" }),
     );

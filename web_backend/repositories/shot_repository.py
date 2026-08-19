@@ -16,6 +16,7 @@ from web_backend.models.shots import (
     ShotPromptSummary,
     ShotSummary,
     ShotVersion,
+    ShotVersionHistoryReason,
     ShotVersionRole,
     ShotVisualInputMode,
 )
@@ -475,10 +476,12 @@ class ShotRepository:
             or merged_generation.get("status")
             or ("WAITING_REVIEW" if role is ShotVersionRole.PENDING_REVIEW else None)
         )
+        history_reason = self._history_reason(role, review_status, review)
         return ShotVersion(
             version=version,
             role=role,
             review_status=review_status,
+            history_reason=history_reason,
             created_at=created_at,
             prompt=ShotPromptSummary(
                 version=prompt_version,
@@ -499,6 +502,38 @@ class ShotRepository:
             )
             is not None,
         )
+
+    @staticmethod
+    def _history_reason(
+        role: ShotVersionRole,
+        review_status: str,
+        review: Mapping[str, Any],
+    ) -> ShotVersionHistoryReason | None:
+        if role is not ShotVersionRole.HISTORY:
+            return None
+        if review_status == "APPROVED":
+            return ShotVersionHistoryReason.PREVIOUSLY_APPROVED
+
+        events = review.get("history")
+        event_records = (
+            [item for item in events if isinstance(item, Mapping)]
+            if isinstance(events, list)
+            else []
+        )
+        current = {
+            "review_result": review.get("review_result"),
+            "user_action": review.get("user_action"),
+        }
+        event_records.append(current)
+        for event in reversed(event_records):
+            if str(event.get("review_result") or "").upper() != "REJECTED":
+                continue
+            action = str(event.get("user_action") or "").lower()
+            if action == "regenerate_current_prompt":
+                return ShotVersionHistoryReason.SUPERSEDED
+            if action == "candidate_rejected":
+                return ShotVersionHistoryReason.EXPLICITLY_REJECTED
+        return ShotVersionHistoryReason.UNKNOWN
 
     @staticmethod
     def _records_by_version(

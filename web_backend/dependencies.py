@@ -26,6 +26,7 @@ from web_backend.services.shot_generation_preflight import (
 )
 from web_backend.services.shot_generation import ShotGenerationActionService
 from web_backend.services.shot_approval import ShotApprovalService
+from web_backend.services.shot_versions import ShotVersionService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
@@ -101,3 +102,7 @@ def get_shot_generation_action_service(
 
 def get_shot_approval_service(request: Request) -> ShotApprovalService:
     return request.app.state.shot_approval_service
+
+
+def get_shot_version_service(request: Request) -> ShotVersionService:
+    return request.app.state.shot_version_service
