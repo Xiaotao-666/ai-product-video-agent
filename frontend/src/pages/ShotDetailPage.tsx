@@ -14,6 +14,7 @@ import type {
   ShotVisualInputMode,
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { ShotGenerationPreparation } from "../components/shots/ShotGenerationPreparation";
 import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import { projectStagePath, projectWorkspacePath } from "../stageDefinitions";
 
@@ -261,6 +262,11 @@ export function ShotDetailPage() {
   const history = shot.versions.filter((version) => version.role === "HISTORY");
   const workspacePath = projectWorkspacePath(project.project_id);
   const canonicalShotsPath = projectStagePath(project.project_id, "shots");
+  const showInitialGenerationPreparation =
+    shot.generation_count === 0 &&
+    shot.version_count === 0 &&
+    shot.versions.length === 0 &&
+    project.workflow.available_actions.includes("GENERATE_SHOTS");
 
   return (
     <main className="main-content shot-detail-page">
@@ -291,6 +297,13 @@ export function ShotDetailPage() {
           <div><dt>累计生成</dt><dd>{shot.generation_count}</dd></div>
         </dl>
       </header>
+
+      {showInitialGenerationPreparation && (
+        <ShotGenerationPreparation
+          projectId={project.project_id}
+          shotId={shot.shot_id}
+        />
+      )}
 
       <section
         className="shot-version-section shot-version-section-official"

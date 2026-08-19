@@ -15,6 +15,9 @@ from web_backend.errors import register_exception_handlers
 from web_backend.locking import DEFAULT_PROJECT_LOCK_MANAGER, ProjectLockManager
 from web_backend.middleware import CorrelationIdMiddleware
 from web_backend.repositories.project_repository import ProjectRepository
+from web_backend.repositories.reference_asset_repository import (
+    ReferenceAssetRepository,
+)
 from web_backend.repositories.planning_content_repository import (
     PlanningContentRepository,
 )
@@ -27,10 +30,14 @@ from web_backend.routers.capabilities import router as capabilities_router
 from web_backend.routers.health import router as health_router
 from web_backend.routers.planning_actions import router as planning_actions_router
 from web_backend.routers.projects import router as projects_router
+from web_backend.routers.shot_generation import router as shot_generation_router
 from web_backend.routers.tasks import router as tasks_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
+from web_backend.services.shot_generation_preflight import (
+    ShotGenerationPreflightService,
+)
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
@@ -68,6 +75,9 @@ def _initialize_local_resources(application: FastAPI) -> None:
     application.state.shot_repository = ShotRepository(
         application.state.project_repository
     )
+    application.state.reference_asset_repository = ReferenceAssetRepository(
+        application.state.project_repository
+    )
     application.state.postproduction_repository = PostProductionRepository(
         application.state.project_repository
     )
@@ -87,6 +97,12 @@ def _initialize_local_resources(application: FastAPI) -> None:
         lock_manager,
     )
     application.state.capability_service = CapabilityService()
+    application.state.shot_generation_preflight_service = (
+        ShotGenerationPreflightService(
+            application.state.project_repository,
+            application.state.reference_asset_repository,
+        )
+    )
     application.state.creative_action_service = CreativeActionService(
         application.state.project_repository,
         application.state.task_service,
@@ -154,6 +170,7 @@ def create_app(
     application.include_router(health_router, prefix="/api")
     application.include_router(capabilities_router, prefix="/api")
     application.include_router(projects_router, prefix="/api")
+    application.include_router(shot_generation_router, prefix="/api")
     application.include_router(planning_actions_router, prefix="/api")
     application.include_router(tasks_router, prefix="/api")
     return application

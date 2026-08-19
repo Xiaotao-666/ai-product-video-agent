@@ -22,7 +22,10 @@ import {
   getProjectTasks,
   getProjects,
   getProjectWorkflow,
+  getReferenceAssets,
+  getReferenceImageUrl,
   getShot,
+  getShotGenerationOptions,
   getShots,
   getShotVideoUrl,
   getStoryboardContent,
@@ -34,6 +37,7 @@ import {
   regenerateCreative,
   regenerateStoryboard,
   regenerateVideoPrompts,
+  preflightShotGeneration,
   retryCreative,
   reviseCreative,
   reviseStoryboard,
@@ -1521,5 +1525,102 @@ describe("API client", () => {
     expect(payload).not.toHaveProperty("provider_response");
     expect(JSON.stringify(payload)).not.toContain("D:\\");
     expect(JSON.stringify(payload).toLowerCase()).not.toContain("api_key");
+  });
+
+  it("parses local Shot generation options from the Backend capability response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          project_id: "中文项目",
+          eligible: true,
+          shot: { shot_id: "shot_01", duration_seconds: 6, prompt_version: 2, resolution: "768P" },
+          selection_modes: ["AUTO", "MANUAL"],
+          visual_input_modes: [
+            { mode: "none", display_name: "不使用参考图", description: "完全根据提示词生成。", compatible_model_ids: ["MiniMax-Hailuo-2.3"] },
+          ],
+          models: [
+            {
+              model_id: "MiniMax-Hailuo-2.3",
+              display_name: "MiniMax Hailuo 2.3",
+              provider: "minimax",
+              provider_display_name: "MiniMax",
+              api_version: "v1",
+              available: true,
+              supported_visual_input_modes: ["none", "first_frame"],
+              supported_resolutions: ["768P"],
+              supported_durations: [6, 10],
+              min_duration: null,
+              max_duration: null,
+            },
+          ],
+          issues: [],
+          paid_call_required: true,
+        }),
+      ),
+    );
+    const result = await getShotGenerationOptions("中文项目", "shot_01");
+    expect(result.data.shot.prompt_version).toBe(2);
+    expect(result.data.models[0].supported_visual_input_modes).toEqual(["none", "first_frame"]);
+    expect(fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/%E4%B8%AD%E6%96%87%E9%A1%B9%E7%9B%AE/shots/shot_01/generation/options",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("parses reference assets and builds a path-free encoded preview URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          project_id: "中文项目",
+          assets: [{ asset_id: "ref_001", filename: "产品图.png", media_type: "image/png", width: 1024, height: 1024 }],
+        }),
+      ),
+    );
+    const result = await getReferenceAssets("中文项目");
+    expect(result.data.assets[0].filename).toBe("产品图.png");
+    expect(getReferenceImageUrl("中文项目", "ref_001")).toBe(
+      "http://127.0.0.1:8000/api/projects/%E4%B8%AD%E6%96%87%E9%A1%B9%E7%9B%AE/references/ref_001/image",
+    );
+  });
+
+  it("posts only the selected preflight configuration and parses the resolved route", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseOf({
+          ready: true,
+          shot: { shot_id: "shot_01", duration_seconds: 6, prompt_version: 2, resolution: "768P" },
+          resolved: {
+            provider: "minimax",
+            provider_display_name: "MiniMax",
+            model: "MiniMax-H3",
+            model_display_name: "MiniMax H3",
+            api_version: "v2",
+            generation_mode: "reference_generation",
+            generation_mode_display_name: "主体参考生成",
+            visual_input_mode: "reference_asset",
+            model_selection: "MANUAL",
+          },
+          provider_available: true,
+          selected_asset_ids: ["ref_001"],
+          issues: [],
+          warnings: [],
+          paid_call_required: true,
+        }),
+      ),
+    );
+    const request = {
+      model_selection: "MANUAL" as const,
+      requested_model: "MiniMax-H3",
+      visual_input: { mode: "reference_asset" as const, asset_ids: ["ref_001"] },
+    };
+    const result = await preflightShotGeneration("中文项目", "shot_01", request);
+    expect(result.data.resolved?.model).toBe("MiniMax-H3");
+    const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual(request);
+    expect(String(init.body)).not.toContain("path");
+    expect(String(init.body).toLowerCase()).not.toContain("api_key");
   });
 });

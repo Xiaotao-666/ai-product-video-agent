@@ -2,18 +2,32 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiClientError, getProject, getShot } from "../api/client";
+import {
+  ApiClientError,
+  getProject,
+  getReferenceAssets,
+  getShot,
+  getShotGenerationOptions,
+} from "../api/client";
 import type { ProjectDetail, ShotDetail } from "../api/types";
 import { ShotDetailPage } from "./ShotDetailPage";
 
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
-  return { ...actual, getProject: vi.fn(), getShot: vi.fn() };
+  return {
+    ...actual,
+    getProject: vi.fn(),
+    getShot: vi.fn(),
+    getReferenceAssets: vi.fn(),
+    getShotGenerationOptions: vi.fn(),
+  };
 });
 
 const mockGetProject = vi.mocked(getProject);
 const mockGetShot = vi.mocked(getShot);
+const mockGetReferenceAssets = vi.mocked(getReferenceAssets);
+const mockGetShotGenerationOptions = vi.mocked(getShotGenerationOptions);
 
 const project: ProjectDetail = {
   project_id: "LEE柠檬",
@@ -122,8 +136,43 @@ describe("ShotDetailPage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
     mockGetShot.mockReset();
+    mockGetReferenceAssets.mockReset();
+    mockGetShotGenerationOptions.mockReset();
     mockGetProject.mockResolvedValue({ data: project, correlationId: "req_project" });
     mockGetShot.mockResolvedValue({ data: shot, correlationId: "req_shot" });
+    mockGetReferenceAssets.mockResolvedValue({
+      data: { project_id: "LEE柠檬", assets: [] },
+      correlationId: "req_references",
+    });
+    mockGetShotGenerationOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        eligible: true,
+        shot: { shot_id: "shot_01", duration_seconds: 6, prompt_version: 2, resolution: "768P" },
+        selection_modes: ["AUTO", "MANUAL"],
+        visual_input_modes: [
+          { mode: "none", display_name: "不使用参考图", description: "完全根据提示词生成。", compatible_model_ids: ["MiniMax-Hailuo-2.3"] },
+          { mode: "reference_asset", display_name: "主体参考", description: "保持主体身份。", compatible_model_ids: [] },
+          { mode: "first_frame", display_name: "作为首帧", description: "作为第一帧。", compatible_model_ids: ["MiniMax-Hailuo-2.3"] },
+        ],
+        models: [{
+          model_id: "MiniMax-Hailuo-2.3",
+          display_name: "MiniMax Hailuo 2.3",
+          provider: "minimax",
+          provider_display_name: "MiniMax",
+          api_version: "v1",
+          available: true,
+          supported_visual_input_modes: ["none", "first_frame"],
+          supported_resolutions: ["768P"],
+          supported_durations: [6, 10],
+          min_duration: null,
+          max_duration: null,
+        }],
+        issues: [],
+        paid_call_required: true,
+      },
+      correlationId: "req_options",
+    });
   });
 
   it("loads a Chinese project and Shot ID from the URL", async () => {
@@ -269,5 +318,43 @@ describe("ShotDetailPage", () => {
     });
     renderPage();
     expect(await screen.findByText("当前没有历史版本。")).toBeInTheDocument();
+  });
+
+  it("shows generation preparation only for an ungenerated Shot in GENERATE_SHOTS", async () => {
+    mockGetProject.mockResolvedValue({
+      data: {
+        ...project,
+        workflow: {
+          ...project.workflow,
+          workflow_phase: "VIDEO_GENERATION",
+          status: "APPROVED",
+          stages: {
+            ...project.workflow.stages,
+            video_prompt: { status: "APPROVED" },
+            shots: { status: "NOT_STARTED", approved: 0, total: 1 },
+          },
+          available_actions: ["GENERATE_SHOTS"],
+        },
+      },
+      correlationId: "req_project",
+    });
+    mockGetShot.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        shot_id: "shot_01",
+        status: "NOT_STARTED",
+        official_version: null,
+        pending_review_version: null,
+        version_count: 0,
+        generation_count: 0,
+        versions: [],
+      },
+      correlationId: "req_shot",
+    });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "生成设置" })).toBeInTheDocument();
+    expect(mockGetShotGenerationOptions).toHaveBeenCalledWith("LEE柠檬", "shot_01");
+    expect(mockGetReferenceAssets).toHaveBeenCalledWith("LEE柠檬");
+    expect(screen.queryByRole("button", { name: "生成视频" })).not.toBeInTheDocument();
   });
 });

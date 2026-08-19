@@ -46,6 +46,10 @@ POST /api/projects/{project_id}/planning/storyboard/approve
 POST /api/projects/{project_id}/planning/video-prompts/generate
 POST /api/projects/{project_id}/planning/video-prompts/revise
 POST /api/projects/{project_id}/planning/video-prompts/regenerate
+GET /api/projects/{project_id}/references
+GET /api/projects/{project_id}/references/{asset_id}/image
+GET /api/projects/{project_id}/shots/{shot_id}/generation/options
+POST /api/projects/{project_id}/shots/{shot_id}/generation/preflight
 POST /api/projects/{project_id}/planning/video-prompts/approve
 ```
 

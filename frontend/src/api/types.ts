@@ -376,6 +376,101 @@ export interface ShotDetail {
   versions: ShotVersion[];
 }
 
+export type GenerationModelSelection = "AUTO" | "MANUAL";
+export type GenerationVisualInputMode =
+  | "none"
+  | "reference_asset"
+  | "first_frame";
+
+export interface GenerationIssue {
+  code: string;
+  message: string;
+}
+
+export interface GenerationShotContext {
+  shot_id: string;
+  duration_seconds: number;
+  prompt_version: number | null;
+  resolution: string;
+}
+
+export interface GenerationModelOption {
+  model_id: string;
+  display_name: string;
+  provider: string;
+  provider_display_name: string;
+  api_version: string;
+  available: boolean;
+  supported_visual_input_modes: GenerationVisualInputMode[];
+  supported_resolutions: string[];
+  supported_durations: number[];
+  min_duration: number | null;
+  max_duration: number | null;
+}
+
+export interface GenerationVisualInputOption {
+  mode: GenerationVisualInputMode;
+  display_name: string;
+  description: string;
+  compatible_model_ids: string[];
+}
+
+export interface GenerationOptionsResponse {
+  project_id: string;
+  eligible: boolean;
+  shot: GenerationShotContext;
+  selection_modes: GenerationModelSelection[];
+  visual_input_modes: GenerationVisualInputOption[];
+  models: GenerationModelOption[];
+  issues: GenerationIssue[];
+  paid_call_required: boolean;
+}
+
+export interface ReferenceAsset {
+  asset_id: string;
+  filename: string;
+  media_type: string;
+  width: number;
+  height: number;
+}
+
+export interface ReferenceAssetListResponse {
+  project_id: string;
+  assets: ReferenceAsset[];
+}
+
+export interface GenerationPreflightRequest {
+  model_selection: GenerationModelSelection;
+  requested_model: string | null;
+  visual_input: {
+    mode: GenerationVisualInputMode;
+    asset_ids: string[];
+  };
+}
+
+export interface ResolvedGeneration {
+  provider: string;
+  provider_display_name: string;
+  model: string;
+  model_display_name: string;
+  api_version: string;
+  generation_mode: string;
+  generation_mode_display_name: string;
+  visual_input_mode: GenerationVisualInputMode;
+  model_selection: GenerationModelSelection;
+}
+
+export interface GenerationPreflightResponse {
+  ready: boolean;
+  shot: GenerationShotContext;
+  resolved: ResolvedGeneration | null;
+  provider_available: boolean;
+  selected_asset_ids: string[];
+  issues: GenerationIssue[];
+  warnings: GenerationIssue[];
+  paid_call_required: boolean;
+}
+
 export type VoiceCalibrationStatus =
   | "PASS"
   | "WARNING"

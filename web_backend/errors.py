@@ -141,6 +141,15 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "VIDEO_NOT_FOUND": ErrorDefinition(
         404, "SHOT_ERROR", "VIDEO_NOT_FOUND", "视频文件不可用。"
     ),
+    "INVALID_REFERENCE_ASSET_ID": ErrorDefinition(
+        422, "REFERENCE_ERROR", "INVALID_REFERENCE_ASSET_ID", "参考素材标识无效。"
+    ),
+    "REFERENCE_ASSET_NOT_FOUND": ErrorDefinition(
+        404, "REFERENCE_ERROR", "REFERENCE_ASSET_NOT_FOUND", "参考素材不存在。"
+    ),
+    "REFERENCE_ASSET_DATA_CORRUPT": ErrorDefinition(
+        422, "REFERENCE_ERROR", "REFERENCE_ASSET_DATA_CORRUPT", "参考素材无法安全读取。"
+    ),
     "ASSEMBLY_DATA_CORRUPT": ErrorDefinition(
         422, "ASSEMBLY_ERROR", "ASSEMBLY_DATA_CORRUPT", "合片数据无法读取。"
     ),

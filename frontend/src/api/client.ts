@@ -16,6 +16,15 @@ import type {
   ExportDetail,
   ExportVoiceTimingSummary,
   FinalExportState,
+  GenerationIssue,
+  GenerationModelOption,
+  GenerationModelSelection,
+  GenerationOptionsResponse,
+  GenerationPreflightRequest,
+  GenerationPreflightResponse,
+  GenerationShotContext,
+  GenerationVisualInputMode,
+  GenerationVisualInputOption,
   HealthResponse,
   MusicDetail,
   MusicMixDetail,
@@ -23,6 +32,9 @@ import type {
   ProjectDetail,
   ProjectListResponse,
   ProjectRequest,
+  ReferenceAsset,
+  ReferenceAssetListResponse,
+  ResolvedGeneration,
   ProjectSummary,
   ProjectWorkflowResponse,
   PlanningCue,
@@ -70,6 +82,15 @@ const SHOT_VISUAL_INPUT_MODES: ReadonlySet<string> = new Set([
   "FIRST_FRAME",
   "REFERENCE_ASSET",
   "UNKNOWN",
+]);
+const GENERATION_VISUAL_INPUT_MODES: ReadonlySet<string> = new Set([
+  "none",
+  "reference_asset",
+  "first_frame",
+]);
+const GENERATION_MODEL_SELECTIONS: ReadonlySet<string> = new Set([
+  "AUTO",
+  "MANUAL",
 ]);
 const VOICE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set([
   "PASS",
@@ -973,6 +994,255 @@ function parseShotDetailResponse(
   };
 }
 
+function parseGenerationVisualMode(
+  value: unknown,
+  correlationId: string | null,
+): GenerationVisualInputMode {
+  if (
+    typeof value !== "string" ||
+    !GENERATION_VISUAL_INPUT_MODES.has(value)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Visual Input。", correlationId);
+  }
+  return value as GenerationVisualInputMode;
+}
+
+function parseGenerationSelection(
+  value: unknown,
+  correlationId: string | null,
+): GenerationModelSelection {
+  if (
+    typeof value !== "string" ||
+    !GENERATION_MODEL_SELECTIONS.has(value)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的模型选择方式。", correlationId);
+  }
+  return value as GenerationModelSelection;
+}
+
+function parseRequiredSafeText(
+  value: unknown,
+  message: string,
+  correlationId: string | null,
+): string {
+  if (typeof value !== "string" || value.length === 0) {
+    return invalidResponse(message, correlationId);
+  }
+  return parseContentText(value, correlationId) ?? invalidResponse(message, correlationId);
+}
+
+function parseGenerationIssue(
+  value: unknown,
+  correlationId: string | null,
+): GenerationIssue {
+  if (
+    !isRecord(value) ||
+    typeof value.code !== "string" ||
+    !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.code)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配置问题。", correlationId);
+  }
+  return {
+    code: value.code,
+    message: parseRequiredSafeText(
+      value.message,
+      "Backend 返回了无法读取的配置问题。",
+      correlationId,
+    ),
+  };
+}
+
+function parseGenerationShotContext(
+  value: unknown,
+  correlationId: string | null,
+): GenerationShotContext {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.duration_seconds) ||
+    !isNullablePositiveInteger(value.prompt_version)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头生成参数。", correlationId);
+  }
+  return {
+    shot_id: parseShotId(value.shot_id, correlationId),
+    duration_seconds: value.duration_seconds,
+    prompt_version: value.prompt_version,
+    resolution: parseRequiredSafeText(
+      value.resolution,
+      "Backend 返回了无法读取的分辨率。",
+      correlationId,
+    ),
+  };
+}
+
+function parseGenerationModel(
+  value: unknown,
+  correlationId: string | null,
+): GenerationModelOption {
+  if (
+    !isRecord(value) ||
+    typeof value.available !== "boolean" ||
+    !Array.isArray(value.supported_visual_input_modes) ||
+    !Array.isArray(value.supported_resolutions) ||
+    !Array.isArray(value.supported_durations) ||
+    !value.supported_durations.every(isPositiveInteger) ||
+    !isNullablePositiveInteger(value.min_duration) ||
+    !isNullablePositiveInteger(value.max_duration)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的视频模型。", correlationId);
+  }
+  return {
+    model_id: parseRequiredSafeText(value.model_id, "视频模型无效。", correlationId),
+    display_name: parseRequiredSafeText(value.display_name, "视频模型无效。", correlationId),
+    provider: parseRequiredSafeText(value.provider, "视频 Provider 无效。", correlationId),
+    provider_display_name: parseRequiredSafeText(value.provider_display_name, "视频 Provider 无效。", correlationId),
+    api_version: parseRequiredSafeText(value.api_version, "视频 API Version 无效。", correlationId),
+    available: value.available,
+    supported_visual_input_modes: value.supported_visual_input_modes.map((mode) =>
+      parseGenerationVisualMode(mode, correlationId),
+    ),
+    supported_resolutions: value.supported_resolutions.map((resolution) =>
+      parseRequiredSafeText(resolution, "视频分辨率无效。", correlationId),
+    ),
+    supported_durations: [...value.supported_durations],
+    min_duration: value.min_duration,
+    max_duration: value.max_duration,
+  };
+}
+
+function parseGenerationVisualOption(
+  value: unknown,
+  correlationId: string | null,
+): GenerationVisualInputOption {
+  if (!isRecord(value) || !Array.isArray(value.compatible_model_ids)) {
+    return invalidResponse("Backend 返回了无法读取的 Visual Input 选项。", correlationId);
+  }
+  return {
+    mode: parseGenerationVisualMode(value.mode, correlationId),
+    display_name: parseRequiredSafeText(value.display_name, "Visual Input 选项无效。", correlationId),
+    description: parseRequiredSafeText(value.description, "Visual Input 说明无效。", correlationId),
+    compatible_model_ids: value.compatible_model_ids.map((model) =>
+      parseRequiredSafeText(model, "兼容模型无效。", correlationId),
+    ),
+  };
+}
+
+function parseGenerationOptions(
+  value: unknown,
+  correlationId: string | null,
+): GenerationOptionsResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.eligible !== "boolean" ||
+    !Array.isArray(value.selection_modes) ||
+    !Array.isArray(value.visual_input_modes) ||
+    !Array.isArray(value.models) ||
+    !Array.isArray(value.issues) ||
+    typeof value.paid_call_required !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的生成选项。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    eligible: value.eligible,
+    shot: parseGenerationShotContext(value.shot, correlationId),
+    selection_modes: value.selection_modes.map((selection) =>
+      parseGenerationSelection(selection, correlationId),
+    ),
+    visual_input_modes: value.visual_input_modes.map((option) =>
+      parseGenerationVisualOption(option, correlationId),
+    ),
+    models: value.models.map((model) => parseGenerationModel(model, correlationId)),
+    issues: value.issues.map((issue) => parseGenerationIssue(issue, correlationId)),
+    paid_call_required: value.paid_call_required,
+  };
+}
+
+function parseReferenceAsset(
+  value: unknown,
+  correlationId: string | null,
+): ReferenceAsset {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.width) ||
+    !isPositiveInteger(value.height)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的参考素材。", correlationId);
+  }
+  return {
+    asset_id: parseRequiredSafeText(value.asset_id, "参考素材标识无效。", correlationId),
+    filename: parseRequiredSafeText(value.filename, "参考素材文件名无效。", correlationId),
+    media_type: parseRequiredSafeText(value.media_type, "参考素材类型无效。", correlationId),
+    width: value.width,
+    height: value.height,
+  };
+}
+
+function parseReferenceAssets(
+  value: unknown,
+  correlationId: string | null,
+): ReferenceAssetListResponse {
+  if (!isRecord(value) || !Array.isArray(value.assets)) {
+    return invalidResponse("Backend 返回了无法读取的参考素材列表。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    assets: value.assets.map((asset) => parseReferenceAsset(asset, correlationId)),
+  };
+}
+
+function parseResolvedGeneration(
+  value: unknown,
+  correlationId: string | null,
+): ResolvedGeneration | null {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return invalidResponse("Backend 返回了无法读取的模型解析结果。", correlationId);
+  }
+  return {
+    provider: parseRequiredSafeText(value.provider, "视频 Provider 无效。", correlationId),
+    provider_display_name: parseRequiredSafeText(value.provider_display_name, "视频 Provider 无效。", correlationId),
+    model: parseRequiredSafeText(value.model, "视频模型无效。", correlationId),
+    model_display_name: parseRequiredSafeText(value.model_display_name, "视频模型无效。", correlationId),
+    api_version: parseRequiredSafeText(value.api_version, "视频 API Version 无效。", correlationId),
+    generation_mode: parseRequiredSafeText(value.generation_mode, "生成模式无效。", correlationId),
+    generation_mode_display_name: parseRequiredSafeText(value.generation_mode_display_name, "生成模式无效。", correlationId),
+    visual_input_mode: parseGenerationVisualMode(value.visual_input_mode, correlationId),
+    model_selection: parseGenerationSelection(value.model_selection, correlationId),
+  };
+}
+
+function parseGenerationPreflight(
+  value: unknown,
+  correlationId: string | null,
+): GenerationPreflightResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.ready !== "boolean" ||
+    typeof value.provider_available !== "boolean" ||
+    !Array.isArray(value.selected_asset_ids) ||
+    !Array.isArray(value.issues) ||
+    !Array.isArray(value.warnings) ||
+    typeof value.paid_call_required !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配置检查结果。", correlationId);
+  }
+  return {
+    ready: value.ready,
+    shot: parseGenerationShotContext(value.shot, correlationId),
+    resolved: parseResolvedGeneration(value.resolved, correlationId),
+    provider_available: value.provider_available,
+    selected_asset_ids: value.selected_asset_ids.map((assetId) =>
+      parseRequiredSafeText(assetId, "参考素材标识无效。", correlationId),
+    ),
+    issues: value.issues.map((issue) => parseGenerationIssue(issue, correlationId)),
+    warnings: value.warnings.map((issue) => parseGenerationIssue(issue, correlationId)),
+    paid_call_required: value.paid_call_required,
+  };
+}
+
 function parseAssemblyShotVersion(
   value: unknown,
   correlationId: string | null,
@@ -1563,6 +1833,60 @@ export async function getShot(
   );
   return {
     data: parseShotDetailResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getShotGenerationOptions(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<GenerationOptionsResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/options`,
+  );
+  return {
+    data: parseGenerationOptions(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getReferenceAssets(
+  projectId: string,
+): Promise<ApiResult<ReferenceAssetListResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/references`,
+  );
+  return {
+    data: parseReferenceAssets(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getReferenceImageUrl(
+  projectId: string,
+  assetId: string,
+): string {
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(assetId)}/image`;
+}
+
+export async function preflightShotGeneration(
+  projectId: string,
+  shotId: string,
+  payload: GenerationPreflightRequest,
+): Promise<ApiResult<GenerationPreflightResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/preflight`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseGenerationPreflight(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

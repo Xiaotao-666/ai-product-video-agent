@@ -6,6 +6,9 @@ from fastapi import Request
 
 from web_backend.locking import ProjectLockManager
 from web_backend.repositories.project_repository import ProjectRepository
+from web_backend.repositories.reference_asset_repository import (
+    ReferenceAssetRepository,
+)
 from web_backend.repositories.planning_content_repository import (
     PlanningContentRepository,
 )
@@ -17,6 +20,9 @@ from web_backend.repositories.task_repository import TaskRepository
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
+from web_backend.services.shot_generation_preflight import (
+    ShotGenerationPreflightService,
+)
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
@@ -36,6 +42,10 @@ def get_planning_content_repository(request: Request) -> PlanningContentReposito
 
 def get_shot_repository(request: Request) -> ShotRepository:
     return request.app.state.shot_repository
+
+
+def get_reference_asset_repository(request: Request) -> ReferenceAssetRepository:
+    return request.app.state.reference_asset_repository
 
 
 def get_postproduction_repository(request: Request) -> PostProductionRepository:
@@ -68,3 +78,9 @@ def get_task_service(request: Request) -> TaskService:
 
 def get_creative_action_service(request: Request) -> CreativeActionService:
     return request.app.state.creative_action_service
+
+
+def get_shot_generation_preflight_service(
+    request: Request,
+) -> ShotGenerationPreflightService:
+    return request.app.state.shot_generation_preflight_service
