@@ -396,12 +396,13 @@ class ProjectRepository:
 
         for name, parts in _PLANNING_ARTIFACT_PATHS.items():
             loaded[name] = self._managed_path_exists(record, *parts)
-        loaded["video_prompts_exist"] = any(
-            self._managed_path_exists(record, "storyboard", filename)
-            for filename in (
-                "video_prompts.json",
-                "video_prompt_generation_progress.json",
-            )
+        loaded["video_prompts_exist"] = self._managed_path_exists(
+            record, "storyboard", "video_prompts.json"
+        )
+        loaded["video_prompt_progress_exists"] = self._managed_path_exists(
+            record,
+            "storyboard",
+            "video_prompt_generation_progress.json",
         )
         loaded["shot_artifacts_exist"] = self._shot_artifacts_exist(record)
         return ProjectManifests(**loaded)

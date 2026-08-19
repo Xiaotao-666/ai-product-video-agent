@@ -80,6 +80,7 @@ class ProjectManifests:
     creative_exists: bool = False
     storyboard_exists: bool = False
     video_prompts_exist: bool = False
+    video_prompt_progress_exists: bool = False
     shot_artifacts_exist: bool = False
 
 
@@ -107,7 +108,34 @@ def _failed_creative_is_retryable(
         and not manifests.creative_exists
         and not manifests.storyboard_exists
         and not manifests.video_prompts_exist
+        and not manifests.video_prompt_progress_exists
         and not manifests.shot_artifacts_exist
+    )
+
+
+def _video_prompt_generation_is_allowed(
+    data: Mapping[str, Any],
+    manifests: ProjectManifests,
+) -> bool:
+    prompt_status = _stage_status(data, "VIDEO_PROMPT")
+    current_stage = str(data.get("current_stage") or "").upper()
+    resumable_state = (
+        prompt_status == "NOT_STARTED"
+        or (
+            prompt_status in {"RUNNING", "FAILED"}
+            and current_stage == "VIDEO_PROMPT"
+        )
+    )
+    return (
+        _stage_status(data, "CREATIVE") == "COMPLETED"
+        and _stage_status(data, "CREATIVE_REVIEW") == "APPROVED"
+        and _stage_status(data, "STORYBOARD") == "COMPLETED"
+        and _stage_status(data, "STORYBOARD_REVIEW") == "APPROVED"
+        and resumable_state
+        and _stage_status(data, "PROMPT_REVIEW") == "NOT_STARTED"
+        and _stage_status(data, "VIDEO_GENERATION") == "NOT_STARTED"
+        and _stage_status(data, "COMPLETED") == "NOT_STARTED"
+        and not manifests.video_prompts_exist
     )
 
 
@@ -351,6 +379,19 @@ def derive_workflow(
 
     if phase is WorkflowPhase.FAILED and _failed_creative_is_retryable(data, manifests):
         available_actions = [AvailableAction.RETRY_GENERATE_CREATIVE]
+    elif phase is WorkflowPhase.FAILED and _video_prompt_generation_is_allowed(
+        data, manifests
+    ):
+        # The canonical Generate action deliberately doubles as the explicit
+        # manual resume action. Core's per-Shot progress cache decides which
+        # successful Shots can be skipped; no provider work starts automatically.
+        available_actions = [AvailableAction.GENERATE_VIDEO_PROMPTS]
+    elif phase is WorkflowPhase.VIDEO_PROMPT:
+        available_actions = (
+            [AvailableAction.GENERATE_VIDEO_PROMPTS]
+            if _video_prompt_generation_is_allowed(data, manifests)
+            else []
+        )
     elif phase is WorkflowPhase.POST_PRODUCTION:
         available_actions = [
             action

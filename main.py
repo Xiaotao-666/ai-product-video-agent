@@ -72,6 +72,7 @@ from storyboard_workflow import (
     regenerate_storyboard_stage,
     revise_storyboard_stage,
 )
+from video_prompt_workflow import generate_video_prompts_stage
 from shot_review import (
     ShotReviewError,
     active_prompt_payload,
@@ -582,35 +583,15 @@ def run_pipeline(
             paths.video_prompts_path(), VideoPromptPlan, "Video Prompt"
         )
     else:
-        checkpoint.update_stage(ProjectStage.VIDEO_PROMPT, StageStatus.RUNNING)
-        task_logger.set_stage("video_prompt")
-        prompt_plan = _record_prompt_evaluation(
-            evaluation_recorder,
-            "video_prompt",
-            generate_video_prompts(
-                request,
-                brief,
-                board,
-                deepseek_key,
-                task_logger,
-                **_visual_kwargs(
-                    visual_analysis_result,
-                    visual_constraints,
-                    reference_asset_context,
-                ),
-                progress_path=paths.video_prompt_generation_progress_path(),
-            ),
+        prompt_plan = generate_video_prompts_stage(
+            paths,
             request,
-            visual_analysis_result,
-            visual_constraints,
-            reference_asset_context,
-            creative_brief=brief.model_dump(),
-            storyboard=board.model_dump(),
+            checkpoint,
+            deepseek_key,
+            task_logger,
+            evaluation_recorder=evaluation_recorder,
+            reference_asset_context=reference_asset_context,
         )
-        paths.save_json(paths.video_prompts_path(), prompt_plan.model_dump())
-        checkpoint.update_stage(ProjectStage.VIDEO_PROMPT, StageStatus.COMPLETED)
-        checkpoint.advance_to(ProjectStage.PROMPT_REVIEW, StageStatus.WAITING_REVIEW)
-        task_logger.event("PROMPT_GENERATED", "Video Prompt 生成完成")
 
     if checkpoint.stage_status(ProjectStage.PROMPT_REVIEW) != StageStatus.APPROVED:
         prompt_plan = human_review_gate(

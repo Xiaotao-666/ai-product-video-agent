@@ -43,6 +43,7 @@ POST /api/projects/{project_id}/planning/storyboard/generate
 POST /api/projects/{project_id}/planning/storyboard/revise
 POST /api/projects/{project_id}/planning/storyboard/regenerate
 POST /api/projects/{project_id}/planning/storyboard/approve
+POST /api/projects/{project_id}/planning/video-prompts/generate
 ```
 
 The workflow endpoint reports deterministic `available_actions`. The Creative

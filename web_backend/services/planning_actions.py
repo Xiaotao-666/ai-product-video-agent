@@ -73,8 +73,44 @@ def _raise_creative_task_failure(error: Exception) -> None:
         )
 
 
+def _raise_video_prompt_task_failure(error: Exception) -> None:
+    """Translate Video Prompt failures without exposing per-Shot content."""
+
+    from project_manager import ProjectDirectoryError
+    from prompt_generator import (
+        PromptGenerationError,
+        StructuredOutputExhaustedError,
+    )
+    from storyboard import StoryboardError, VideoPromptStructureError
+
+    if isinstance(error, (StructuredOutputExhaustedError, VideoPromptStructureError)):
+        _task_failure(
+            "VIDEO_PROMPT_OUTPUT_INVALID",
+            "部分镜头的视频提示词未通过校验，可以重新尝试。",
+            retryable=True,
+        )
+    if isinstance(error, PromptGenerationError):
+        _task_failure(
+            "PROVIDER_REQUEST_FAILED",
+            "视频提示词生成服务暂时不可用，请稍后重试。",
+            retryable=True,
+        )
+    if isinstance(error, ProjectDirectoryError):
+        _task_failure(
+            "PROJECT_WRITE_FAILED",
+            "视频提示词结果无法保存。",
+            retryable=True,
+        )
+    if isinstance(error, StoryboardError):
+        _task_failure(
+            "VIDEO_PROMPT_PROCESSING_FAILED",
+            "视频提示词生成进度无法安全处理，可以重新尝试。",
+            retryable=True,
+        )
+
+
 class CreativeActionService:
-    """Own the supported Creative and Storyboard planning Web actions."""
+    """Own the supported durable planning-stage Web actions."""
 
     def __init__(
         self,
@@ -235,6 +271,28 @@ class CreativeActionService:
             ),
         )
 
+    def submit_video_prompt_generate(
+        self,
+        project_id: str,
+        *,
+        correlation_id: str | None,
+    ) -> TaskRecord:
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        self._require_no_active_task(canonical_project_id)
+        self._require_video_prompt_generate_allowed(canonical_project_id)
+        if not self._deepseek_available():
+            raise CapabilityUnavailable("planning provider is not configured")
+        return self._task_service.submit(
+            project_id=canonical_project_id,
+            operation=TaskOperation.VIDEO_PROMPT_GENERATE,
+            correlation_id=correlation_id,
+            callable_=lambda: self._run_video_prompt_generate(
+                canonical_project_id
+            ),
+        )
+
     def approve(self, project_id: str) -> ProjectWorkflowResponse:
         """Synchronously approve Creative under the per-project write lock."""
 
@@ -380,6 +438,11 @@ class CreativeActionService:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.REGENERATE_STORYBOARD not in workflow.available_actions:
             raise ActionNotAllowed("Storyboard regeneration is not allowed")
+
+    def _require_video_prompt_generate_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.GENERATE_VIDEO_PROMPTS not in workflow.available_actions:
+            raise ActionNotAllowed("Video Prompt generation is not allowed")
 
     def _require_no_active_task(self, project_id: str) -> None:
         if self._task_service.active_for_project(project_id) is not None:
@@ -777,6 +840,93 @@ class CreativeActionService:
 
         return TaskResultReference(
             resource_type="STORYBOARD",
+            resource_id=project_id,
+        )
+
+    def _run_video_prompt_generate(self, project_id: str) -> TaskResultReference:
+        # TaskRunner owns the per-project write lock around this callable.
+        try:
+            self._require_video_prompt_generate_allowed(project_id)
+        except ActionNotAllowed:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许生成视频提示词。",
+            )
+
+        deepseek_key = self._capability_service.deepseek_api_key()
+        if not deepseek_key:
+            _task_failure(
+                "CAPABILITY_UNAVAILABLE",
+                "视频提示词生成服务尚未配置。",
+                retryable=True,
+            )
+
+        from pydantic import ValidationError
+
+        from evaluation import EvaluationRecorder
+        from project_manager import create_project_paths
+        from project_state import ProjectCheckpoint, ProjectStateError, StageStatus
+        from prompt_generator import ProductVideoRequest
+        from reference_assets import ReferenceAssetManager
+        from task_logger import TaskLogger
+        from video_prompt_workflow import (
+            VideoPromptStageDataError,
+            VideoPromptStageStateError,
+            generate_video_prompts_stage,
+        )
+
+        try:
+            paths = create_project_paths(
+                self._project_repository.resolve_project_dir(project_id)
+            )
+            checkpoint = ProjectCheckpoint.load(paths)
+            request = ProductVideoRequest.model_validate(checkpoint.data["request"])
+        except (KeyError, ValidationError, ProjectStateError):
+            _task_failure(
+                "PROJECT_DATA_CORRUPT",
+                "项目数据无法读取。",
+            )
+
+        logger = TaskLogger(paths)
+        logger.register_secret(deepseek_key)
+        reference_manager = ReferenceAssetManager(paths, logger)
+        reference_assets = reference_manager.list_assets()
+        reference_context = {
+            "available": bool(reference_assets),
+            "asset_count": len(reference_assets),
+            "asset_ids": [str(item.get("asset_id")) for item in reference_assets],
+        }
+        evaluation_recorder = EvaluationRecorder(paths)
+
+        try:
+            generate_video_prompts_stage(
+                paths,
+                request,
+                checkpoint,
+                deepseek_key,
+                logger,
+                evaluation_recorder=evaluation_recorder,
+                reference_asset_context=reference_context,
+            )
+        except VideoPromptStageStateError:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许生成视频提示词。",
+            )
+        except VideoPromptStageDataError:
+            _task_failure(
+                "PROJECT_DATA_CORRUPT",
+                "已审核的创意或分镜无法读取。",
+            )
+        except Exception as error:
+            if checkpoint.status == StageStatus.RUNNING.value:
+                checkpoint.fail(error)
+            logger.error(error, stage="video_prompt")
+            _raise_video_prompt_task_failure(error)
+            raise
+
+        return TaskResultReference(
+            resource_type="VIDEO_PROMPTS",
             resource_id=project_id,
         )
 

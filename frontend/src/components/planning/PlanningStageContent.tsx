@@ -27,8 +27,10 @@ interface PlanningStageContentProps {
   stageKey: StageKey;
   creativeRefresh?: CreativeRefreshSnapshot | null;
   storyboardRefresh?: StoryboardRefreshSnapshot | null;
+  videoPromptsRefresh?: VideoPromptsRefreshSnapshot | null;
   onCreativeLoaded?: (response: CreativeContentResponse) => void;
   onStoryboardLoaded?: (response: StoryboardContentResponse) => void;
+  onVideoPromptsLoaded?: (response: VideoPromptsContentResponse) => void;
 }
 
 export interface CreativeRefreshSnapshot {
@@ -39,6 +41,11 @@ export interface CreativeRefreshSnapshot {
 export interface StoryboardRefreshSnapshot {
   revision: number;
   response: StoryboardContentResponse;
+}
+
+export interface VideoPromptsRefreshSnapshot {
+  revision: number;
+  response: VideoPromptsContentResponse;
 }
 
 interface ContentError {
@@ -314,8 +321,10 @@ export function PlanningStageContent({
   stageKey,
   creativeRefresh = null,
   storyboardRefresh = null,
+  videoPromptsRefresh = null,
   onCreativeLoaded,
   onStoryboardLoaded,
+  onVideoPromptsLoaded,
 }: PlanningStageContentProps) {
   const planningStageKey = isPlanningStageKey(stageKey) ? stageKey : null;
   const [state, setState] = useState<ContentState>("loading");
@@ -341,6 +350,9 @@ export function PlanningStageContent({
       if (planningStageKey === "storyboard") {
         onStoryboardLoaded?.(result as StoryboardContentResponse);
       }
+      if (planningStageKey === "video-prompt") {
+        onVideoPromptsLoaded?.(result as VideoPromptsContentResponse);
+      }
       setResponse(result);
       setState("success");
     } catch (caught) {
@@ -350,7 +362,13 @@ export function PlanningStageContent({
       });
       setState("error");
     }
-  }, [onCreativeLoaded, onStoryboardLoaded, planningStageKey, projectId]);
+  }, [
+    onCreativeLoaded,
+    onStoryboardLoaded,
+    onVideoPromptsLoaded,
+    planningStageKey,
+    projectId,
+  ]);
 
   useEffect(() => {
     if (planningStageKey) void loadContent();
@@ -383,6 +401,23 @@ export function PlanningStageContent({
     planningStageKey,
     projectId,
     storyboardRefresh,
+  ]);
+
+  useEffect(() => {
+    if (
+      planningStageKey === "video-prompt" &&
+      videoPromptsRefresh?.response.project_id === projectId
+    ) {
+      onVideoPromptsLoaded?.(videoPromptsRefresh.response);
+      setResponse(videoPromptsRefresh.response);
+      setError(null);
+      setState("success");
+    }
+  }, [
+    onVideoPromptsLoaded,
+    planningStageKey,
+    projectId,
+    videoPromptsRefresh,
   ]);
 
   if (!planningStageKey) return null;

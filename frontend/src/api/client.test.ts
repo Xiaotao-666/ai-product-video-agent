@@ -7,6 +7,7 @@ import {
   createProject,
   generateCreative,
   generateStoryboard,
+  generateVideoPrompts,
   getAssembly,
   getAssemblyVideoUrl,
   getCapabilities,
@@ -1177,6 +1178,28 @@ describe("API client", () => {
     expect(result.data.operation).toBe("STORYBOARD_REGENERATE");
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/storyboard/regenerate",
+      expect.not.objectContaining({ body: expect.anything() }),
+    );
+  });
+
+  it("submits Video Prompt generation to the canonical plural endpoint", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "VIDEO_PROMPT_GENERATE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateVideoPrompts("LEE柠檬");
+
+    expect(result.data.operation).toBe("VIDEO_PROMPT_GENERATE");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/video-prompts/generate",
       expect.not.objectContaining({ body: expect.anything() }),
     );
   });

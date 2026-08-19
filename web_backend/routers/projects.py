@@ -124,12 +124,16 @@ def _media_response(path, media_type: str) -> FileResponse:
     )
 
 
-def _hide_retry_action_while_task_active(
+def _hide_submit_actions_while_task_active(
     workflow,
     project_id: str,
     task_service: TaskService,
 ):
-    if AvailableAction.RETRY_GENERATE_CREATIVE not in workflow.available_actions:
+    submit_actions = {
+        AvailableAction.RETRY_GENERATE_CREATIVE,
+        AvailableAction.GENERATE_VIDEO_PROMPTS,
+    }
+    if not any(action in submit_actions for action in workflow.available_actions):
         return workflow
     if task_service.active_for_project(project_id) is None:
         return workflow
@@ -138,7 +142,7 @@ def _hide_retry_action_while_task_active(
             "available_actions": [
                 action
                 for action in workflow.available_actions
-                if action is not AvailableAction.RETRY_GENERATE_CREATIVE
+                if action not in submit_actions
             ]
         }
     )
@@ -183,7 +187,7 @@ async def get_project(
 ) -> ProjectDetail:
     try:
         detail = repository.get_project(project_id)
-        workflow = _hide_retry_action_while_task_active(
+        workflow = _hide_submit_actions_while_task_active(
             detail.workflow,
             detail.project_id,
             task_service,
@@ -204,7 +208,7 @@ async def get_project_workflow(
 ) -> ProjectWorkflowResponse:
     try:
         workflow = repository.get_workflow(project_id)
-        return _hide_retry_action_while_task_active(
+        return _hide_submit_actions_while_task_active(
             workflow,
             workflow.project_id,
             task_service,

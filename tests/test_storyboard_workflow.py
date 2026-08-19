@@ -380,7 +380,7 @@ class StoryboardWorkflowExtractionTests(unittest.TestCase):
             patch.object(main, "generate_storyboard_stage") as storyboard_generate,
             patch.object(
                 main,
-                "generate_video_prompts",
+                "generate_video_prompts_stage",
                 side_effect=VideoPromptReached,
             ) as video_prompt_generate,
             patch.object(main, "human_review_gate") as review_gate,

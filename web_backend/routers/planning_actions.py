@@ -317,6 +317,39 @@ def regenerate_storyboard(
 
 
 @router.post(
+    "/projects/{project_id}/planning/video-prompts/generate",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.VIDEO_PROMPT_GENERATE),
+)
+def generate_video_prompts(
+    project_id: str,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_video_prompt_generate(
+            project_id,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
+
+
+@router.post(
     "/projects/{project_id}/planning/creative/approve",
     response_model=ProjectWorkflowResponse,
     status_code=200,
