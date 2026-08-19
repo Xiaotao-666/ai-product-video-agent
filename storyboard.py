@@ -1970,7 +1970,13 @@ _VIDEO_PROMPT_SCHEMA_VERSION = 2
 
 
 def _video_prompt_progress_fingerprint(
-    request: ProductVideoRequest, brief: CreativeBrief, board: Storyboard
+    request: ProductVideoRequest,
+    brief: CreativeBrief,
+    board: Storyboard,
+    *,
+    operation: str = "generate",
+    current: VideoPromptPlan | None = None,
+    revision_comment: str | None = None,
 ) -> str:
     payload = {
         "request": {
@@ -1984,6 +1990,16 @@ def _video_prompt_progress_fingerprint(
         "global_constraints": brief.global_constraints.model_dump(),
         "storyboard": board.model_dump(),
     }
+    if operation != "generate":
+        payload["operation"] = operation
+        # The current Prompt set identifies one review round without exposing
+        # it in durable Web Task JSON. Regenerate never sends this content to
+        # the provider; it is used only to distinguish/resume Core progress.
+        payload["current_video_prompts"] = (
+            current.model_dump() if current is not None else None
+        )
+    if operation == "revise":
+        payload["revision_comment"] = str(revision_comment or "").strip()
     serialized = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -1991,11 +2007,12 @@ def _video_prompt_progress_fingerprint(
 
 
 def _new_video_prompt_progress(
-    fingerprint: str, board: Storyboard
+    fingerprint: str, board: Storyboard, *, operation: str = "generate"
 ) -> dict[str, Any]:
     return {
         "video_prompt_schema_version": _VIDEO_PROMPT_SCHEMA_VERSION,
         "storyboard_fingerprint": fingerprint,
+        "operation": operation,
         "status": "RUNNING",
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "shots": [_new_video_prompt_progress_entry(shot.shot_id) for shot in board.shots],
@@ -2036,9 +2053,12 @@ def _load_video_prompt_progress(
     board: Storyboard,
     *,
     force_regenerate: bool,
+    operation: str = "generate",
 ) -> dict[str, Any]:
     if progress_path is None or force_regenerate or not progress_path.exists():
-        return _new_video_prompt_progress(fingerprint, board)
+        return _new_video_prompt_progress(
+            fingerprint, board, operation=operation
+        )
     try:
         progress = json.loads(progress_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -2052,7 +2072,22 @@ def _load_video_prompt_progress(
         progress.get("video_prompt_schema_version") != _VIDEO_PROMPT_SCHEMA_VERSION
         or progress.get("storyboard_fingerprint") != fingerprint
     ):
-        return _new_video_prompt_progress(fingerprint, board)
+        return _new_video_prompt_progress(
+            fingerprint, board, operation=operation
+        )
+    stored_operation = str(progress.get("operation") or "generate")
+    if stored_operation != operation:
+        return _new_video_prompt_progress(
+            fingerprint, board, operation=operation
+        )
+    # A published review action is terminal. A later explicit click is a new
+    # paid operation even when its inputs happen to be textually identical.
+    # COMPLETED is intentionally resumable: all Shots may be cached while the
+    # atomic canonical/version commit still needs to be retried.
+    if operation != "generate" and progress.get("status") == "PUBLISHED":
+        return _new_video_prompt_progress(
+            fingerprint, board, operation=operation
+        )
     entries = progress.get("shots")
     if not isinstance(entries, list):
         raise StoryboardError("Video Prompt 中间进度缺少 shots。")
@@ -2185,18 +2220,49 @@ def generate_video_prompts(
     reference_asset_context: dict[str, Any] | None = None,
     progress_path: Path | None = None,
     force_regenerate: bool = False,
+    operation: str = "generate",
+    current: VideoPromptPlan | None = None,
+    revision_comment: str | None = None,
 ) -> VideoPromptPlan:
     del visual_analysis_result, visual_constraints
-    fingerprint = _video_prompt_progress_fingerprint(request, brief, board)
+    if operation not in {"generate", "revise", "regenerate"}:
+        raise StoryboardError("未知 Video Prompt 生成操作。")
+    normalized_comment = str(revision_comment or "").strip()
+    if operation == "revise" and not normalized_comment:
+        raise StoryboardError("Video Prompt 修改意见不能为空。")
+    if operation in {"revise", "regenerate"}:
+        if current is None:
+            raise StoryboardError("Video Prompt 修改缺少当前正式方案。")
+        _validate_prompt_plan(
+            current,
+            board,
+            brief.global_constraints,
+            request.product_name,
+        )
+
+    fingerprint = _video_prompt_progress_fingerprint(
+        request,
+        brief,
+        board,
+        operation=operation,
+        current=current,
+        revision_comment=normalized_comment if operation == "revise" else None,
+    )
     progress = _load_video_prompt_progress(
         progress_path,
         fingerprint,
         board,
         force_regenerate=force_regenerate,
+        operation=operation,
     )
     progress["status"] = "RUNNING"
     _save_video_prompt_progress(progress_path, progress)
     results: list[ShotVideoPrompt] = []
+    current_by_id = (
+        {item.shot_id: item for item in current.shots}
+        if current is not None
+        else {}
+    )
     for shot, entry in zip(board.shots, progress["shots"], strict=True):
         cached_core = entry.get("visual_prompt_core")
         if entry.get("status") == "COMPLETED" and isinstance(cached_core, str):
@@ -2240,6 +2306,28 @@ def generate_video_prompts(
                 api_key,
                 task_logger,
                 reference_asset_context,
+                current_core=(
+                    (
+                        current_by_id[shot.shot_id].visual_prompt_core
+                        or _extract_visual_prompt_core(
+                            current_by_id[shot.shot_id].video_prompt
+                        )
+                    )
+                    if operation == "revise"
+                    else None
+                ),
+                revision_comment=(
+                    normalized_comment if operation == "revise" else None
+                ),
+                raw_stage_prefix=(
+                    "video_prompt_revision"
+                    if operation == "revise"
+                    else (
+                        "video_prompt_regeneration"
+                        if operation == "regenerate"
+                        else "video_prompt"
+                    )
+                ),
             )
             final_prompt = apply_video_overlay_constraints(
                 core, shot, brief.global_constraints
@@ -2303,44 +2391,68 @@ def revise_video_prompts(
     visual_analysis_result: list[dict[str, Any]] | None = None,
     visual_constraints: dict[str, Any] | None = None,
     reference_asset_context: dict[str, Any] | None = None,
+    progress_path: Path | None = None,
 ) -> VideoPromptPlan:
-    del visual_analysis_result, visual_constraints
-    current_by_id = {item.shot_id: item for item in current.shots}
-    results: list[ShotVideoPrompt] = []
-    for shot in board.shots:
-        current_item = current_by_id[shot.shot_id]
-        current_core = (
-            current_item.visual_prompt_core
-            or _extract_visual_prompt_core(current_item.video_prompt)
-        )
-        core = _request_single_shot_visual_core(
-            request,
-            brief,
-            shot,
-            api_key,
-            task_logger,
-            reference_asset_context,
-            current_core=current_core,
-            revision_comment=comment,
-            raw_stage_prefix="video_prompt_revision",
-        )
-        final_prompt = apply_video_overlay_constraints(
-            core, shot, brief.global_constraints
-        )
-        _validate_final_video_prompt(final_prompt, shot, request.product_name)
-        results.append(
-            ShotVideoPrompt(
-                shot_id=shot.shot_id,
-                visual_prompt_core=core,
-                video_prompt=final_prompt,
-            )
-        )
-    return _validate_prompt_plan(
-        VideoPromptPlan(shots=results),
+    return generate_video_prompts(
+        request,
+        brief,
         board,
-        brief.global_constraints,
-        request.product_name,
+        api_key,
+        task_logger,
+        visual_analysis_result,
+        visual_constraints,
+        reference_asset_context,
+        progress_path=progress_path,
+        operation="revise",
+        current=current,
+        revision_comment=comment,
     )
+
+
+def regenerate_video_prompts(
+    request: ProductVideoRequest,
+    brief: CreativeBrief,
+    board: Storyboard,
+    current: VideoPromptPlan,
+    api_key: str,
+    task_logger: TaskLogger | None = None,
+    visual_analysis_result: list[dict[str, Any]] | None = None,
+    visual_constraints: dict[str, Any] | None = None,
+    reference_asset_context: dict[str, Any] | None = None,
+    progress_path: Path | None = None,
+) -> VideoPromptPlan:
+    """Generate a clean per-Shot Prompt set with resumable operation cache."""
+
+    return generate_video_prompts(
+        request,
+        brief,
+        board,
+        api_key,
+        task_logger,
+        visual_analysis_result,
+        visual_constraints,
+        reference_asset_context,
+        progress_path=progress_path,
+        operation="regenerate",
+        current=current,
+    )
+
+
+def mark_video_prompt_progress_published(progress_path: Path | None) -> None:
+    """Close one review operation so a later explicit action starts fresh."""
+
+    if progress_path is None or not progress_path.exists():
+        return
+    try:
+        progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StoryboardError(
+            "Video Prompt 中间进度无法标记为已发布。"
+        ) from exc
+    if not isinstance(progress, dict):
+        raise StoryboardError("Video Prompt 中间进度格式无效。")
+    progress["status"] = "PUBLISHED"
+    _save_video_prompt_progress(progress_path, progress)
 
 
 def revise_shot_video_prompt(

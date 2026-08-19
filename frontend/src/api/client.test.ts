@@ -33,9 +33,11 @@ import {
   getVoiceAudioUrl,
   regenerateCreative,
   regenerateStoryboard,
+  regenerateVideoPrompts,
   retryCreative,
   reviseCreative,
   reviseStoryboard,
+  reviseVideoPrompts,
 } from "./client";
 
 function responseOf(
@@ -1201,6 +1203,58 @@ describe("API client", () => {
     expect(result.data.operation).toBe("VIDEO_PROMPT_GENERATE");
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/video-prompts/generate",
+      expect.not.objectContaining({ body: expect.anything() }),
+    );
+  });
+
+  it("submits Video Prompt feedback in JSON and never in the URL", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "VIDEO_PROMPT_REVISE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+    const feedback = "减少镜头运动，保持无人物";
+
+    const result = await reviseVideoPrompts("LEE柠檬", feedback);
+
+    expect(result.data.operation).toBe("VIDEO_PROMPT_REVISE");
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/video-prompts/revise",
+    );
+    expect(url).not.toContain("%E5%87%8F%E5%B0%91");
+    expect(options).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ feedback }),
+      }),
+    );
+  });
+
+  it("submits Video Prompt regeneration without a request body", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "VIDEO_PROMPT_REGENERATE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(queuedTask, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateVideoPrompts("LEE柠檬");
+
+    expect(result.data.operation).toBe("VIDEO_PROMPT_REGENERATE");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/video-prompts/regenerate",
       expect.not.objectContaining({ body: expect.anything() }),
     );
   });

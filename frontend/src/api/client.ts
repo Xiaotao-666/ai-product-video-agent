@@ -97,6 +97,8 @@ const TASK_OPERATIONS: ReadonlySet<string> = new Set([
   "STORYBOARD_REVISE",
   "STORYBOARD_REGENERATE",
   "VIDEO_PROMPT_GENERATE",
+  "VIDEO_PROMPT_REVISE",
+  "VIDEO_PROMPT_REGENERATE",
   "SHOT_GENERATE",
   "ASSEMBLY",
   "VOICE_GENERATE",
@@ -1732,6 +1734,43 @@ export async function generateVideoPrompts(
 ): Promise<ApiResult<TaskRecord>> {
   const result = await request(
     `/api/projects/${encodeURIComponent(projectId)}/planning/video-prompts/generate`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function reviseVideoPrompts(
+  projectId: string,
+  feedback: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/video-prompts/revise`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ feedback }),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function regenerateVideoPrompts(
+  projectId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/video-prompts/regenerate`,
     {
       method: "POST",
       headers: { Accept: "application/json" },

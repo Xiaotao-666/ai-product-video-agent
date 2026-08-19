@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from web_backend.dependencies import get_creative_action_service
 from web_backend.errors import registered_api_error
-from web_backend.models.planning import CreativeReviseRequest, StoryboardReviseRequest
+from web_backend.models.planning import (
+    CreativeReviseRequest,
+    StoryboardReviseRequest,
+    VideoPromptReviseRequest,
+)
 from web_backend.models.projects import ProjectWorkflowResponse
 from web_backend.models.tasks import TaskOperation, TaskRecord
 from web_backend.repositories.project_repository import (
@@ -333,6 +337,74 @@ def generate_video_prompts(
 ) -> TaskRecord:
     try:
         task = service.submit_video_prompt_generate(
+            project_id,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
+
+
+@router.post(
+    "/projects/{project_id}/planning/video-prompts/revise",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.VIDEO_PROMPT_REVISE),
+)
+def revise_video_prompts(
+    project_id: str,
+    payload: VideoPromptReviseRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_video_prompt_revise(
+            project_id,
+            feedback=payload.feedback,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except CapabilityUnavailable as error:
+        raise registered_api_error("CAPABILITY_UNAVAILABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    return _submit_task_response(task, response)
+
+
+@router.post(
+    "/projects/{project_id}/planning/video-prompts/regenerate",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.VIDEO_PROMPT_REGENERATE),
+)
+def regenerate_video_prompts(
+    project_id: str,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_video_prompt_regenerate(
             project_id,
             correlation_id=getattr(request.state, "correlation_id", None),
         )

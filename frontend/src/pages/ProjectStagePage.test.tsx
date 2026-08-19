@@ -1031,7 +1031,11 @@ describe("ProjectStagePage", () => {
     expect(screen.getByTestId("route-location")).toHaveTextContent("/stages/shots");
     expect(await screen.findByText("当前项目尚无可浏览镜头。")).toBeInTheDocument();
     expect(mockGetShots).toHaveBeenCalledTimes(1);
-    expect(mockGetProjectTasks).not.toHaveBeenCalled();
+    // The review-action panel performs one read-only task query so it can
+    // recover an in-flight Revise/Regenerate after F5. Approval itself still
+    // creates no Web task.
+    expect(mockGetProjectTasks).toHaveBeenCalledTimes(1);
+    expect(mockGetProjectTasks).toHaveBeenCalledWith("LEE柠檬");
   });
 
   it("switches continuously through every Workflow Stage without a blank render", async () => {

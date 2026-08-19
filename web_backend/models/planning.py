@@ -23,6 +23,14 @@ class StoryboardReviseRequest(BaseModel):
     feedback: str = Field(min_length=1, max_length=4000)
 
 
+class VideoPromptReviseRequest(BaseModel):
+    """Bounded Video Prompt feedback; task records never persist this body."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    feedback: str = Field(min_length=1, max_length=4000)
+
+
 class CreativeNarrationPlan(ResponseModel):
     enabled: bool
     tone: str | None = None

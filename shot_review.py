@@ -111,6 +111,75 @@ def create_prompt_version(
     return payload
 
 
+def create_prompt_plan_versions(
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    source: str,
+    task_logger: TaskLogger | None,
+    *,
+    user_feedback: str | None = None,
+) -> list[dict]:
+    """Version an already validated Prompt set in one checkpoint write.
+
+    Each Shot derives its own next version from its own history. The approved
+    Prompt pointer is deliberately untouched; only the active planning Prompt
+    advances while the set remains in human review.
+    """
+
+    if source not in {"ai_generated", "ai_revision"}:
+        raise ShotReviewError(f"未知 Prompt 来源：{source}")
+    pending: list[tuple[int, dict]] = []
+    for item in plan.shots:
+        prompt = item.video_prompt.strip()
+        if not prompt:
+            raise ShotReviewError("Prompt 不能为空。")
+        entry = checkpoint.shot_checkpoint(item.shot_id)
+        parent = (
+            int(entry["active_prompt_version"])
+            if entry.get("active_prompt_version") is not None
+            else None
+        )
+        existing_versions = [
+            int(value.get("version") or 0)
+            for value in checkpoint.prompt_versions(item.shot_id)
+        ]
+        version = max(
+            [int(entry.get("prompt_version_count", 0)), *existing_versions]
+        ) + 1
+        pending.append(
+            (
+                item.shot_id,
+                {
+                    "shot_id": item.shot_id,
+                    "version": version,
+                    "source": source,
+                    "created_at": now_iso(),
+                    "prompt": prompt,
+                    "original_prompt": None,
+                    "edited_prompt": None,
+                    "parent_version": parent,
+                    "user_feedback": user_feedback,
+                    "safety_prompt": None,
+                    "safety_checked_at": None,
+                },
+            )
+        )
+    checkpoint.save_prompt_versions(pending)
+    for shot_id, payload in pending:
+        if task_logger is not None:
+            entry = checkpoint.shot_checkpoint(shot_id)
+            task_logger.event(
+                "PROMPT_VERSION_CREATED",
+                shot_id=shot_id,
+                source=source,
+                old_prompt_version=payload["parent_version"],
+                new_prompt_version=payload["version"],
+                video_version=entry.get("active_video_version"),
+                generation_count=entry.get("generation_count", 0),
+            )
+    return [payload for _, payload in pending]
+
+
 def ensure_initial_prompt_versions(
     paths: ProjectPaths,
     checkpoint: ProjectCheckpoint,

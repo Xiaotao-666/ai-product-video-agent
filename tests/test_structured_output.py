@@ -227,7 +227,7 @@ class StructuredOutputTests(unittest.TestCase):
             self.assertEqual(resumed.current_stage, ProjectStage.PROMPT_REVIEW)
 
             with (
-                patch("main.generate_video_prompts") as generate,
+                patch("main.generate_video_prompts_stage") as generate,
                 patch("main.human_review_gate", side_effect=PromptReviewReached) as gate,
             ):
                 with self.assertRaises(PromptReviewReached):

@@ -31,6 +31,7 @@ import { StoryboardApproveAction } from "../components/planning/StoryboardApprov
 import { StoryboardRevisionAction } from "../components/planning/StoryboardRevisionAction";
 import { VideoPromptGenerateAction } from "../components/planning/VideoPromptGenerateAction";
 import { VideoPromptApproveAction } from "../components/planning/VideoPromptApproveAction";
+import { VideoPromptRevisionAction } from "../components/planning/VideoPromptRevisionAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -120,7 +121,10 @@ export function ProjectStagePage() {
   const [videoPromptsRefresh, setVideoPromptsRefresh] =
     useState<VideoPromptsRefreshSnapshot | null>(null);
   const [hasVideoPrompts, setHasVideoPrompts] = useState<boolean | null>(null);
-  const [videoPromptTaskActive, setVideoPromptTaskActive] = useState(false);
+  const [videoPromptGenerateTaskActive, setVideoPromptGenerateTaskActive] =
+    useState(false);
+  const [videoPromptRevisionTaskActive, setVideoPromptRevisionTaskActive] =
+    useState(false);
   const loadRequest = useRef(0);
 
   const loadStage = useCallback(async () => {
@@ -141,7 +145,8 @@ export function ProjectStagePage() {
     setStoryboardRevisionTaskActive(false);
     setVideoPromptsRefresh(null);
     setHasVideoPrompts(null);
-    setVideoPromptTaskActive(false);
+    setVideoPromptGenerateTaskActive(false);
+    setVideoPromptRevisionTaskActive(false);
 
     try {
       const [detailResult, workflowResult] = await Promise.all([
@@ -386,7 +391,9 @@ export function ProjectStagePage() {
           ? stageActions.filter(
               (action) =>
                 action !== "GENERATE_VIDEO_PROMPTS" &&
-                action !== "APPROVE_VIDEO_PROMPTS",
+                action !== "APPROVE_VIDEO_PROMPTS" &&
+                action !== "REVISE_VIDEO_PROMPTS" &&
+                action !== "REGENERATE_VIDEO_PROMPTS",
             )
           : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
@@ -512,13 +519,25 @@ export function ProjectStagePage() {
             videoPromptStatus={workflow.stages.video_prompt.status}
             hasVideoPrompts={hasVideoPrompts}
             onTerminalRefresh={refreshVideoPromptState}
-            onActiveTaskChange={setVideoPromptTaskActive}
+            onActiveTaskChange={setVideoPromptGenerateTaskActive}
           />
+          {(hasVideoPrompts === true ||
+            workflow.available_actions.includes("REVISE_VIDEO_PROMPTS") ||
+            workflow.available_actions.includes("REGENERATE_VIDEO_PROMPTS")) && (
+            <VideoPromptRevisionAction
+              projectId={detail.project_id}
+              availableActions={workflow.available_actions}
+              onTerminalRefresh={refreshVideoPromptState}
+              onActiveTaskChange={setVideoPromptRevisionTaskActive}
+            />
+          )}
           <VideoPromptApproveAction
             projectId={detail.project_id}
             availableActions={workflow.available_actions}
             onApprovedRefresh={refreshVideoPromptState}
-            disabled={videoPromptTaskActive}
+            disabled={
+              videoPromptGenerateTaskActive || videoPromptRevisionTaskActive
+            }
           />
         </>
       )}
@@ -555,9 +574,9 @@ export function ProjectStagePage() {
             : validStageKey === "storyboard"
               ? "Storyboard 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
               : validStageKey === "video-prompt"
-                ? videoPromptTaskActive
-                  ? "视频提示词生成任务正在执行；完成前不能审核通过。"
-                  : "视频提示词生成与审核通过以 Backend 当前状态为准；修改和重新生成当前仅展示。"
+                ? videoPromptGenerateTaskActive || videoPromptRevisionTaskActive
+                  ? "视频提示词任务正在执行；完成前不能审核通过。"
+                  : "视频提示词生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
                 : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>

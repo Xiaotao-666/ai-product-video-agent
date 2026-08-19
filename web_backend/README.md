@@ -1,9 +1,9 @@
 # Web Backend Phase 1
 
 This directory contains the local FastAPI backend for the AI Product Video
-Agent. Creative and Storyboard generation, approval, targeted revision, and
-full regeneration are the currently executable planning actions. Video Prompt,
-video generation, assembly, and export actions remain unavailable.
+Agent. Creative, Storyboard, and Video Prompt generation, approval, targeted
+revision, and full regeneration are the currently executable planning actions.
+Shot generation, assembly, and export actions remain unavailable.
 
 ## Local start
 
@@ -44,6 +44,8 @@ POST /api/projects/{project_id}/planning/storyboard/revise
 POST /api/projects/{project_id}/planning/storyboard/regenerate
 POST /api/projects/{project_id}/planning/storyboard/approve
 POST /api/projects/{project_id}/planning/video-prompts/generate
+POST /api/projects/{project_id}/planning/video-prompts/revise
+POST /api/projects/{project_id}/planning/video-prompts/regenerate
 POST /api/projects/{project_id}/planning/video-prompts/approve
 ```
 
@@ -123,6 +125,15 @@ does not pass the old Storyboard or feedback to Core. Both reuse Core provider
 validation and deterministic Timeline Scheduler behavior, atomically replace
 the canonical only after validation, and return to `WAITING_REVIEW`. Feedback
 is not stored in Web task JSON, and neither action starts Video Prompt work.
+
+Video Prompt revise and regenerate are distinct per-Shot durable operations.
+Revise sends each Shot only its own current visual core plus bounded global
+feedback; regenerate sends no old Prompt or feedback to DeepSeek. Their
+operation-aware progress fingerprints cannot reuse initial generation cache,
+while a failed round can resume already completed Shots. Python recompiles all
+deterministic control blocks, then publishes the complete canonical Prompt set
+and advances each Shot's independent active Prompt version. The approved Prompt
+pointer is untouched, review remains `WAITING_REVIEW`, and no Shot video starts.
 
 The Backend loads the same repository `.env` file as the CLI during server
 startup. Capability preflight checks only whether DeepSeek is configured and

@@ -17,6 +17,7 @@ from storyboard import (
     VideoPromptPlan,
     apply_video_overlay_constraints,
     generate_video_prompts,
+    _video_prompt_progress_fingerprint,
 )
 from storyboard_workflow import approve_storyboard_stage
 from task_logger import TaskLogger
@@ -25,6 +26,8 @@ from video_prompt_workflow import (
     VideoPromptStageStateError,
     approve_video_prompts_stage,
     generate_video_prompts_stage,
+    regenerate_video_prompts_stage,
+    revise_video_prompts_stage,
 )
 
 
@@ -407,6 +410,220 @@ class VideoPromptWorkflowTests(unittest.TestCase):
         self.assertFalse(self.paths.video_prompts_path().exists())
         self.assertFalse(progress.exists())
         self.assertEqual(len(archived), 2)
+
+    def test_revision_is_per_shot_versioned_and_keeps_review_waiting(self) -> None:
+        current = self.waiting_plan()
+        seen: list[tuple[int, str | None, str | None]] = []
+
+        def revise_one(_request, _brief, shot, *_args, **kwargs):
+            seen.append(
+                (
+                    shot.shot_id,
+                    kwargs.get("current_core"),
+                    kwargs.get("revision_comment"),
+                )
+            )
+            return f"revised-core-{shot.shot_id}"
+
+        with (
+            patch(
+                "storyboard._request_single_shot_visual_core",
+                side_effect=revise_one,
+            ) as provider,
+            patch(
+                "requests.sessions.Session.request",
+                side_effect=AssertionError("real network call"),
+            ),
+        ):
+            updated = revise_video_prompts_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                current,
+                " 减少运动并保持产品稳定 ",
+                "mock-key",
+                self.logger,
+            )
+
+        self.assertEqual(provider.call_count, 3)
+        self.assertEqual(
+            seen,
+            [
+                (1, "core-1", "减少运动并保持产品稳定"),
+                (2, "core-2", "减少运动并保持产品稳定"),
+                (3, "core-3", "减少运动并保持产品稳定"),
+            ],
+        )
+        self.assertEqual(
+            [item.visual_prompt_core for item in updated.shots],
+            ["revised-core-1", "revised-core-2", "revised-core-3"],
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.PROMPT_REVIEW),
+            StageStatus.WAITING_REVIEW,
+        )
+        for shot_id in (1, 2, 3):
+            entry = self.checkpoint.shot_checkpoint(shot_id)
+            self.assertEqual(entry["active_prompt_version"], 2)
+            self.assertIsNone(entry["approved_prompt_version"])
+            self.assertEqual(
+                self.checkpoint.prompt_version(shot_id, 2)["source"],
+                "ai_revision",
+            )
+        progress = json.loads(
+            self.paths.video_prompt_generation_progress_path().read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(progress["operation"], "revise")
+        self.assertEqual(progress["status"], "PUBLISHED")
+        self.assertNotIn("减少运动", json.dumps(progress, ensure_ascii=False))
+        self.assertFalse(any(self.paths.shots_dir.rglob("*.mp4")))
+
+    def test_revision_failure_keeps_canonical_and_resumes_completed_shot(self) -> None:
+        current = self.waiting_plan()
+        canonical_before = self.paths.video_prompts_path().read_bytes()
+        with patch(
+            "storyboard._request_single_shot_visual_core",
+            side_effect=["revised-core-1", PromptGenerationError("temporary")],
+        ) as first:
+            with self.assertRaises(PromptGenerationError):
+                revise_video_prompts_stage(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    current,
+                    "减少运动",
+                    "mock-key",
+                    self.logger,
+                )
+        self.assertEqual(first.call_count, 2)
+        self.assertEqual(self.paths.video_prompts_path().read_bytes(), canonical_before)
+
+        with patch(
+            "storyboard._request_single_shot_visual_core",
+            side_effect=["revised-core-2", "revised-core-3"],
+        ) as resumed:
+            revise_video_prompts_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                current,
+                "减少运动",
+                "mock-key",
+                self.logger,
+            )
+        self.assertEqual(resumed.call_count, 2)
+
+    def test_regenerate_uses_no_old_prompt_and_new_action_does_not_reuse(self) -> None:
+        current = self.waiting_plan()
+        seen: list[tuple[str | None, str | None]] = []
+
+        def regenerate_one(_request, _brief, shot, *_args, **kwargs):
+            seen.append(
+                (kwargs.get("current_core"), kwargs.get("revision_comment"))
+            )
+            return f"fresh-{shot.shot_id}-{len(seen)}"
+
+        with patch(
+            "storyboard._request_single_shot_visual_core",
+            side_effect=regenerate_one,
+        ) as provider:
+            regenerate_video_prompts_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                "mock-key",
+                self.logger,
+            )
+            regenerate_video_prompts_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                "mock-key",
+                self.logger,
+            )
+        self.assertEqual(provider.call_count, 6)
+        self.assertEqual(seen, [(None, None)] * 6)
+        for shot_id in (1, 2, 3):
+            entry = self.checkpoint.shot_checkpoint(shot_id)
+            self.assertEqual(entry["active_prompt_version"], 3)
+            self.assertIsNone(entry["approved_prompt_version"])
+
+    def test_revision_fingerprint_distinguishes_feedback_and_regenerate(self) -> None:
+        current = self.waiting_plan()
+        first = _video_prompt_progress_fingerprint(
+            self.request,
+            self.brief,
+            self.board,
+            operation="revise",
+            current=current,
+            revision_comment="减少运动",
+        )
+        second = _video_prompt_progress_fingerprint(
+            self.request,
+            self.brief,
+            self.board,
+            operation="revise",
+            current=current,
+            revision_comment="增加运动",
+        )
+        regenerated = _video_prompt_progress_fingerprint(
+            self.request,
+            self.brief,
+            self.board,
+            operation="regenerate",
+            current=current,
+        )
+        initial = _video_prompt_progress_fingerprint(
+            self.request,
+            self.brief,
+            self.board,
+        )
+        self.assertEqual(len({first, second, regenerated, initial}), 4)
+
+    def test_revision_increments_each_shot_from_its_own_version_history(self) -> None:
+        current = self.waiting_plan()
+        current_versions = {1: 2, 2: 1, 3: 4}
+        self.checkpoint.ensure_shots([1, 2, 3])
+        for item in current.shots:
+            version = current_versions[item.shot_id]
+            self.checkpoint.save_prompt_version(
+                item.shot_id,
+                {
+                    "shot_id": item.shot_id,
+                    "version": version,
+                    "source": "ai_generated",
+                    "created_at": "2026-08-19T00:00:00+08:00",
+                    "prompt": item.video_prompt,
+                    "parent_version": None,
+                    "user_feedback": None,
+                    "safety_prompt": None,
+                    "safety_checked_at": None,
+                },
+            )
+        with patch(
+            "storyboard._request_single_shot_visual_core",
+            side_effect=["new-1", "new-2", "new-3"],
+        ):
+            revise_video_prompts_stage(
+                self.paths,
+                self.request,
+                self.checkpoint,
+                current,
+                "分别更新",
+                "mock-key",
+                self.logger,
+            )
+        self.assertEqual(
+            {
+                shot_id: self.checkpoint.shot_checkpoint(shot_id)[
+                    "active_prompt_version"
+                ]
+                for shot_id in (1, 2, 3)
+            },
+            {1: 3, 2: 2, 3: 5},
+        )
 
 
 if __name__ == "__main__":

@@ -61,10 +61,8 @@ from storyboard import (
     StoryboardError,
     VideoPromptPlan,
     generate_creative_brief,
-    generate_video_prompts,
     plan_shot_durations,
     revise_shot_video_prompt,
-    revise_video_prompts,
 )
 from storyboard_workflow import (
     approve_storyboard_stage,
@@ -75,6 +73,8 @@ from storyboard_workflow import (
 from video_prompt_workflow import (
     approve_video_prompts_stage,
     generate_video_prompts_stage,
+    regenerate_video_prompts_stage,
+    revise_video_prompts_stage,
 )
 from shot_review import (
     ShotReviewError,
@@ -603,57 +603,25 @@ def run_pipeline(
             "Prompt审核",
             prompt_plan,
             recorder,
-            revise=lambda current, comment: _record_prompt_evaluation(
-                evaluation_recorder,
-                "video_prompt",
-                revise_video_prompts(
-                    request,
-                    brief,
-                    board,
-                    current,
-                    comment,
-                    deepseek_key,
-                    task_logger,
-                    **_visual_kwargs(
-                        visual_analysis_result,
-                        visual_constraints,
-                        reference_asset_context,
-                    ),
-                ),
+            revise=lambda current, comment: revise_video_prompts_stage(
+                paths,
                 request,
-                visual_analysis_result,
-                visual_constraints,
-                reference_asset_context,
-                operation="revise",
-                creative_brief=brief.model_dump(),
-                storyboard=board.model_dump(),
-                current_output=current.model_dump(),
-                user_feedback=comment,
+                checkpoint,
+                current,
+                comment,
+                deepseek_key,
+                task_logger,
+                evaluation_recorder=evaluation_recorder,
+                reference_asset_context=reference_asset_context,
             ),
-            regenerate=lambda: _record_prompt_evaluation(
-                evaluation_recorder,
-                "video_prompt",
-                generate_video_prompts(
-                    request,
-                    brief,
-                    board,
-                    deepseek_key,
-                    task_logger,
-                    **_visual_kwargs(
-                        visual_analysis_result,
-                        visual_constraints,
-                        reference_asset_context,
-                    ),
-                    progress_path=paths.video_prompt_generation_progress_path(),
-                    force_regenerate=True,
-                ),
+            regenerate=lambda: regenerate_video_prompts_stage(
+                paths,
                 request,
-                visual_analysis_result,
-                visual_constraints,
-                reference_asset_context,
-                operation="regenerate",
-                creative_brief=brief.model_dump(),
-                storyboard=board.model_dump(),
+                checkpoint,
+                deepseek_key,
+                task_logger,
+                evaluation_recorder=evaluation_recorder,
+                reference_asset_context=reference_asset_context,
             ),
             persist=lambda value: paths.save_json(
                 paths.video_prompts_path(), value.model_dump()

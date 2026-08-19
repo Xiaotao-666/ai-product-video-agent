@@ -845,6 +845,21 @@ class ProjectCheckpoint:
         return None
 
     def save_prompt_version(self, shot_id: int, payload: dict[str, Any]) -> None:
+        self._apply_prompt_version(shot_id, payload)
+        self.save()
+
+    def save_prompt_versions(
+        self, versions_by_shot: list[tuple[int, dict[str, Any]]]
+    ) -> None:
+        """Persist a complete Prompt-set version transition in one checkpoint write."""
+
+        for shot_id, payload in versions_by_shot:
+            self._apply_prompt_version(shot_id, payload)
+        self.save()
+
+    def _apply_prompt_version(
+        self, shot_id: int, payload: dict[str, Any]
+    ) -> None:
         version = int(payload["version"])
         versions = self.prompt_versions(shot_id)
         versions[:] = [
@@ -858,7 +873,6 @@ class ProjectCheckpoint:
         )
         entry["active_prompt_version"] = version
         entry["updated_at"] = now_iso()
-        self.save()
 
     def prepare_shot_generation(self, shot_id: int) -> None:
         entry = self.shot_checkpoint(shot_id)
