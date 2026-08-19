@@ -3,13 +3,41 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 OUTSIDE_PROJECT_MESSAGE = "目标文件路径不属于当前视频项目，已阻止写入。"
+
+_WINDOWS_RETRYABLE_REPLACE_ERRORS = {5, 32, 33}
+_ATOMIC_REPLACE_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08)
+
+
+def _is_retryable_windows_replace_error(error: OSError) -> bool:
+    """Return whether Windows reported a transient sharing/access conflict."""
+
+    return getattr(error, "winerror", None) in _WINDOWS_RETRYABLE_REPLACE_ERRORS
+
+
+def _replace_with_windows_retry(source: Path, target: Path) -> None:
+    """Atomically replace once, retrying only transient Windows replace errors."""
+
+    for attempt in range(len(_ATOMIC_REPLACE_BACKOFF_SECONDS) + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as error:
+            if (
+                not _is_retryable_windows_replace_error(error)
+                or attempt >= len(_ATOMIC_REPLACE_BACKOFF_SECONDS)
+            ):
+                raise
+            time.sleep(_ATOMIC_REPLACE_BACKOFF_SECONDS[attempt])
 
 
 class ProjectDirectoryError(ValueError):
@@ -425,15 +453,24 @@ class ProjectPaths:
     def save_json(self, path: str | Path, data: Any) -> Path:
         target = self.ensure_within_project(path)
         temporary_path = self.ensure_within_project(
-            target.with_suffix(target.suffix + ".tmp")
+            target.parent / f".{target.name}.{uuid4().hex}.tmp"
         )
         try:
-            temporary_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            temporary_path.replace(target)
+            rendered = json.dumps(data, ensure_ascii=False, indent=2)
+            with temporary_path.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _replace_with_windows_retry(temporary_path, target)
         except OSError as exc:
             raise ProjectDirectoryError(f"项目文件保存失败：{target}：{exc}") from exc
+        finally:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                # The write/replace error remains authoritative. This path is
+                # unique to this call, so cleanup never touches another writer.
+                pass
         return target
 
     def managed_directories(self) -> tuple[Path, ...]:

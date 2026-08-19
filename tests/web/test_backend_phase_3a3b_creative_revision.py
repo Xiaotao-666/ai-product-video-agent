@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import time
@@ -504,6 +505,46 @@ class WebBackendPhase3A3BCreativeRevisionTests(unittest.TestCase):
         operation_schema = schema["components"]["schemas"]["TaskOperation"]
         self.assertNotIn("default", operation_schema)
         self.assertNotIn("example", operation_schema)
+
+    def test_20_project_replace_retry_never_repeats_core_or_provider(self):
+        from creative_workflow import revise_creative_stage
+
+        original_replace = os.replace
+        project_file = (self.project_a / "project.json").resolve()
+        failed_once = False
+        project_replace_attempts = 0
+
+        def fail_first_project_replace(source, target):
+            nonlocal failed_once, project_replace_attempts
+            if Path(target).resolve() == project_file:
+                project_replace_attempts += 1
+                if not failed_once:
+                    failed_once = True
+                    error = PermissionError(13, "simulated Windows replace conflict")
+                    error.winerror = 5
+                    raise error
+            return original_replace(source, target)
+
+        provider = Mock(return_value=revised_brief())
+        with (
+            patch(
+                "creative_workflow.revise_creative_stage",
+                wraps=revise_creative_stage,
+            ) as core_revise,
+            patch("creative_workflow.revise_creative_brief", provider),
+            patch(
+                "project_manager.os.replace",
+                side_effect=fail_first_project_replace,
+            ),
+            patch("project_manager.time.sleep"),
+        ):
+            response = self.post_revise()
+            task = self.wait_terminal(response.json()["task_id"])
+
+        self.assertEqual(task.status.value, "SUCCEEDED")
+        self.assertGreaterEqual(project_replace_attempts, 3)
+        core_revise.assert_called_once()
+        provider.assert_called_once()
 
 
 if __name__ == "__main__":
