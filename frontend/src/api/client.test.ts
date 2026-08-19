@@ -4,6 +4,7 @@ import {
   ApiClientError,
   approveCreative,
   approveStoryboard,
+  approveVideoPrompts,
   createProject,
   generateCreative,
   generateStoryboard,
@@ -1312,6 +1313,42 @@ describe("API client", () => {
     expect(result.correlationId).toBe("req_storyboard_approve");
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/storyboard/approve",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.not.objectContaining({ body: expect.anything() }),
+    );
+  });
+
+  it("approves Video Prompts synchronously without creating a task request", async () => {
+    const approvedWorkflow = {
+      ...projectWorkflowPayload,
+      workflow_phase: "VIDEO_GENERATION",
+      status: "APPROVED",
+      stages: {
+        ...workflowStagesPayload,
+        video_prompt: { status: "APPROVED" },
+        shots: { status: "NOT_STARTED", approved: 0, total: 3 },
+      },
+      available_actions: ["GENERATE_SHOTS"],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(approvedWorkflow, 200, {
+        "X-Correlation-ID": "req_video_prompt_approve",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await approveVideoPrompts("LEE柠檬");
+
+    expect(result.data.workflow_phase).toBe("VIDEO_GENERATION");
+    expect(result.data.stages.video_prompt.status).toBe("APPROVED");
+    expect(result.data.stages.shots.status).toBe("NOT_STARTED");
+    expect(result.data.available_actions).toEqual(["GENERATE_SHOTS"]);
+    expect(result.correlationId).toBe("req_video_prompt_approve");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/video-prompts/approve",
       expect.objectContaining({ method: "POST" }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

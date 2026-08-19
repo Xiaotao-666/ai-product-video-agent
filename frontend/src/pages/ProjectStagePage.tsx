@@ -30,6 +30,7 @@ import { StoryboardGenerateAction } from "../components/planning/StoryboardGener
 import { StoryboardApproveAction } from "../components/planning/StoryboardApproveAction";
 import { StoryboardRevisionAction } from "../components/planning/StoryboardRevisionAction";
 import { VideoPromptGenerateAction } from "../components/planning/VideoPromptGenerateAction";
+import { VideoPromptApproveAction } from "../components/planning/VideoPromptApproveAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -383,7 +384,9 @@ export function ProjectStagePage() {
           )
         : validStageKey === "video-prompt"
           ? stageActions.filter(
-              (action) => action !== "GENERATE_VIDEO_PROMPTS",
+              (action) =>
+                action !== "GENERATE_VIDEO_PROMPTS" &&
+                action !== "APPROVE_VIDEO_PROMPTS",
             )
           : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
@@ -502,14 +505,22 @@ export function ProjectStagePage() {
       )}
 
       {validStageKey === "video-prompt" && (
-        <VideoPromptGenerateAction
-          projectId={detail.project_id}
-          availableActions={workflow.available_actions}
-          videoPromptStatus={workflow.stages.video_prompt.status}
-          hasVideoPrompts={hasVideoPrompts}
-          onTerminalRefresh={refreshVideoPromptState}
-          onActiveTaskChange={setVideoPromptTaskActive}
-        />
+        <>
+          <VideoPromptGenerateAction
+            projectId={detail.project_id}
+            availableActions={workflow.available_actions}
+            videoPromptStatus={workflow.stages.video_prompt.status}
+            hasVideoPrompts={hasVideoPrompts}
+            onTerminalRefresh={refreshVideoPromptState}
+            onActiveTaskChange={setVideoPromptTaskActive}
+          />
+          <VideoPromptApproveAction
+            projectId={detail.project_id}
+            availableActions={workflow.available_actions}
+            onApprovedRefresh={refreshVideoPromptState}
+            disabled={videoPromptTaskActive}
+          />
+        </>
       )}
 
       <ShotsStageContent
@@ -545,8 +556,8 @@ export function ProjectStagePage() {
               ? "Storyboard 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
               : validStageKey === "video-prompt"
                 ? videoPromptTaskActive
-                  ? "视频提示词生成任务正在执行；审核操作将在后续阶段实现。"
-                  : "视频提示词生成以 Backend 当前状态为准；审核操作当前仅展示。"
+                  ? "视频提示词生成任务正在执行；完成前不能审核通过。"
+                  : "视频提示词生成与审核通过以 Backend 当前状态为准；修改和重新生成当前仅展示。"
                 : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>

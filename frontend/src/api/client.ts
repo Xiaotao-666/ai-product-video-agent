@@ -1849,6 +1849,22 @@ export async function approveStoryboard(
   };
 }
 
+export async function approveVideoPrompts(
+  projectId: string,
+): Promise<ApiResult<ProjectWorkflowResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/video-prompts/approve`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseProjectWorkflow(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
 export async function createProject(
   project: CreateProjectRequest,
 ): Promise<ApiResult<CreateProjectResponse>> {

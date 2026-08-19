@@ -53,11 +53,12 @@ def create_prompt_version(
     shot_id: int,
     prompt: str,
     source: str,
-    task_logger: TaskLogger,
+    task_logger: TaskLogger | None,
     *,
     user_feedback: str | None = None,
     parent_version: int | None = None,
     original_prompt: str | None = None,
+    persist_plan: bool = True,
 ) -> dict:
     if source not in {"ai_generated", "ai_revision", "manual_edit"}:
         raise ShotReviewError(f"未知 Prompt 来源：{source}")
@@ -93,18 +94,20 @@ def create_prompt_version(
         "safety_prompt": None,
         "safety_checked_at": None,
     }
-    _prompt_item(plan, shot_id).video_prompt = prompt
-    _persist_prompt_plan(paths, plan)
+    if persist_plan:
+        _prompt_item(plan, shot_id).video_prompt = prompt
+        _persist_prompt_plan(paths, plan)
     checkpoint.save_prompt_version(shot_id, payload)
-    task_logger.event(
-        "PROMPT_VERSION_CREATED",
-        shot_id=shot_id,
-        source=source,
-        old_prompt_version=parent,
-        new_prompt_version=version,
-        video_version=entry.get("active_video_version"),
-        generation_count=entry.get("generation_count", 0),
-    )
+    if task_logger is not None:
+        task_logger.event(
+            "PROMPT_VERSION_CREATED",
+            shot_id=shot_id,
+            source=source,
+            old_prompt_version=parent,
+            new_prompt_version=version,
+            video_version=entry.get("active_video_version"),
+            generation_count=entry.get("generation_count", 0),
+        )
     return payload
 
 
@@ -112,7 +115,9 @@ def ensure_initial_prompt_versions(
     paths: ProjectPaths,
     checkpoint: ProjectCheckpoint,
     plan: VideoPromptPlan,
-    task_logger: TaskLogger,
+    task_logger: TaskLogger | None,
+    *,
+    persist_plan: bool = True,
 ) -> None:
     """Add v1 history to old/new prompt plans without changing active prompts."""
     for item in plan.shots:
@@ -131,6 +136,7 @@ def ensure_initial_prompt_versions(
             "ai_generated",
             task_logger,
             parent_version=None,
+            persist_plan=persist_plan,
         )
 
 

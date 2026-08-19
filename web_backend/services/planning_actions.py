@@ -394,6 +394,58 @@ class CreativeActionService:
 
                 raise ProjectBusy("project write lock is busy") from error
 
+    def approve_video_prompts(self, project_id: str) -> ProjectWorkflowResponse:
+        """Synchronously approve complete Video Prompts under the project lock."""
+
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        with self._task_service.prevent_task_submission():
+            self._require_no_active_task(canonical_project_id)
+            self._require_video_prompt_approve_allowed(canonical_project_id)
+
+            try:
+                with self._project_lock_manager.project_write(canonical_project_id):
+                    # Revalidate both the active-task barrier and canonical
+                    # workflow state after acquiring the write lock.
+                    self._require_no_active_task(canonical_project_id)
+                    self._require_video_prompt_approve_allowed(
+                        canonical_project_id
+                    )
+
+                    from project_manager import create_project_paths
+                    from project_state import ProjectCheckpoint, ProjectStateError
+                    from video_prompt_workflow import (
+                        VideoPromptApprovalError,
+                        approve_video_prompts_stage,
+                    )
+
+                    try:
+                        paths = create_project_paths(
+                            self._project_repository.resolve_project_dir(
+                                canonical_project_id
+                            ),
+                            ensure_directories=False,
+                        )
+                        checkpoint = ProjectCheckpoint.load(paths)
+                        approve_video_prompts_stage(paths, checkpoint)
+                    except VideoPromptApprovalError as error:
+                        raise ActionNotAllowed(
+                            "Video Prompt approval is not allowed"
+                        ) from error
+                    except ProjectStateError as error:
+                        raise ProjectDataCorrupt(
+                            "project checkpoint is unreadable"
+                        ) from error
+
+                    return self._project_repository.get_workflow(
+                        canonical_project_id
+                    )
+            except ProjectLockBusy as error:
+                from web_backend.services.projects import ProjectBusy
+
+                raise ProjectBusy("project write lock is busy") from error
+
     def _require_generate_allowed(self, project_id: str) -> None:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.GENERATE_CREATIVE not in workflow.available_actions:
@@ -443,6 +495,11 @@ class CreativeActionService:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.GENERATE_VIDEO_PROMPTS not in workflow.available_actions:
             raise ActionNotAllowed("Video Prompt generation is not allowed")
+
+    def _require_video_prompt_approve_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.APPROVE_VIDEO_PROMPTS not in workflow.available_actions:
+            raise ActionNotAllowed("Video Prompt approval is not allowed")
 
     def _require_no_active_task(self, project_id: str) -> None:
         if self._task_service.active_for_project(project_id) is not None:

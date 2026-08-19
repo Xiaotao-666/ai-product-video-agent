@@ -9,11 +9,21 @@ from unittest.mock import Mock, patch
 from project_manager import create_project_paths
 from project_state import ProjectCheckpoint, ProjectStage, StageStatus
 from prompt_generator import ProductVideoRequest, PromptGenerationError
-from storyboard import CreativeBrief, Storyboard, StoryboardShot, generate_video_prompts
+from storyboard import (
+    CreativeBrief,
+    ShotVideoPrompt,
+    Storyboard,
+    StoryboardShot,
+    VideoPromptPlan,
+    apply_video_overlay_constraints,
+    generate_video_prompts,
+)
 from storyboard_workflow import approve_storyboard_stage
 from task_logger import TaskLogger
 from video_prompt_workflow import (
+    VideoPromptApprovalError,
     VideoPromptStageStateError,
+    approve_video_prompts_stage,
     generate_video_prompts_stage,
 )
 
@@ -77,6 +87,30 @@ class VideoPromptWorkflowTests(unittest.TestCase):
             self.checkpoint.update_stage(stage, status)
         approve_storyboard_stage(self.checkpoint)
         self.logger = TaskLogger(self.paths, "video-prompt-core-test")
+
+    def waiting_plan(self) -> VideoPromptPlan:
+        plan = VideoPromptPlan(
+            shots=[
+                ShotVideoPrompt(
+                    shot_id=shot.shot_id,
+                    visual_prompt_core=f"core-{shot.shot_id}",
+                    video_prompt=apply_video_overlay_constraints(
+                        f"core-{shot.shot_id}",
+                        shot,
+                        self.brief.global_constraints,
+                    ),
+                )
+                for shot in self.board.shots
+            ]
+        )
+        self.paths.save_json(self.paths.video_prompts_path(), plan.model_dump())
+        self.checkpoint.update_stage(
+            ProjectStage.VIDEO_PROMPT, StageStatus.COMPLETED
+        )
+        self.checkpoint.advance_to(
+            ProjectStage.PROMPT_REVIEW, StageStatus.WAITING_REVIEW
+        )
+        return plan
 
     def test_shared_stage_publishes_only_complete_plan_and_waits_for_review(self) -> None:
         with patch(
@@ -218,6 +252,161 @@ class VideoPromptWorkflowTests(unittest.TestCase):
                 )
         shared.assert_called_once()
         review.assert_not_called()
+
+    def test_approval_initializes_formal_versions_without_mutating_content(self) -> None:
+        plan = self.waiting_plan()
+        progress = self.paths.video_prompt_generation_progress_path()
+        progress.write_text('{"status":"COMPLETED"}\n', encoding="utf-8")
+        canonical_before = self.paths.video_prompts_path().read_bytes()
+        progress_before = progress.read_bytes()
+        progress_mtime = progress.stat().st_mtime_ns
+
+        with patch("prompt_generator.requests.post") as provider:
+            approved = approve_video_prompts_stage(
+                self.paths,
+                self.checkpoint,
+            )
+
+        provider.assert_not_called()
+        self.assertEqual(approved, plan)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.PROMPT_REVIEW),
+            StageStatus.APPROVED,
+        )
+        self.assertEqual(self.checkpoint.next_stage(), ProjectStage.VIDEO_GENERATION)
+        self.assertEqual(self.checkpoint.current_stage, ProjectStage.PROMPT_REVIEW)
+        for shot_id in (1, 2, 3):
+            entry = self.checkpoint.shot_checkpoint(shot_id)
+            self.assertEqual(entry["active_prompt_version"], 1)
+            self.assertIsNone(entry["approved_prompt_version"])
+            self.assertEqual(
+                self.checkpoint.prompt_version(shot_id, 1)["prompt"],
+                plan.shots[shot_id - 1].video_prompt,
+            )
+            self.assertIsNone(entry["active_video_version"])
+        self.assertEqual(self.paths.video_prompts_path().read_bytes(), canonical_before)
+        self.assertEqual(progress.read_bytes(), progress_before)
+        self.assertEqual(progress.stat().st_mtime_ns, progress_mtime)
+        self.assertFalse(any(self.paths.shots_dir.rglob("*.mp4")))
+
+    def test_approval_preserves_mixed_matching_active_prompt_versions(self) -> None:
+        plan = self.waiting_plan()
+        self.checkpoint.ensure_shots([1, 2, 3])
+        expected = {1: 2, 2: 1, 3: 3}
+        for item in plan.shots:
+            version = expected[item.shot_id]
+            self.checkpoint.save_prompt_version(
+                item.shot_id,
+                {
+                    "shot_id": item.shot_id,
+                    "version": version,
+                    "source": "ai_revision" if version > 1 else "ai_generated",
+                    "created_at": "2026-08-19T00:00:00+08:00",
+                    "prompt": item.video_prompt,
+                    "parent_version": version - 1 if version > 1 else None,
+                    "user_feedback": None,
+                    "safety_prompt": None,
+                    "safety_checked_at": None,
+                },
+            )
+
+        approve_video_prompts_stage(self.paths, self.checkpoint)
+
+        for shot_id, version in expected.items():
+            entry = self.checkpoint.shot_checkpoint(shot_id)
+            self.assertEqual(entry["active_prompt_version"], version)
+            self.assertIsNone(entry["approved_prompt_version"])
+
+    def test_approval_rejects_incomplete_duplicate_and_stale_pointer(self) -> None:
+        complete = self.waiting_plan()
+        original_project = self.checkpoint.path.read_bytes()
+        invalid_plans = (
+            VideoPromptPlan(shots=complete.shots[:2]),
+            VideoPromptPlan(shots=[complete.shots[0], complete.shots[0], complete.shots[2]]),
+        )
+        for plan in invalid_plans:
+            with self.subTest(ids=[item.shot_id for item in plan.shots]):
+                self.paths.save_json(self.paths.video_prompts_path(), plan.model_dump())
+                with self.assertRaises(VideoPromptApprovalError):
+                    approve_video_prompts_stage(self.paths, self.checkpoint)
+                self.assertEqual(self.checkpoint.path.read_bytes(), original_project)
+                self.assertEqual(
+                    self.checkpoint.stage_status(ProjectStage.PROMPT_REVIEW),
+                    StageStatus.WAITING_REVIEW,
+                )
+
+        self.paths.save_json(self.paths.video_prompts_path(), complete.model_dump())
+        self.checkpoint.ensure_shots([1, 2, 3])
+        self.checkpoint.save_prompt_version(
+            1,
+            {
+                "shot_id": 1,
+                "version": 4,
+                "source": "ai_revision",
+                "created_at": "2026-08-19T00:00:00+08:00",
+                "prompt": "stale unrelated prompt",
+            },
+        )
+        with self.assertRaises(VideoPromptApprovalError):
+            approve_video_prompts_stage(self.paths, self.checkpoint)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.PROMPT_REVIEW),
+            StageStatus.WAITING_REVIEW,
+        )
+
+    def test_cli_video_prompt_approval_calls_shared_core_entry(self) -> None:
+        import main
+
+        self.waiting_plan()
+
+        class SharedApprovalReached(RuntimeError):
+            pass
+
+        def approve_from_gate(*_args, **kwargs):
+            kwargs["on_approved"]()
+            raise AssertionError("shared approval should have stopped the pipeline")
+
+        with (
+            patch.object(main, "human_review_gate", side_effect=approve_from_gate),
+            patch.object(
+                main,
+                "approve_video_prompts_stage",
+                side_effect=SharedApprovalReached,
+            ) as shared,
+            patch("prompt_generator.requests.post") as provider,
+        ):
+            with self.assertRaises(SharedApprovalReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        shared.assert_called_once_with(self.paths, self.checkpoint, self.logger)
+        provider.assert_not_called()
+
+    def test_reset_from_video_prompt_clears_formal_pointers_for_resume(self) -> None:
+        self.waiting_plan()
+        progress = self.paths.video_prompt_generation_progress_path()
+        progress.write_text('{"status":"COMPLETED"}\n', encoding="utf-8")
+        approve_video_prompts_stage(self.paths, self.checkpoint)
+
+        archived = self.checkpoint.reset_from(ProjectStage.VIDEO_PROMPT)
+
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.VIDEO_PROMPT),
+            StageStatus.NOT_STARTED,
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.PROMPT_REVIEW),
+            StageStatus.NOT_STARTED,
+        )
+        self.assertEqual(self.checkpoint.data["video_generation"]["shots"], {})
+        self.assertFalse(self.paths.video_prompts_path().exists())
+        self.assertFalse(progress.exists())
+        self.assertEqual(len(archived), 2)
 
 
 if __name__ == "__main__":

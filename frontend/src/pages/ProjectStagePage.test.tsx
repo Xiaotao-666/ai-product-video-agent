@@ -11,6 +11,7 @@ import {
   ApiClientError,
   approveCreative,
   approveStoryboard,
+  approveVideoPrompts,
   generateCreative,
   generateStoryboard,
   getAssembly,
@@ -36,6 +37,7 @@ import type {
   ProjectDetail,
   ProjectWorkflowResponse,
   StoryboardContentResponse,
+  VideoPromptsContentResponse,
   WorkflowState,
 } from "../api/types";
 import { ProjectStagePage } from "./ProjectStagePage";
@@ -61,6 +63,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getTask: vi.fn(),
     approveCreative: vi.fn(),
     approveStoryboard: vi.fn(),
+    approveVideoPrompts: vi.fn(),
     regenerateCreative: vi.fn(),
     regenerateStoryboard: vi.fn(),
     reviseCreative: vi.fn(),
@@ -85,6 +88,7 @@ const mockGenerateStoryboard = vi.mocked(generateStoryboard);
 const mockGetTask = vi.mocked(getTask);
 const mockApproveCreative = vi.mocked(approveCreative);
 const mockApproveStoryboard = vi.mocked(approveStoryboard);
+const mockApproveVideoPrompts = vi.mocked(approveVideoPrompts);
 const mockRegenerateCreative = vi.mocked(regenerateCreative);
 const mockRegenerateStoryboard = vi.mocked(regenerateStoryboard);
 const mockReviseCreative = vi.mocked(reviseCreative);
@@ -148,6 +152,24 @@ function creativeContentResponse(
       },
       global_constraints: { must: [], must_not: [] },
       av_timeline_constraints: { forbidden_windows: [] },
+    },
+  };
+}
+
+function videoPromptsContentResponse(
+  status = "WAITING_REVIEW",
+): VideoPromptsContentResponse {
+  return {
+    project_id: "LEE柠檬",
+    status,
+    content: {
+      shots: [1, 2, 3].map((shotId) => ({
+        shot_id: shotId,
+        prompt_version: 1,
+        prompt_source: "ai_generated",
+        visual_prompt_core: `visual prompt core ${shotId}`,
+        prompt_text: `final video prompt ${shotId}\n[Composition Constraint]`,
+      })),
     },
   };
 }
@@ -275,6 +297,7 @@ describe("ProjectStagePage", () => {
     mockGetTask.mockReset();
     mockApproveCreative.mockReset();
     mockApproveStoryboard.mockReset();
+    mockApproveVideoPrompts.mockReset();
     mockRegenerateCreative.mockReset();
     mockRegenerateStoryboard.mockReset();
     mockReviseCreative.mockReset();
@@ -932,6 +955,83 @@ describe("ProjectStagePage", () => {
     );
     expect(await screen.findByText("视频提示词尚未生成。")).toBeInTheDocument();
     expect(mockGetVideoPrompts).toHaveBeenCalledTimes(1);
+  });
+
+  it("approves Video Prompts synchronously, refreshes content, and only navigates to Shots", async () => {
+    const waiting = workflow({
+      workflow_phase: "VIDEO_PROMPT_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_VIDEO_PROMPTS",
+        "REVISE_VIDEO_PROMPTS",
+        "REGENERATE_VIDEO_PROMPTS",
+      ],
+    });
+    waiting.stages.video_prompt.status = "WAITING_REVIEW";
+    waiting.stages.shots = { status: "NOT_STARTED", approved: 0, total: 3 };
+    const approved = workflow({
+      workflow_phase: "VIDEO_GENERATION",
+      status: "APPROVED",
+      available_actions: ["GENERATE_SHOTS"],
+    });
+    approved.stages.video_prompt.status = "APPROVED";
+    approved.stages.shots = { status: "NOT_STARTED", approved: 0, total: 3 };
+
+    mockGetProject
+      .mockResolvedValueOnce({ data: detail(waiting), correlationId: "req_initial" })
+      .mockResolvedValue({ data: detail(approved), correlationId: "req_refreshed" });
+    mockGetProjectWorkflow
+      .mockResolvedValueOnce({ data: waiting, correlationId: "req_initial" })
+      .mockResolvedValue({ data: approved, correlationId: "req_refreshed" });
+    mockGetVideoPrompts
+      .mockResolvedValueOnce({
+        data: videoPromptsContentResponse(),
+        correlationId: "req_prompts_waiting",
+      })
+      .mockResolvedValue({
+        data: videoPromptsContentResponse("APPROVED"),
+        correlationId: "req_prompts_approved",
+      });
+    mockApproveVideoPrompts.mockResolvedValue({
+      data: approved,
+      correlationId: "req_video_prompt_approve",
+    });
+    mockGetShots.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", shots: [] },
+      correlationId: "req_empty_shots",
+    });
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/video-prompt");
+    expect(await screen.findByText("visual prompt core 1")).toBeInTheDocument();
+    expect(screen.getByText("visual prompt core 2")).toBeInTheDocument();
+    expect(screen.getByText("visual prompt core 3")).toBeInTheDocument();
+    expect(screen.getByText("修改视频提示词")).toBeInTheDocument();
+    expect(screen.getByText("重新生成视频提示词")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "审核通过" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("不会自动生成视频");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(mockApproveVideoPrompts).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "审核通过" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认通过" }));
+
+    expect(await screen.findByText("视频提示词已审核通过。")).toBeInTheDocument();
+    expect(mockApproveVideoPrompts).toHaveBeenCalledTimes(1);
+    expect(mockApproveVideoPrompts).toHaveBeenCalledWith("LEE柠檬");
+    expect(mockGetProject).toHaveBeenCalledTimes(2);
+    expect(mockGetProjectWorkflow).toHaveBeenCalledTimes(2);
+    expect(mockGetVideoPrompts).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByText("已审核").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+    expect(screen.getByText("visual prompt core 1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "前往镜头" }));
+    expect(await screen.findByRole("heading", { name: "镜头" })).toBeInTheDocument();
+    expect(screen.getByTestId("route-location")).toHaveTextContent("/stages/shots");
+    expect(await screen.findByText("当前项目尚无可浏览镜头。")).toBeInTheDocument();
+    expect(mockGetShots).toHaveBeenCalledTimes(1);
+    expect(mockGetProjectTasks).not.toHaveBeenCalled();
   });
 
   it("switches continuously through every Workflow Stage without a blank render", async () => {
