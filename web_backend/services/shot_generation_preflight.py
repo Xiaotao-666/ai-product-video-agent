@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -284,6 +285,15 @@ class ShotGenerationPreflightService:
                 )
 
         issues = self._unique_issues(issues)
+        fingerprint = None
+        if not issues and resolved is not None:
+            fingerprint = self._fingerprint(
+                project_id=self.project_repository.get_project(project_id).project_id,
+                context=context,
+                payload=payload,
+                resolved=resolved,
+                asset=asset,
+            )
         return GenerationPreflightResponse(
             ready=not issues,
             shot=context.public,
@@ -292,7 +302,53 @@ class ShotGenerationPreflightService:
             selected_asset_ids=selected_ids,
             issues=issues,
             warnings=[],
+            preflight_fingerprint=fingerprint,
         )
+
+    @staticmethod
+    def _fingerprint(
+        *,
+        project_id: str,
+        context: _ShotContext,
+        payload: GenerationPreflightRequest,
+        resolved: ResolvedGeneration,
+        asset: ReferenceAssetRecord | None,
+    ) -> str:
+        material = {
+            "project_id": project_id,
+            "shot_id": context.public.shot_id,
+            "prompt_version": context.public.prompt_version,
+            "prompt_sha256": hashlib.sha256(context.prompt.encode("utf-8")).hexdigest(),
+            "duration": context.public.duration_seconds,
+            "resolution": context.public.resolution,
+            "model_selection": payload.model_selection.value,
+            "requested_model": payload.requested_model,
+            "provider": resolved.provider,
+            "model": resolved.model,
+            "api_version": resolved.api_version,
+            "generation_mode": resolved.generation_mode,
+            "visual_input_mode": payload.visual_input.mode.value,
+            "assets": (
+                [
+                    {
+                        "asset_id": asset.asset_id,
+                        "sha256": asset.sha256,
+                        "source": asset.source,
+                        "project_path": asset.project_path,
+                    }
+                ]
+                if asset is not None
+                else []
+            ),
+            "workflow": "initial_shot_generation",
+        }
+        encoded = json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
     def _selected_adapter(

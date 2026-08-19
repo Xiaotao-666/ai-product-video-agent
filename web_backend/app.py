@@ -39,6 +39,7 @@ from web_backend.services.reference_assets import ReferenceAssetUploadService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
+from web_backend.services.shot_generation import ShotGenerationActionService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
@@ -108,6 +109,13 @@ def _initialize_local_resources(application: FastAPI) -> None:
             application.state.project_repository,
             application.state.reference_asset_repository,
         )
+    )
+    application.state.shot_generation_action_service = ShotGenerationActionService(
+        application.state.project_repository,
+        application.state.reference_asset_repository,
+        application.state.shot_generation_preflight_service,
+        application.state.task_service,
+        application.state.capability_service,
     )
     application.state.creative_action_service = CreativeActionService(
         application.state.project_repository,

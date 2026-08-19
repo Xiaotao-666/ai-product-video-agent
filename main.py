@@ -86,6 +86,7 @@ from shot_review import (
     shot_video_review_gate,
 )
 from shot_manager import ShotManagerError, shot_management_menu
+from shot_generation_workflow import continue_shot_generation
 from task_logger import TaskLogger
 from task_state import TaskState
 from video_generator import generate_video
@@ -876,34 +877,26 @@ def run_pipeline(
                     generation_count=entry_before_generation.get("generation_count", 0),
                 )
                 try:
-                    generated_path = generate_video(
-                        provider_credentials=video_provider_credentials,
-                        prompt=safety.reviewed_video_prompt,
-                        duration=shot.duration,
-                        resolution="768P",
-                        project=paths,
-                        output_path=output_path,
-                        task_logger=task_logger,
+                    generated_path = continue_shot_generation(
+                        paths=paths,
+                        checkpoint=checkpoint,
+                        plan=prompt_plan,
+                        shot=shot,
                         shot_id=shot_id,
+                        deepseek_key=deepseek_key,
+                        provider_credentials=video_provider_credentials,
+                        task_logger=task_logger,
                         visual_input=generation_visual_input,
                         provider_selection=provider_selection,
                         provider_registry=registry,
-                        resume_task=resume_task,
-                        on_preflight=lambda metadata, current_shot=shot_id: checkpoint.mark_shot_preflight(
-                            current_shot, metadata
-                        ),
-                        on_submitted=lambda provider_task, current_shot=shot_id: checkpoint.mark_shot_submitted(
-                            current_shot, provider_task
-                        ),
-                        on_task_updated=lambda provider_task, current_shot=shot_id: checkpoint.mark_shot_task_updated(
-                            current_shot, provider_task
-                        ),
+                        safety=safety,
+                        safety_review=review_prompt_safety,
+                        video_generate=generate_video,
                     )
-                except (VideoProviderError, OSError) as exc:
+                except (VideoProviderError, OSError, RuntimeError) as exc:
                     checkpoint.mark_shot_failed(shot_id, exc)
                     task_logger.event("SHOT_GENERATION_FAILED", shot_id=shot_id, error=exc)
                     continue
-                checkpoint.mark_shot_ready_for_review(shot_id)
                 completed.append(generated_path)
                 task_logger.event(
                     "SHOT_VIDEO_REGENERATION_COMPLETED"

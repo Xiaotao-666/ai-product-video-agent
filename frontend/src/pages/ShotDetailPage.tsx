@@ -263,10 +263,9 @@ export function ShotDetailPage() {
   const workspacePath = projectWorkspacePath(project.project_id);
   const canonicalShotsPath = projectStagePath(project.project_id, "shots");
   const showInitialGenerationPreparation =
-    shot.generation_count === 0 &&
-    shot.version_count === 0 &&
-    shot.versions.length === 0 &&
-    project.workflow.available_actions.includes("GENERATE_SHOTS");
+    !official &&
+    !pending &&
+    ["NOT_STARTED", "GENERATING", "FAILED"].includes(shot.status);
 
   return (
     <main className="main-content shot-detail-page">
@@ -302,6 +301,7 @@ export function ShotDetailPage() {
         <ShotGenerationPreparation
           projectId={project.project_id}
           shotId={shot.shot_id}
+          onCompleted={loadShot}
         />
       )}
 

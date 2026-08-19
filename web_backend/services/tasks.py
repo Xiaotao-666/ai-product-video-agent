@@ -51,6 +51,7 @@ class TaskService:
         *,
         project_id: str,
         operation: TaskOperation,
+        target_id: str | None = None,
         correlation_id: str | None,
         callable_: TaskCallable,
     ) -> TaskRecord:
@@ -64,6 +65,7 @@ class TaskService:
                 task_id=self._id_factory(),
                 project_id=canonical_project_id,
                 operation=operation,
+                target_id=target_id,
                 status=TaskStatus.QUEUED,
                 created_at=self._clock(),
                 correlation_id=select_correlation_id(correlation_id),

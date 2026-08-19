@@ -54,6 +54,7 @@ class TaskOperation(StrEnum):
     VIDEO_PROMPT_REVISE = "VIDEO_PROMPT_REVISE"
     VIDEO_PROMPT_REGENERATE = "VIDEO_PROMPT_REGENERATE"
     SHOT_GENERATE = "SHOT_GENERATE"
+    SHOT_RESUME = "SHOT_RESUME"
     ASSEMBLY = "ASSEMBLY"
     VOICE_GENERATE = "VOICE_GENERATE"
     SUBTITLE_GENERATE = "SUBTITLE_GENERATE"
@@ -115,6 +116,7 @@ class TaskRecord(TaskModel):
     task_id: str = Field(pattern=TASK_ID_PATTERN.pattern)
     project_id: str = Field(min_length=1, max_length=255)
     operation: TaskOperation
+    target_id: str | None = Field(default=None, max_length=128)
     status: TaskStatus
     created_at: datetime
     started_at: datetime | None = None
@@ -139,6 +141,18 @@ class TaskRecord(TaskModel):
             or _UNSAFE_PUBLIC_TEXT.search(value)
         ):
             raise ValueError("task correlation id is unsafe")
+        return value
+
+    @field_validator("target_id")
+    @classmethod
+    def validate_target_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if (
+            not _SAFE_REFERENCE_PATTERN.fullmatch(value)
+            or _UNSAFE_PUBLIC_TEXT.search(value)
+        ):
+            raise ValueError("task target id is unsafe")
         return value
 
     @model_validator(mode="after")

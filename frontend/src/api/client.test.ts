@@ -26,6 +26,7 @@ import {
   getReferenceImageUrl,
   getShot,
   getShotGenerationOptions,
+  getShotGenerationStatus,
   getShots,
   getShotVideoUrl,
   getStoryboardContent,
@@ -38,6 +39,8 @@ import {
   regenerateStoryboard,
   regenerateVideoPrompts,
   preflightShotGeneration,
+  resumeShotGeneration,
+  startShotGeneration,
   retryCreative,
   reviseCreative,
   reviseStoryboard,
@@ -1640,6 +1643,7 @@ describe("API client", () => {
           issues: [],
           warnings: [],
           paid_call_required: true,
+          preflight_fingerprint: "a".repeat(64),
         }),
       ),
     );
@@ -1654,5 +1658,52 @@ describe("API client", () => {
     expect(JSON.parse(String(init.body))).toEqual(request);
     expect(String(init.body)).not.toContain("path");
     expect(String(init.body).toLowerCase()).not.toContain("api_key");
+  });
+
+  it("starts and resumes Shot generation with only public request fields", async () => {
+    const task = {
+      task_id: "task_0123456789abcdef0123456789abcdef",
+      project_id: "中文项目",
+      operation: "SHOT_GENERATE",
+      status: "QUEUED",
+      created_at: "2026-08-19T00:00:00Z",
+      started_at: null,
+      finished_at: null,
+      correlation_id: "req_generate",
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(task, 202))
+      .mockResolvedValueOnce(responseOf({ ...task, operation: "SHOT_RESUME" }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      model_selection: "AUTO" as const,
+      requested_model: null,
+      visual_input: { mode: "none" as const, asset_ids: [] },
+      preflight_fingerprint: "b".repeat(64),
+      confirm_paid_call: true,
+    };
+    expect((await startShotGeneration("中文项目", "shot_01", payload)).data.operation).toBe("SHOT_GENERATE");
+    expect((await resumeShotGeneration("中文项目", "shot_01")).data.operation).toBe("SHOT_RESUME");
+    const startInit = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(startInit.body))).toEqual(payload);
+    expect(String(startInit.body)).not.toMatch(/provider_task_id|file_id|path|api_key/i);
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "POST" }));
+  });
+
+  it("parses safe generation status without provider identifiers", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "中文项目",
+      shot_id: "shot_01",
+      state: "READY_TO_DOWNLOAD",
+      resume_available: true,
+      resume_kind: "DOWNLOAD_EXISTING_FILE",
+      video_version: 1,
+      provider_submission_known: true,
+    })));
+    const result = await getShotGenerationStatus("中文项目", "shot_01");
+    expect(result.data.state).toBe("READY_TO_DOWNLOAD");
+    expect(JSON.stringify(result.data)).not.toMatch(/provider_task_id|file_id|path|credential/i);
   });
 });

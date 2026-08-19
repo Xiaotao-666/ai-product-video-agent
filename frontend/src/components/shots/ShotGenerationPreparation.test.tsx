@@ -3,9 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
 import {
+  ApiClientError,
   getReferenceAssets,
+  getProjectTasks,
   getShotGenerationOptions,
+  getShotGenerationStatus,
+  getTask,
   preflightShotGeneration,
+  resumeShotGeneration,
+  startShotGeneration,
 } from "../../api/client";
 import type {
   GenerationOptionsResponse,
@@ -21,13 +27,23 @@ vi.mock("../../api/client", async (importOriginal) => {
     ...actual,
     getShotGenerationOptions: vi.fn(),
     getReferenceAssets: vi.fn(),
+    getProjectTasks: vi.fn(),
     preflightShotGeneration: vi.fn(),
+    getShotGenerationStatus: vi.fn(),
+    getTask: vi.fn(),
+    resumeShotGeneration: vi.fn(),
+    startShotGeneration: vi.fn(),
   };
 });
 
 const mockOptions = vi.mocked(getShotGenerationOptions);
 const mockReferences = vi.mocked(getReferenceAssets);
 const mockPreflight = vi.mocked(preflightShotGeneration);
+const mockTasks = vi.mocked(getProjectTasks);
+const mockStatus = vi.mocked(getShotGenerationStatus);
+const mockTask = vi.mocked(getTask);
+const mockResume = vi.mocked(resumeShotGeneration);
+const mockStart = vi.mocked(startShotGeneration);
 
 const options: GenerationOptionsResponse = {
   project_id: "project-a",
@@ -123,6 +139,21 @@ const ready: GenerationPreflightResponse = {
   issues: [],
   warnings: [],
   paid_call_required: true,
+  preflight_fingerprint: "a".repeat(64),
+};
+
+const queuedTask = {
+  task_id: "task_0123456789abcdef0123456789abcdef",
+  project_id: "project-a",
+  operation: "SHOT_GENERATE" as const,
+  target_id: "shot_01",
+  status: "QUEUED" as const,
+  created_at: "2026-08-19T00:00:00Z",
+  started_at: null,
+  finished_at: null,
+  correlation_id: "req_generate",
+  error: null,
+  result: null,
 };
 
 function renderPreparation() {
@@ -138,9 +169,26 @@ describe("ShotGenerationPreparation", () => {
     mockOptions.mockReset();
     mockReferences.mockReset();
     mockPreflight.mockReset();
+    mockTasks.mockReset();
+    mockStatus.mockReset();
+    mockTask.mockReset();
+    mockResume.mockReset();
+    mockStart.mockReset();
     mockOptions.mockResolvedValue({ data: options, correlationId: "req_options" });
     mockReferences.mockResolvedValue({ data: references, correlationId: "req_refs" });
     mockPreflight.mockResolvedValue({ data: ready, correlationId: "req_preflight" });
+    mockTasks.mockResolvedValue({ data: { project_id: "project-a", tasks: [] }, correlationId: "req_tasks" });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "NOT_STARTED",
+        resume_available: false, resume_kind: null, video_version: null,
+        provider_submission_known: true,
+      },
+      correlationId: "req_status",
+    });
+    mockStart.mockResolvedValue({ data: queuedTask, correlationId: "req_generate" });
+    mockResume.mockResolvedValue({ data: { ...queuedTask, operation: "SHOT_RESUME" }, correlationId: "req_resume" });
+    mockTask.mockResolvedValue({ data: queuedTask, correlationId: "req_task" });
   });
 
   it("shows initial Shot context, three explained modes, and no generate action", async () => {
@@ -155,7 +203,7 @@ describe("ShotGenerationPreparation", () => {
     expect(screen.getByText(/真正生成视频会调用付费视频模型/)).toBeInTheDocument();
     expect(screen.queryByText(/\$0\./)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成视频" })).not.toBeInTheDocument();
-    expect(screen.getByText("生成视频将在下一阶段开放。")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("switches AUTO/MANUAL and exposes incompatibility without changing the model", async () => {
@@ -222,7 +270,8 @@ describe("ShotGenerationPreparation", () => {
     expect(within(summary).getByText("MiniMax Hailuo 2.3")).toBeInTheDocument();
     expect(within(summary).getByText("MiniMax")).toBeInTheDocument();
     expect(within(summary).getByText("纯文本生成")).toBeInTheDocument();
-    expect(within(summary).getByText(/没有创建任务或调用视频模型/)).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "生成视频" })).toBeInTheDocument();
+    expect(mockStart).not.toHaveBeenCalled();
     expect(screen.queryByText(/QUEUED|RUNNING/)).not.toBeInTheDocument();
   });
 
@@ -271,5 +320,171 @@ describe("ShotGenerationPreparation", () => {
     expect(await screen.findByText("视频提示词尚未正式审核通过。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "检查生成配置" })).toBeDisabled();
     expect(mockPreflight).not.toHaveBeenCalled();
+  });
+
+  it("requires a final paid-call confirmation and cancel creates no task", async () => {
+    renderPreparation();
+    await screen.findByRole("heading", { name: "生成设置" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成视频" }));
+    const dialog = screen.getByRole("dialog", { name: "确认生成视频" });
+    expect(within(dialog).getByText("MiniMax Hailuo 2.3")).toBeInTheDocument();
+    expect(within(dialog).getByText("确认后将向视频生成模型提交付费请求。")).toBeInTheDocument();
+    expect(within(dialog).getByText("768P")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("confirms exactly once even on a rapid double click", async () => {
+    renderPreparation();
+    await screen.findByRole("heading", { name: "生成设置" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成视频" }));
+    const confirm = screen.getByRole("button", { name: "确认并生成视频" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockStart).toHaveBeenCalledTimes(1));
+    expect(mockStart).toHaveBeenCalledWith("project-a", "shot_01", {
+      model_selection: "AUTO",
+      requested_model: null,
+      visual_input: { mode: "none", asset_ids: [] },
+      preflight_fingerprint: "a".repeat(64),
+      confirm_paid_call: true,
+    });
+    expect(await screen.findByText("排队中…")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d+%/);
+  });
+
+  it("clears stale preflight and asks the user to check again", async () => {
+    mockStart.mockRejectedValue(new ApiClientError({
+      code: "GENERATION_PREFLIGHT_STALE",
+      status: 409,
+      message: "生成配置已发生变化，请重新检查配置。",
+    }));
+    renderPreparation();
+    await screen.findByRole("heading", { name: "生成设置" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成视频" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("生成配置已发生变化，请重新检查配置。");
+    expect(screen.queryByRole("button", { name: "生成视频" })).not.toBeInTheDocument();
+  });
+
+  it("offers manual resume from durable progress without model choices in the request", async () => {
+    mockOptions.mockResolvedValue({ data: { ...options, eligible: false }, correlationId: "req_options" });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "PROVIDER_RUNNING",
+        resume_available: true, resume_kind: "POLL_EXISTING_TASK", video_version: 1,
+        provider_submission_known: true,
+      },
+      correlationId: "req_status",
+    });
+    renderPreparation();
+    const resume = await screen.findByRole("button", { name: "继续生成" });
+    fireEvent.click(resume);
+    await waitFor(() => expect(mockResume).toHaveBeenCalledTimes(1));
+    expect(mockResume).toHaveBeenCalledWith("project-a", "shot_01");
+  });
+
+  it("shows submission ambiguity without a retry or resume button", async () => {
+    mockOptions.mockResolvedValue({ data: { ...options, eligible: false }, correlationId: "req_options" });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "SUBMISSION_UNKNOWN",
+        resume_available: false, resume_kind: null, video_version: 1,
+        provider_submission_known: false,
+      },
+      correlationId: "req_status",
+    });
+    renderPreparation();
+    expect(await screen.findByText(/请不要立即重复生成/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续生成" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成视频" })).not.toBeInTheDocument();
+  });
+
+  it("reattaches the current Shot task after a page reload", async () => {
+    mockTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [queuedTask] },
+      correlationId: "req_tasks",
+    });
+    renderPreparation();
+    expect(await screen.findByText("排队中…")).toBeInTheDocument();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("shows a durable Core phase instead of inventing progress", async () => {
+    const runningTask = {
+      ...queuedTask,
+      status: "RUNNING" as const,
+      started_at: "2026-08-19T00:00:01Z",
+    };
+    mockTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [runningTask] },
+      correlationId: "req_tasks",
+    });
+    mockTask.mockResolvedValue({ data: runningTask, correlationId: "req_task" });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a", shot_id: "shot_01", state: "DOWNLOADING",
+        resume_available: true, resume_kind: "DOWNLOAD_EXISTING_FILE", video_version: 1,
+        provider_submission_known: true,
+      },
+      correlationId: "req_status",
+    });
+    renderPreparation();
+    expect(await screen.findByText("正在下载视频…")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d+%/);
+  });
+
+  it("attaches PROJECT_BUSY only when the active task targets this Shot", async () => {
+    mockStart.mockRejectedValue(new ApiClientError({
+      code: "PROJECT_BUSY",
+      status: 409,
+      message: "项目当前正在执行其他操作。",
+    }));
+    mockTasks
+      .mockResolvedValueOnce({
+        data: { project_id: "project-a", tasks: [] },
+        correlationId: "req_initial_tasks",
+      })
+      .mockResolvedValue({
+        data: { project_id: "project-a", tasks: [queuedTask] },
+        correlationId: "req_busy_tasks",
+      });
+    renderPreparation();
+    await screen.findByRole("heading", { name: "生成设置" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成视频" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
+    expect(await screen.findByText("排队中…")).toBeInTheDocument();
+  });
+
+  it("keeps PROJECT_BUSY visible when another Shot owns the active task", async () => {
+    mockStart.mockRejectedValue(new ApiClientError({
+      code: "PROJECT_BUSY",
+      status: 409,
+      message: "项目当前正在执行其他操作。",
+    }));
+    mockTasks
+      .mockResolvedValueOnce({
+        data: { project_id: "project-a", tasks: [] },
+        correlationId: "req_initial_tasks",
+      })
+      .mockResolvedValue({
+        data: {
+          project_id: "project-a",
+          tasks: [{ ...queuedTask, target_id: "shot_02" }],
+        },
+        correlationId: "req_busy_tasks",
+      });
+    renderPreparation();
+    await screen.findByRole("heading", { name: "生成设置" });
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "生成视频" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成视频" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("项目当前正在执行其他操作");
+    expect(screen.queryByText("排队中…")).not.toBeInTheDocument();
   });
 });

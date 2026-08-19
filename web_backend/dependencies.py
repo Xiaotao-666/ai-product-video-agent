@@ -24,6 +24,7 @@ from web_backend.services.reference_assets import ReferenceAssetUploadService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
+from web_backend.services.shot_generation import ShotGenerationActionService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.settings import BackendSettings
@@ -89,3 +90,9 @@ def get_shot_generation_preflight_service(
     request: Request,
 ) -> ShotGenerationPreflightService:
     return request.app.state.shot_generation_preflight_service
+
+
+def get_shot_generation_action_service(
+    request: Request,
+) -> ShotGenerationActionService:
+    return request.app.state.shot_generation_action_service

@@ -522,6 +522,8 @@ class ProjectCheckpoint:
             "generation_attempt_pending": False,
             "pending_video_version": None,
             "current_generation_version": None,
+            "generation_phase": "NOT_STARTED",
+            "submission_unknown": False,
             "candidate": self._new_candidate_entry(),
             "candidate_history": [],
             "visual_input": none_visual_input(),
@@ -904,6 +906,8 @@ class ProjectCheckpoint:
                 "generation_attempt_pending": True,
                 "pending_video_version": next_version,
                 "current_generation_version": None,
+                "generation_phase": "PREPARING",
+                "submission_unknown": False,
                 "last_error": None,
                 "updated_at": now_iso(),
             }
@@ -933,6 +937,82 @@ class ProjectCheckpoint:
         entry["updated_at"] = now_iso()
         self.save()
 
+    def mark_shot_submission_started(
+        self,
+        shot_id: int,
+        metadata: dict[str, Any],
+        *,
+        duration: int,
+        resolution: str,
+        visual_input: dict[str, Any],
+    ) -> None:
+        """Allocate one immutable Bundle before the single billable submit call."""
+
+        entry = self.shot_checkpoint(shot_id)
+        if entry.get("generation_attempt_pending"):
+            version = int(
+                entry.get("pending_video_version")
+                or int(entry.get("generation_count", 0)) + 1
+            )
+            entry["generation_count"] = int(entry.get("generation_count", 0)) + 1
+            entry["current_generation_version"] = version
+            self.project.shot_version_dir(shot_id, version).mkdir(
+                parents=True, exist_ok=False
+            )
+            prompt_payload = self.prompt_version(
+                shot_id, int(entry.get("active_prompt_version") or 0)
+            )
+            safe_metadata = {
+                key: metadata.get(key)
+                for key in (
+                    "provider",
+                    "provider_model",
+                    "provider_api_version",
+                    "generation_mode",
+                    "selection_mode",
+                    "credential_env_name",
+                )
+            }
+            entry.setdefault("generation_versions", []).append(
+                {
+                    "video_version": version,
+                    "prompt_version": entry.get("active_prompt_version"),
+                    "status": "SUBMITTING",
+                    "created_at": now_iso(),
+                    "video_path": self._relative_project_path(
+                        self.video_path_for_version(shot_id, version)
+                    ),
+                    "prompt_source": (
+                        prompt_payload.get("source") if prompt_payload else None
+                    ),
+                    "prompt_snapshot": copy.deepcopy(prompt_payload),
+                    "review_result": None,
+                    "is_active": False,
+                    "is_approved": False,
+                    **safe_metadata,
+                    "provider_task_id": None,
+                    "file_id": None,
+                    "submitted_at": None,
+                    "file_ready_at": None,
+                    "completed_at": None,
+                    "duration": int(duration),
+                    "resolution": str(resolution),
+                    "visual_input": visual_input_snapshot(visual_input),
+                    "updated_at": now_iso(),
+                }
+            )
+            entry["generation_attempt_pending"] = False
+            entry["pending_video_version"] = None
+        entry["generation_phase"] = "SUBMITTING"
+        entry["submission_unknown"] = False
+        entry["updated_at"] = now_iso()
+        self._update_generation(
+            entry,
+            entry.get("current_generation_version"),
+            status="SUBMITTING",
+        )
+        self.save()
+
     def mark_shot_completed(self, shot_id: int) -> None:
         self.mark_shot_ready_for_review(shot_id)
 
@@ -942,6 +1022,8 @@ class ProjectCheckpoint:
         self.data["video_generation"]["completed_shots"] = sorted(shots)
         entry = self.shot_checkpoint(shot_id)
         entry["status"] = ShotStatus.WAITING_REVIEW.value
+        entry["generation_phase"] = "WAITING_REVIEW"
+        entry["submission_unknown"] = False
         entry["completed_at"] = now_iso()
         current_version = entry.get("current_generation_version")
         if current_version is not None:
@@ -1070,6 +1152,8 @@ class ProjectCheckpoint:
             entry["generation_attempt_pending"] = False
             entry["pending_video_version"] = None
         entry["status"] = ShotStatus.GENERATING.value
+        entry["generation_phase"] = "PROVIDER_RUNNING"
+        entry["submission_unknown"] = False
         entry.update(task_values)
         entry["submitted_at"] = now_iso()
         entry["updated_at"] = now_iso()
@@ -1092,6 +1176,7 @@ class ProjectCheckpoint:
         entry["status"] = ShotStatus.GENERATING.value
         entry["file_id"] = str(file_id)
         entry["file_ready_at"] = now_iso()
+        entry["generation_phase"] = "READY_TO_DOWNLOAD"
         entry["updated_at"] = now_iso()
         self._update_generation(
             entry,
@@ -1115,9 +1200,52 @@ class ProjectCheckpoint:
         if task.provider_file_id:
             entry["file_ready_at"] = now_iso()
             values["file_ready_at"] = entry["file_ready_at"]
+            entry["generation_phase"] = "READY_TO_DOWNLOAD"
+        else:
+            entry["generation_phase"] = "PROVIDER_RUNNING"
         entry["updated_at"] = now_iso()
         self._update_generation(
             entry, entry.get("current_generation_version"), **values
+        )
+        self.save()
+
+    def mark_shot_downloading(self, shot_id: int) -> None:
+        entry = self.shot_checkpoint(shot_id)
+        entry["generation_phase"] = "DOWNLOADING"
+        entry["updated_at"] = now_iso()
+        self._update_generation(
+            entry, entry.get("current_generation_version"), status="DOWNLOADING"
+        )
+        self.save()
+
+    def mark_shot_local_finalizing(self, shot_id: int) -> None:
+        entry = self.shot_checkpoint(shot_id)
+        entry["generation_phase"] = "LOCAL_FINALIZING"
+        entry["updated_at"] = now_iso()
+        self._update_generation(
+            entry,
+            entry.get("current_generation_version"),
+            status="LOCAL_FINALIZING",
+        )
+        self.save()
+
+    def mark_shot_submission_unknown(self, shot_id: int) -> None:
+        entry = self.shot_checkpoint(shot_id)
+        entry["status"] = ShotStatus.FAILED.value
+        entry["generation_phase"] = "SUBMISSION_UNKNOWN"
+        entry["submission_unknown"] = True
+        entry["last_error"] = {
+            "type": "SubmissionUnknown",
+            "message": "Remote submission outcome is unknown.",
+            "timestamp": now_iso(),
+        }
+        entry["updated_at"] = now_iso()
+        self._update_generation(
+            entry,
+            entry.get("current_generation_version"),
+            status="SUBMISSION_UNKNOWN",
+            submission_unknown=True,
+            error=entry["last_error"],
         )
         self.save()
 
@@ -1151,6 +1279,8 @@ class ProjectCheckpoint:
     def mark_shot_failed(self, shot_id: int, error: BaseException | str) -> None:
         entry = self.shot_checkpoint(shot_id)
         entry["status"] = ShotStatus.FAILED.value
+        if entry.get("generation_phase") != "SUBMISSION_UNKNOWN":
+            entry["generation_phase"] = "FAILED"
         entry["last_error"] = {
             "type": type(error).__name__ if isinstance(error, BaseException) else "Error",
             "message": str(error),

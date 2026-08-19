@@ -358,7 +358,11 @@ class ShotRepository:
             status = str(internal.get("status") or "NONE").upper()
             if status != "NONE":
                 return _safe_positive_int(internal.get("video_version"))
+            if str(checkpoint.get("status") or "").upper() == "WAITING_REVIEW":
+                return _safe_positive_int(checkpoint.get("active_video_version"))
             return None
+        if str(checkpoint.get("status") or "").upper() == "WAITING_REVIEW":
+            return _safe_positive_int(checkpoint.get("active_video_version"))
         return _safe_positive_int(manifest.get("candidate_version"))
 
     def _version_numbers(

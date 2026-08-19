@@ -241,6 +241,11 @@ def write_generation_snapshot(
         "generation_count": payload.get("generation_count"),
         "status": payload.get("status", "NOT_STARTED"),
         "duration": payload.get("duration"),
+        "resolution": payload.get("resolution"),
+        "generation_phase": payload.get(
+            "generation_phase", payload.get("status", "NOT_STARTED")
+        ),
+        "submission_unknown": bool(payload.get("submission_unknown", False)),
         "submitted_at": payload.get("submitted_at"),
         "file_ready_at": payload.get("file_ready_at"),
         "completed_at": payload.get("completed_at"),

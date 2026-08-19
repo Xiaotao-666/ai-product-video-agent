@@ -22,6 +22,7 @@ import type {
   GenerationOptionsResponse,
   GenerationPreflightRequest,
   GenerationPreflightResponse,
+  GenerationStartRequest,
   GenerationShotContext,
   GenerationVisualInputMode,
   GenerationVisualInputOption,
@@ -41,6 +42,8 @@ import type {
   PlanningCue,
   ShotDetail,
   ShotGenerationSummary,
+  ShotGenerationState,
+  ShotGenerationStatusResponse,
   ShotListResponse,
   ShotPromptSummary,
   ShotStageState,
@@ -122,6 +125,7 @@ const TASK_OPERATIONS: ReadonlySet<string> = new Set([
   "VIDEO_PROMPT_REVISE",
   "VIDEO_PROMPT_REGENERATE",
   "SHOT_GENERATE",
+  "SHOT_RESUME",
   "ASSEMBLY",
   "VOICE_GENERATE",
   "SUBTITLE_GENERATE",
@@ -1239,7 +1243,10 @@ function parseGenerationPreflight(
     !Array.isArray(value.selected_asset_ids) ||
     !Array.isArray(value.issues) ||
     !Array.isArray(value.warnings) ||
-    typeof value.paid_call_required !== "boolean"
+    typeof value.paid_call_required !== "boolean" ||
+    !isNullableString(value.preflight_fingerprint) ||
+    (typeof value.preflight_fingerprint === "string" &&
+      !/^[0-9a-f]{64}$/.test(value.preflight_fingerprint))
   ) {
     return invalidResponse("Backend 返回了无法读取的配置检查结果。", correlationId);
   }
@@ -1254,6 +1261,42 @@ function parseGenerationPreflight(
     issues: value.issues.map((issue) => parseGenerationIssue(issue, correlationId)),
     warnings: value.warnings.map((issue) => parseGenerationIssue(issue, correlationId)),
     paid_call_required: value.paid_call_required,
+    preflight_fingerprint: value.preflight_fingerprint,
+  };
+}
+
+function parseShotGenerationStatus(
+  value: unknown,
+  correlationId: string | null,
+): ShotGenerationStatusResponse {
+  const states: ReadonlySet<string> = new Set([
+    "NOT_STARTED", "QUEUED", "SUBMITTING", "PROVIDER_RUNNING",
+    "READY_TO_DOWNLOAD", "DOWNLOADING", "LOCAL_FINALIZING",
+    "WAITING_REVIEW", "FAILED", "INTERRUPTED", "SUBMISSION_UNKNOWN",
+  ]);
+  const resumeKinds: ReadonlySet<string> = new Set([
+    "POLL_EXISTING_TASK", "DOWNLOAD_EXISTING_FILE", "FINALIZE_LOCAL_VIDEO",
+  ]);
+  if (
+    !isRecord(value) ||
+    typeof value.state !== "string" ||
+    !states.has(value.state) ||
+    typeof value.resume_available !== "boolean" ||
+    !isNullableString(value.resume_kind) ||
+    (typeof value.resume_kind === "string" && !resumeKinds.has(value.resume_kind)) ||
+    !isNullablePositiveInteger(value.video_version) ||
+    typeof value.provider_submission_known !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头生成状态。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    shot_id: parseRequiredSafeText(value.shot_id, "镜头标识无效。", correlationId),
+    state: value.state as ShotGenerationState,
+    resume_available: value.resume_available,
+    resume_kind: value.resume_kind as ShotGenerationStatusResponse["resume_kind"],
+    video_version: value.video_version,
+    provider_submission_known: value.provider_submission_known,
   };
 }
 
@@ -1921,6 +1964,55 @@ export async function preflightShotGeneration(
   );
   return {
     data: parseGenerationPreflight(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function startShotGeneration(
+  projectId: string,
+  shotId: string,
+  payload: GenerationStartRequest,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/start`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function resumeShotGeneration(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/resume`,
+    { method: "POST", headers: { Accept: "application/json" } },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getShotGenerationStatus(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<ShotGenerationStatusResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/status`,
+  );
+  return {
+    data: parseShotGenerationStatus(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

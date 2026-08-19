@@ -5,9 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   getProject,
+  getProjectTasks,
   getReferenceAssets,
   getShot,
   getShotGenerationOptions,
+  getShotGenerationStatus,
 } from "../api/client";
 import type { ProjectDetail, ShotDetail } from "../api/types";
 import { ShotDetailPage } from "./ShotDetailPage";
@@ -21,6 +23,8 @@ vi.mock("../api/client", async (importOriginal) => {
     getShot: vi.fn(),
     getReferenceAssets: vi.fn(),
     getShotGenerationOptions: vi.fn(),
+    getProjectTasks: vi.fn(),
+    getShotGenerationStatus: vi.fn(),
   };
 });
 
@@ -28,6 +32,8 @@ const mockGetProject = vi.mocked(getProject);
 const mockGetShot = vi.mocked(getShot);
 const mockGetReferenceAssets = vi.mocked(getReferenceAssets);
 const mockGetShotGenerationOptions = vi.mocked(getShotGenerationOptions);
+const mockGetProjectTasks = vi.mocked(getProjectTasks);
+const mockGetShotGenerationStatus = vi.mocked(getShotGenerationStatus);
 
 const project: ProjectDetail = {
   project_id: "LEE柠檬",
@@ -138,11 +144,25 @@ describe("ShotDetailPage", () => {
     mockGetShot.mockReset();
     mockGetReferenceAssets.mockReset();
     mockGetShotGenerationOptions.mockReset();
+    mockGetProjectTasks.mockReset();
+    mockGetShotGenerationStatus.mockReset();
     mockGetProject.mockResolvedValue({ data: project, correlationId: "req_project" });
     mockGetShot.mockResolvedValue({ data: shot, correlationId: "req_shot" });
     mockGetReferenceAssets.mockResolvedValue({
       data: { project_id: "LEE柠檬", assets: [] },
       correlationId: "req_references",
+    });
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [] },
+      correlationId: "req_tasks",
+    });
+    mockGetShotGenerationStatus.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", shot_id: "shot_01", state: "NOT_STARTED",
+        resume_available: false, resume_kind: null, video_version: null,
+        provider_submission_known: true,
+      },
+      correlationId: "req_status",
     });
     mockGetShotGenerationOptions.mockResolvedValue({
       data: {

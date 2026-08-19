@@ -157,3 +157,41 @@ class GenerationPreflightResponse(ResponseModel):
     issues: list[GenerationIssue]
     warnings: list[GenerationIssue]
     paid_call_required: bool = True
+    preflight_fingerprint: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+class GenerationStartRequest(GenerationPreflightRequest):
+    preflight_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm_paid_call: bool
+
+
+class ShotGenerationState(StrEnum):
+    NOT_STARTED = "NOT_STARTED"
+    QUEUED = "QUEUED"
+    SUBMITTING = "SUBMITTING"
+    PROVIDER_RUNNING = "PROVIDER_RUNNING"
+    READY_TO_DOWNLOAD = "READY_TO_DOWNLOAD"
+    DOWNLOADING = "DOWNLOADING"
+    LOCAL_FINALIZING = "LOCAL_FINALIZING"
+    WAITING_REVIEW = "WAITING_REVIEW"
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"
+    SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN"
+
+
+class ShotGenerationResumeKind(StrEnum):
+    POLL_EXISTING_TASK = "POLL_EXISTING_TASK"
+    DOWNLOAD_EXISTING_FILE = "DOWNLOAD_EXISTING_FILE"
+    FINALIZE_LOCAL_VIDEO = "FINALIZE_LOCAL_VIDEO"
+
+
+class ShotGenerationStatusResponse(ResponseModel):
+    project_id: str
+    shot_id: str
+    state: ShotGenerationState
+    resume_available: bool
+    resume_kind: ShotGenerationResumeKind | None = None
+    video_version: int | None = Field(default=None, ge=1)
+    provider_submission_known: bool

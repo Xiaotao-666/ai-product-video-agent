@@ -60,6 +60,7 @@ export type TaskOperation =
   | "VIDEO_PROMPT_REVISE"
   | "VIDEO_PROMPT_REGENERATE"
   | "SHOT_GENERATE"
+  | "SHOT_RESUME"
   | "ASSEMBLY"
   | "VOICE_GENERATE"
   | "SUBTITLE_GENERATE"
@@ -81,6 +82,7 @@ export interface TaskRecord {
   task_id: string;
   project_id: string;
   operation: TaskOperation;
+  target_id?: string | null;
   status: TaskStatus;
   created_at: string;
   started_at: string | null;
@@ -473,6 +475,40 @@ export interface GenerationPreflightResponse {
   issues: GenerationIssue[];
   warnings: GenerationIssue[];
   paid_call_required: boolean;
+  preflight_fingerprint: string | null;
+}
+
+export interface GenerationStartRequest extends GenerationPreflightRequest {
+  preflight_fingerprint: string;
+  confirm_paid_call: boolean;
+}
+
+export type ShotGenerationState =
+  | "NOT_STARTED"
+  | "QUEUED"
+  | "SUBMITTING"
+  | "PROVIDER_RUNNING"
+  | "READY_TO_DOWNLOAD"
+  | "DOWNLOADING"
+  | "LOCAL_FINALIZING"
+  | "WAITING_REVIEW"
+  | "FAILED"
+  | "INTERRUPTED"
+  | "SUBMISSION_UNKNOWN";
+
+export type ShotGenerationResumeKind =
+  | "POLL_EXISTING_TASK"
+  | "DOWNLOAD_EXISTING_FILE"
+  | "FINALIZE_LOCAL_VIDEO";
+
+export interface ShotGenerationStatusResponse {
+  project_id: string;
+  shot_id: string;
+  state: ShotGenerationState;
+  resume_available: boolean;
+  resume_kind: ShotGenerationResumeKind | null;
+  video_version: number | null;
+  provider_submission_known: boolean;
 }
 
 export type VoiceCalibrationStatus =

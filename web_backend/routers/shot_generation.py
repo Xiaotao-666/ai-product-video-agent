@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from web_backend.dependencies import (
     get_reference_asset_repository,
     get_reference_asset_upload_service,
+    get_shot_generation_action_service,
     get_shot_generation_preflight_service,
 )
 from web_backend.errors import registered_api_error
@@ -17,9 +18,12 @@ from web_backend.models.generation import (
     GenerationOptionsResponse,
     GenerationPreflightRequest,
     GenerationPreflightResponse,
+    GenerationStartRequest,
     ReferenceAssetListResponse,
     ReferenceAssetUploadResponse,
+    ShotGenerationStatusResponse,
 )
+from web_backend.models.tasks import TaskOperation, TaskRecord
 from web_backend.repositories.project_repository import (
     InvalidProjectId,
     ProjectDataCorrupt,
@@ -37,6 +41,14 @@ from web_backend.repositories.shot_repository import InvalidShotId, ShotNotFound
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
+from web_backend.services.shot_generation import (
+    GenerationNotResumable,
+    GenerationPreflightStale,
+    PaidCallConfirmationRequired,
+    ShotGenerationActionService,
+)
+from web_backend.services.projects import ProjectBusy
+from web_backend.services.task_runner import TaskRunnerClosed
 from web_backend.services.reference_assets import (
     InvalidReferenceFile,
     ReferenceAssetUploadError,
@@ -76,6 +88,31 @@ def _raise_mapped(error: Exception) -> NoReturn:
     if code is None:
         raise error
     raise registered_api_error(code) from error
+
+
+def _accepted_task_response(operation: TaskOperation) -> dict[int, dict[str, object]]:
+    return {
+        202: {
+            "description": "Shot generation task accepted.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "task_id": "task_0123456789abcdef0123456789abcdef",
+                        "project_id": "0123456789abcdef0123456789abcdef",
+                        "operation": operation.value,
+                        "target_id": "shot_01",
+                        "status": "QUEUED",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "started_at": None,
+                        "finished_at": None,
+                        "correlation_id": "req_0123456789abcdef0123456789abcdef",
+                        "error": None,
+                        "result": None,
+                    }
+                }
+            },
+        }
+    }
 
 
 @router.get(
@@ -201,5 +238,95 @@ def generation_preflight(
 ) -> GenerationPreflightResponse:
     try:
         return service.preflight(project_id, shot_id, payload)
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/generation/start",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.SHOT_GENERATE),
+)
+def start_generation(
+    project_id: str,
+    shot_id: str,
+    payload: GenerationStartRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        ShotGenerationActionService,
+        Depends(get_shot_generation_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_start(
+            project_id,
+            shot_id,
+            payload,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except PaidCallConfirmationRequired as error:
+        raise registered_api_error("PAID_CALL_CONFIRMATION_REQUIRED") from error
+    except GenerationPreflightStale as error:
+        raise registered_api_error("GENERATION_PREFLIGHT_STALE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/generation/resume",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.SHOT_RESUME),
+)
+def resume_generation(
+    project_id: str,
+    shot_id: str,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        ShotGenerationActionService,
+        Depends(get_shot_generation_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_resume(
+            project_id,
+            shot_id,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except GenerationNotResumable as error:
+        raise registered_api_error("GENERATION_NOT_RESUMABLE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
+
+
+@router.get(
+    "/projects/{project_id}/shots/{shot_id}/generation/status",
+    response_model=ShotGenerationStatusResponse,
+)
+def generation_status(
+    project_id: str,
+    shot_id: str,
+    service: Annotated[
+        ShotGenerationActionService,
+        Depends(get_shot_generation_action_service),
+    ],
+) -> ShotGenerationStatusResponse:
+    try:
+        return service.status(project_id, shot_id)
     except ProjectRepositoryError as error:
         _raise_mapped(error)

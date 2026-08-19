@@ -24,6 +24,23 @@ MAX_WAIT_SECONDS = 30 * 60
 logger = logging.getLogger(__name__)
 
 
+class ProviderSubmissionUnknownError(RuntimeError):
+    """The billable submit may have reached the provider, but no task ID is known."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__("Unable to confirm whether the provider accepted the submission.")
+        self.cause = cause
+
+
+def _submission_is_ambiguous(error: VideoProviderError | OSError) -> bool:
+    if isinstance(error, OSError):
+        return True
+    return error.code in {
+        ProviderErrorCode.PROVIDER_TEMPORARY_ERROR,
+        ProviderErrorCode.UNKNOWN_PROVIDER_ERROR,
+    }
+
+
 def _selection(value: ProviderSelection | Mapping[str, str] | None) -> ProviderSelection | None:
     if value is None or isinstance(value, ProviderSelection):
         return value
@@ -48,8 +65,11 @@ def generate_video(
     provider_registry: VideoProviderRegistry | None = None,
     resume_task: ProviderTask | None = None,
     on_preflight: Callable[[dict[str, str | None]], None] | None = None,
+    on_submitting: Callable[[dict[str, str | None]], None] | None = None,
     on_submitted: Callable[[ProviderTask], None] | None = None,
     on_task_updated: Callable[[ProviderTask], None] | None = None,
+    on_downloading: Callable[[ProviderTask], None] | None = None,
+    on_downloaded: Callable[[Path], None] | None = None,
 ) -> Path:
     """Generate one video through the selected adapter without provider API knowledge."""
     if output_path is None:
@@ -96,10 +116,17 @@ def generate_video(
         if task is None:
             if task_logger:
                 task_logger.api("VIDEO_PROVIDER_SUBMIT", adapter.provider_name, **provider_fields)
-            task = adapter.submit(request, task_logger).evolve(
-                selection_mode=route.selection_mode,
-                credential_env_name=route.credential_env_name,
-            )
+            if on_submitting:
+                on_submitting(route.metadata(request.required_capability))
+            try:
+                task = adapter.submit(request, task_logger).evolve(
+                    selection_mode=route.selection_mode,
+                    credential_env_name=route.credential_env_name,
+                )
+            except (VideoProviderError, OSError) as exc:
+                if _submission_is_ambiguous(exc):
+                    raise ProviderSubmissionUnknownError(exc) from exc
+                raise
             if on_submitted:
                 on_submitted(task)
         else:
@@ -171,9 +198,15 @@ def generate_video(
                 output_path=output_path,
                 **provider_fields,
             )
+        if on_downloading:
+            on_downloading(task)
         result = adapter.download(task, output_path, request, task_logger)
+        if on_downloaded:
+            on_downloaded(result.output_path)
         logger.info("视频生成完成\n保存位置：\n%s", result.output_path)
         return result.output_path
+    except ProviderSubmissionUnknownError:
+        raise
     except (VideoProviderError, OSError) as exc:
         if task_logger:
             fields = dict(provider_fields)

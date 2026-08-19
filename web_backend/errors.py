@@ -103,6 +103,24 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
         "项目当前正在执行其他操作，请稍后重试。",
         retryable=True,
     ),
+    "PAID_CALL_CONFIRMATION_REQUIRED": ErrorDefinition(
+        422,
+        "GENERATION_ERROR",
+        "PAID_CALL_CONFIRMATION_REQUIRED",
+        "必须明确确认付费调用后才能生成视频。",
+    ),
+    "GENERATION_PREFLIGHT_STALE": ErrorDefinition(
+        409,
+        "GENERATION_ERROR",
+        "GENERATION_PREFLIGHT_STALE",
+        "生成配置已发生变化，请重新检查配置。",
+    ),
+    "GENERATION_NOT_RESUMABLE": ErrorDefinition(
+        409,
+        "GENERATION_ERROR",
+        "GENERATION_NOT_RESUMABLE",
+        "当前镜头没有可安全继续的生成进度。",
+    ),
     "PROJECT_CREATE_FAILED": ErrorDefinition(
         500, "PROJECT_ERROR", "PROJECT_CREATE_FAILED", "项目创建失败。"
     ),
