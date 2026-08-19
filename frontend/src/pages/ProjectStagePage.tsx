@@ -6,18 +6,24 @@ import {
   getCreativeContent,
   getProject,
   getProjectWorkflow,
+  getStoryboardContent,
 } from "../api/client";
 import type {
   CreativeContentResponse,
   ProjectDetail,
   ProjectWorkflowResponse,
+  StoryboardContentResponse,
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { PostProductionStageContent } from "../components/PostProductionStageContent";
 import { PlanningStageContent } from "../components/planning/PlanningStageContent";
-import type { CreativeRefreshSnapshot } from "../components/planning/PlanningStageContent";
+import type {
+  CreativeRefreshSnapshot,
+  StoryboardRefreshSnapshot,
+} from "../components/planning/PlanningStageContent";
 import { CreativeGenerateAction } from "../components/planning/CreativeGenerateAction";
 import { CreativeApproveAction } from "../components/planning/CreativeApproveAction";
+import { StoryboardGenerateAction } from "../components/planning/StoryboardGenerateAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -97,6 +103,9 @@ export function ProjectStagePage() {
     useState<CreativeRefreshSnapshot | null>(null);
   const [hasCreative, setHasCreative] = useState<boolean | null>(null);
   const [creativeTaskActive, setCreativeTaskActive] = useState(false);
+  const [storyboardRefresh, setStoryboardRefresh] =
+    useState<StoryboardRefreshSnapshot | null>(null);
+  const [hasStoryboard, setHasStoryboard] = useState<boolean | null>(null);
   const loadRequest = useRef(0);
 
   const loadStage = useCallback(async () => {
@@ -111,6 +120,8 @@ export function ProjectStagePage() {
     setCreativeRefresh(null);
     setHasCreative(null);
     setCreativeTaskActive(false);
+    setStoryboardRefresh(null);
+    setHasStoryboard(null);
 
     try {
       const [detailResult, workflowResult] = await Promise.all([
@@ -189,6 +200,44 @@ export function ProjectStagePage() {
     }));
   }, [projectId, validStageKey]);
 
+  const handleStoryboardLoaded = useCallback(
+    (response: StoryboardContentResponse) => {
+      if (response.project_id === projectId) {
+        setHasStoryboard(response.content !== null);
+      }
+    },
+    [projectId],
+  );
+
+  const refreshStoryboardState = useCallback(async () => {
+    if (!projectId || validStageKey !== "storyboard") return;
+    const [detailResult, workflowResult, storyboardResult] = await Promise.all([
+      getProject(projectId),
+      getProjectWorkflow(projectId),
+      getStoryboardContent(projectId),
+    ]);
+    const canonicalProjectId = detailResult.data.project_id;
+    if (
+      workflowResult.data.project_id !== canonicalProjectId ||
+      storyboardResult.data.project_id !== canonicalProjectId
+    ) {
+      throw new ApiClientError({
+        message: "Storyboard refresh responses did not match.",
+        code: "INVALID_RESPONSE",
+      });
+    }
+    setData({
+      routeKey: `${projectId}:storyboard`,
+      detail: detailResult.data,
+      workflow: workflowResult.data,
+    });
+    setHasStoryboard(storyboardResult.data.content !== null);
+    setStoryboardRefresh((current) => ({
+      revision: (current?.revision ?? 0) + 1,
+      response: storyboardResult.data as StoryboardContentResponse,
+    }));
+  }, [projectId, validStageKey]);
+
   if (!definition || !validStageKey) {
     const overviewPath = projectId ? projectWorkspacePath(projectId) : "/projects";
     return (
@@ -264,7 +313,9 @@ export function ProjectStagePage() {
               "REGENERATE_CREATIVE",
             ].includes(action),
         )
-      : stageActions;
+      : validStageKey === "storyboard"
+        ? stageActions.filter((action) => action !== "GENERATE_STORYBOARD")
+        : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
 
   return (
@@ -325,7 +376,9 @@ export function ProjectStagePage() {
         projectId={detail.project_id}
         stageKey={validStageKey}
         creativeRefresh={creativeRefresh}
+        storyboardRefresh={storyboardRefresh}
         onCreativeLoaded={handleCreativeLoaded}
+        onStoryboardLoaded={handleStoryboardLoaded}
       />
 
       {validStageKey === "creative" && (
@@ -344,6 +397,15 @@ export function ProjectStagePage() {
             disabled={creativeTaskActive}
           />
         </>
+      )}
+
+      {validStageKey === "storyboard" && (
+        <StoryboardGenerateAction
+          projectId={detail.project_id}
+          availableActions={workflow.available_actions}
+          hasStoryboard={hasStoryboard}
+          onTerminalRefresh={refreshStoryboardState}
+        />
       )}
 
       <ShotsStageContent
@@ -375,6 +437,8 @@ export function ProjectStagePage() {
         <p className="stage-readonly-note">
           {validStageKey === "creative"
             ? "Creative 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
+            : validStageKey === "storyboard"
+              ? "Storyboard 生成操作以 Backend 当前状态为准；审核操作仍仅展示，不会执行。"
             : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>

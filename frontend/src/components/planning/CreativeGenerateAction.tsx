@@ -3,8 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ApiClientError,
   generateCreative,
-  getProjectTasks,
-  getTask,
   regenerateCreative,
   reviseCreative,
 } from "../../api/client";
@@ -13,11 +11,14 @@ import type {
   TaskOperation,
   TaskRecord,
 } from "../../api/types";
+import {
+  toTaskActionError,
+  useProjectTaskPolling,
+} from "../../hooks/useProjectTaskPolling";
+import type { TaskActionError } from "../../hooks/useProjectTaskPolling";
 
 
-const POLL_INTERVAL_MS = 2_000;
 const MAX_FEEDBACK_LENGTH = 4_000;
-const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 const CREATIVE_TASK_OPERATIONS: ReadonlySet<TaskOperation> = new Set([
   "CREATIVE_GENERATE",
   "CREATIVE_REVISE",
@@ -37,27 +38,10 @@ interface CreativeGenerateActionProps {
   onActiveTaskChange?: (active: boolean) => void;
 }
 
-interface ActionError {
-  code: string;
-  correlationId: string | null;
-}
-
 function isCreativeTask(
   task: TaskRecord,
 ): task is TaskRecord & { operation: CreativeTaskOperation } {
   return CREATIVE_TASK_OPERATIONS.has(task.operation);
-}
-
-function isActiveCreativeTask(task: TaskRecord): boolean {
-  return isCreativeTask(task) && ACTIVE_STATUSES.has(task.status);
-}
-
-function actionError(caught: unknown): ActionError {
-  return {
-    code: caught instanceof ApiClientError ? caught.code : "UNKNOWN_ERROR",
-    correlationId:
-      caught instanceof ApiClientError ? caught.correlationId : null,
-  };
 }
 
 function taskStatusCopy(
@@ -109,7 +93,7 @@ function creativeTaskCopy(
   return "正在生成创意…";
 }
 
-function safeErrorCopy(error: ActionError): string {
+function safeErrorCopy(error: TaskActionError): string {
   if (error.code === "PROJECT_BUSY") {
     return "项目当前正在执行其他任务。";
   }
@@ -132,116 +116,42 @@ export function CreativeGenerateAction({
   onTerminalRefresh,
   onActiveTaskChange,
 }: CreativeGenerateActionProps) {
-  const [task, setTask] = useState<TaskRecord | null>(null);
   const [submittingOperation, setSubmittingOperation] =
     useState<CreativeTaskOperation | null>(null);
-  const [error, setError] = useState<ActionError | null>(null);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [regenerateConfirming, setRegenerateConfirming] = useState(false);
-  const [terminalRefreshPending, setTerminalRefreshPending] = useState(false);
   const submissionGuard = useRef(false);
-  const handledTerminalTasks = useRef(new Set<string>());
   const canGenerate = availableActions.includes("GENERATE_CREATIVE");
   const canRevise = availableActions.includes("REVISE_CREATIVE");
   const canRegenerate = availableActions.includes("REGENERATE_CREATIVE");
-  const active = Boolean(task && ACTIVE_STATUSES.has(task.status));
+  const {
+    task,
+    setTask,
+    error,
+    setError,
+    active,
+    terminalRefreshPending,
+    attachToExistingTask,
+  } = useProjectTaskPolling({
+    projectId,
+    isTask: isCreativeTask,
+    onTerminalRefresh,
+  });
   const busy = active || submittingOperation !== null || terminalRefreshPending;
   const normalizedFeedback = feedback.trim();
 
   useEffect(() => {
-    let cancelled = false;
-    setTask(null);
-    setError(null);
     setFeedbackOpen(false);
     setFeedback("");
     setRegenerateConfirming(false);
-    setTerminalRefreshPending(false);
-    handledTerminalTasks.current.clear();
-
-    void getProjectTasks(projectId)
-      .then((result) => {
-        if (cancelled) return;
-        const recovered = result.data.tasks.find(isActiveCreativeTask);
-        if (recovered) setTask(recovered);
-      })
-      .catch((caught) => {
-        if (!cancelled) setError(actionError(caught));
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    setSubmittingOperation(null);
   }, [projectId]);
 
   useEffect(() => {
     onActiveTaskChange?.(busy);
     return () => onActiveTaskChange?.(false);
   }, [busy, onActiveTaskChange]);
-
-  useEffect(() => {
-    if (!task || !ACTIVE_STATUSES.has(task.status)) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const poll = async () => {
-      try {
-        const result = await getTask(task.task_id);
-        if (cancelled) return;
-        if (
-          result.data.project_id !== projectId ||
-          !isCreativeTask(result.data) ||
-          result.data.operation !== task.operation
-        ) {
-          throw new ApiClientError({
-            message: "Task response did not match the active Creative task.",
-            code: "INVALID_RESPONSE",
-          });
-        }
-        setTask(result.data);
-        setError(null);
-      } catch (caught) {
-        if (!cancelled) setError(actionError(caught));
-      }
-    };
-
-    timer = setTimeout(poll, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [projectId, task]);
-
-  useEffect(() => {
-    if (!task || ACTIVE_STATUSES.has(task.status)) return;
-    if (handledTerminalTasks.current.has(task.task_id)) return;
-    handledTerminalTasks.current.add(task.task_id);
-    let cancelled = false;
-    setTerminalRefreshPending(true);
-    void onTerminalRefresh()
-      .then(() => {
-        if (!cancelled) setTerminalRefreshPending(false);
-      })
-      .catch((caught) => {
-        if (!cancelled) setError(actionError(caught));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [onTerminalRefresh, task]);
-
-  const attachToExistingTask = async (): Promise<boolean> => {
-    const result = await getProjectTasks(projectId);
-    const creativeTask = result.data.tasks.find(isActiveCreativeTask);
-    if (creativeTask) {
-      setTask(creativeTask);
-      setError(null);
-      setFeedbackOpen(false);
-      setRegenerateConfirming(false);
-      return true;
-    }
-    return false;
-  };
 
   const submit = async (operation: CreativeTaskOperation) => {
     const allowed =
@@ -282,12 +192,16 @@ export function CreativeGenerateAction({
       setFeedbackOpen(false);
       setRegenerateConfirming(false);
     } catch (caught) {
-      const mapped = actionError(caught);
+      const mapped = toTaskActionError(caught);
       if (mapped.code === "PROJECT_BUSY") {
         try {
-          if (await attachToExistingTask()) return;
+          if (await attachToExistingTask()) {
+            setFeedbackOpen(false);
+            setRegenerateConfirming(false);
+            return;
+          }
         } catch (recoveryError) {
-          setError(actionError(recoveryError));
+          setError(toTaskActionError(recoveryError));
           return;
         }
       }

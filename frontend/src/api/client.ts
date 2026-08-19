@@ -1691,6 +1691,22 @@ export async function generateCreative(
   };
 }
 
+export async function generateStoryboard(
+  projectId: string,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/planning/storyboard/generate`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
 export async function reviseCreative(
   projectId: string,
   feedback: string,

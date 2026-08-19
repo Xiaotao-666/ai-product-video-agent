@@ -203,6 +203,37 @@ describe("PlanningStageContent", () => {
     ).toBeInTheDocument();
   });
 
+  it("replaces the empty Storyboard with a terminal refresh snapshot", async () => {
+    const emptyResponse: StoryboardContentResponse = {
+      project_id: "LEE柠檬",
+      status: "NOT_STARTED",
+      content: null,
+    };
+    const onStoryboardLoaded = vi.fn();
+    mockStoryboard.mockResolvedValue({ data: emptyResponse, correlationId: "req_empty" });
+    const view = render(
+      <PlanningStageContent
+        projectId="LEE柠檬"
+        stageKey="storyboard"
+        onStoryboardLoaded={onStoryboardLoaded}
+      />,
+    );
+    expect(await screen.findByText("分镜规划尚未生成。")).toBeInTheDocument();
+
+    view.rerender(
+      <PlanningStageContent
+        projectId="LEE柠檬"
+        stageKey="storyboard"
+        storyboardRefresh={{ revision: 1, response: storyboardResponse }}
+        onStoryboardLoaded={onStoryboardLoaded}
+      />,
+    );
+
+    expect(await screen.findByText("黄色背景与柠檬轮廓")).toBeInTheDocument();
+    expect(mockStoryboard).toHaveBeenCalledTimes(1);
+    expect(onStoryboardLoaded).toHaveBeenLastCalledWith(storyboardResponse);
+  });
+
   it("shows multiple Video Prompts and their versions", async () => {
     renderContent("video-prompt");
     expect(await screen.findByText("Prompt Version v2")).toBeInTheDocument();

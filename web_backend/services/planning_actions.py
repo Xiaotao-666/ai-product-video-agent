@@ -120,6 +120,26 @@ class CreativeActionService:
             callable_=lambda: self._run_regenerate(canonical_project_id),
         )
 
+    def submit_storyboard_generate(
+        self,
+        project_id: str,
+        *,
+        correlation_id: str | None,
+    ) -> TaskRecord:
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        self._require_no_active_task(canonical_project_id)
+        self._require_storyboard_generate_allowed(canonical_project_id)
+        if not self._deepseek_available():
+            raise CapabilityUnavailable("planning provider is not configured")
+        return self._task_service.submit(
+            project_id=canonical_project_id,
+            operation=TaskOperation.STORYBOARD_GENERATE,
+            correlation_id=correlation_id,
+            callable_=lambda: self._run_storyboard_generate(canonical_project_id),
+        )
+
     def approve(self, project_id: str) -> ProjectWorkflowResponse:
         """Synchronously approve Creative under the per-project write lock."""
 
@@ -190,6 +210,11 @@ class CreativeActionService:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.REGENERATE_CREATIVE not in workflow.available_actions:
             raise ActionNotAllowed("Creative regeneration is not allowed")
+
+    def _require_storyboard_generate_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.GENERATE_STORYBOARD not in workflow.available_actions:
+            raise ActionNotAllowed("Storyboard generation is not allowed")
 
     def _require_no_active_task(self, project_id: str) -> None:
         if self._task_service.active_for_project(project_id) is not None:
@@ -419,5 +444,115 @@ class CreativeActionService:
 
         return TaskResultReference(
             resource_type="CREATIVE",
+            resource_id=project_id,
+        )
+
+    def _run_storyboard_generate(self, project_id: str) -> TaskResultReference:
+        try:
+            self._require_storyboard_generate_allowed(project_id)
+        except ActionNotAllowed:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许生成分镜。",
+            )
+
+        deepseek_key = self._capability_service.deepseek_api_key()
+        if not deepseek_key:
+            _task_failure(
+                "CAPABILITY_UNAVAILABLE",
+                "分镜生成服务尚未配置。",
+                retryable=True,
+            )
+
+        from pydantic import ValidationError
+
+        from evaluation import EvaluationRecorder
+        from project_manager import ProjectDirectoryError, create_project_paths
+        from project_state import ProjectCheckpoint, ProjectStateError, StageStatus
+        from prompt_generator import ProductVideoRequest, PromptGenerationError
+        from reference_assets import ReferenceAssetManager
+        from storyboard import StoryboardError
+        from storyboard_workflow import (
+            StoryboardStageDataError,
+            StoryboardStageStateError,
+            generate_storyboard_stage,
+        )
+        from task_logger import TaskLogger
+
+        try:
+            paths = create_project_paths(
+                self._project_repository.resolve_project_dir(project_id)
+            )
+            checkpoint = ProjectCheckpoint.load(paths)
+            request = ProductVideoRequest.model_validate(checkpoint.data["request"])
+        except (KeyError, ValidationError, ProjectStateError):
+            _task_failure(
+                "PROJECT_DATA_CORRUPT",
+                "项目数据无法读取。",
+            )
+
+        logger = TaskLogger(paths)
+        logger.register_secret(deepseek_key)
+        reference_manager = ReferenceAssetManager(paths, logger)
+        reference_assets = reference_manager.list_assets()
+        reference_context = {
+            "available": bool(reference_assets),
+            "asset_count": len(reference_assets),
+            "asset_ids": [str(item.get("asset_id")) for item in reference_assets],
+        }
+        evaluation_recorder = EvaluationRecorder(paths)
+
+        try:
+            generate_storyboard_stage(
+                paths,
+                request,
+                checkpoint,
+                deepseek_key,
+                logger,
+                evaluation_recorder=evaluation_recorder,
+                reference_asset_context=reference_context,
+            )
+        except StoryboardStageStateError:
+            _task_failure(
+                "ACTION_NOT_ALLOWED",
+                "当前项目状态不允许生成分镜。",
+            )
+        except StoryboardStageDataError:
+            _task_failure(
+                "PROJECT_DATA_CORRUPT",
+                "已审核创意无法读取。",
+            )
+        except Exception as error:
+            if checkpoint.status == StageStatus.RUNNING.value:
+                checkpoint.fail(error)
+            logger.error(error, stage="storyboard")
+            if isinstance(error, PromptGenerationError):
+                _task_failure(
+                    "PROVIDER_REQUEST_FAILED",
+                    "分镜生成服务暂时不可用，请稍后重试。",
+                    retryable=True,
+                )
+            if isinstance(error, StoryboardError):
+                if "SCHEDULE_UNSATISFIABLE" in str(error):
+                    _task_failure(
+                        "SCHEDULE_UNSATISFIABLE",
+                        "分镜视听时间规划无法满足当前约束。",
+                        retryable=True,
+                    )
+                _task_failure(
+                    "STORYBOARD_OUTPUT_INVALID",
+                    "分镜生成结果无法使用。",
+                    retryable=True,
+                )
+            if isinstance(error, ProjectDirectoryError):
+                _task_failure(
+                    "PROJECT_WRITE_FAILED",
+                    "分镜结果无法保存。",
+                    retryable=True,
+                )
+            raise
+
+        return TaskResultReference(
+            resource_type="STORYBOARD",
             resource_id=project_id,
         )

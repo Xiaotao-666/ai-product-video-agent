@@ -1,9 +1,10 @@
 # Web Backend Phase 1
 
 This directory contains the local FastAPI backend for the AI Product Video
-Agent. Creative generation, approval, targeted revision, and full regeneration
-are the currently executable planning actions. Storyboard generation, video
-generation, assembly, and export actions remain unavailable.
+Agent. Creative generation, approval, targeted revision, full regeneration,
+and initial Storyboard generation are the currently executable planning
+actions. Storyboard review actions, video generation, assembly, and export
+actions remain unavailable.
 
 ## Local start
 
@@ -38,6 +39,7 @@ POST /api/projects/{project_id}/planning/creative/generate
 POST /api/projects/{project_id}/planning/creative/approve
 POST /api/projects/{project_id}/planning/creative/revise
 POST /api/projects/{project_id}/planning/creative/regenerate
+POST /api/projects/{project_id}/planning/storyboard/generate
 ```
 
 The workflow endpoint reports deterministic `available_actions`. The Creative
@@ -91,6 +93,18 @@ Web task record. The Web runner does not retry provider calls. A successful
 task stores only a small Creative resource reference; clients reload Creative
 and Workflow through the GET APIs. Approval remains a short synchronous action
 and never starts Storyboard automatically.
+
+## Storyboard generation task
+
+Storyboard generation is available only after Creative approval and uses the
+durable `STORYBOARD_GENERATE` operation. The endpoint returns HTTP 202, and the
+worker revalidates workflow state after acquiring the project lock. Shared Core
+logic remains responsible for the DeepSeek prompt, structured-output checks,
+deterministic A/V scheduling, canonical atomic save, evaluation history, and
+transition to Storyboard review. A successful task returns only a small
+Storyboard resource reference; clients reload Project, Workflow, and
+Storyboard through GET APIs. Generation never auto-approves Storyboard or
+starts Video Prompt generation.
 
 The Backend loads the same repository `.env` file as the CLI during server
 startup. Capability preflight checks only whether DeepSeek is configured and

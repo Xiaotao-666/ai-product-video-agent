@@ -5,6 +5,7 @@ import {
   approveCreative,
   createProject,
   generateCreative,
+  generateStoryboard,
   getAssembly,
   getAssemblyVideoUrl,
   getCapabilities,
@@ -1067,6 +1068,35 @@ describe("API client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/generate",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("submits Storyboard generation with POST and accepts a 202 task", async () => {
+    const queuedTask = {
+      ...taskPayload,
+      operation: "STORYBOARD_GENERATE",
+      status: "QUEUED",
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(queuedTask, 202, { "X-Correlation-ID": "req_storyboard" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateStoryboard("LEE柠檬");
+
+    expect(result.data.operation).toBe("STORYBOARD_GENERATE");
+    expect(result.correlationId).toBe("req_storyboard");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/storyboard/generate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.not.objectContaining({ body: expect.anything() }),
     );
   });
 

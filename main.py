@@ -67,6 +67,7 @@ from storyboard import (
     revise_shot_video_prompt,
     revise_video_prompts,
 )
+from storyboard_workflow import generate_storyboard_stage
 from shot_review import (
     ShotReviewError,
     active_prompt_payload,
@@ -510,32 +511,15 @@ def run_pipeline(
     if checkpoint.stage_status(ProjectStage.STORYBOARD) == StageStatus.COMPLETED:
         board = load_artifact(paths.storyboard_file_path(), Storyboard, "Storyboard")
     else:
-        checkpoint.update_stage(ProjectStage.STORYBOARD, StageStatus.RUNNING)
-        task_logger.set_stage("storyboard")
-        board = _record_prompt_evaluation(
-            evaluation_recorder,
-            "storyboard",
-            generate_storyboard(
-                request,
-                brief,
-                deepseek_key,
-                task_logger,
-                **_visual_kwargs(
-                    visual_analysis_result,
-                    visual_constraints,
-                    reference_asset_context,
-                ),
-            ),
+        board = generate_storyboard_stage(
+            paths,
             request,
-            visual_analysis_result,
-            visual_constraints,
-            reference_asset_context,
-            creative_brief=brief.model_dump(),
+            checkpoint,
+            deepseek_key,
+            task_logger,
+            evaluation_recorder=evaluation_recorder,
+            reference_asset_context=reference_asset_context,
         )
-        paths.save_json(paths.storyboard_file_path(), board.model_dump())
-        checkpoint.update_stage(ProjectStage.STORYBOARD, StageStatus.COMPLETED)
-        checkpoint.advance_to(ProjectStage.STORYBOARD_REVIEW, StageStatus.WAITING_REVIEW)
-        task_logger.event("STORYBOARD_GENERATED", "Storyboard 生成成功")
 
     if checkpoint.stage_status(ProjectStage.STORYBOARD_REVIEW) != StageStatus.APPROVED:
         board = human_review_gate(

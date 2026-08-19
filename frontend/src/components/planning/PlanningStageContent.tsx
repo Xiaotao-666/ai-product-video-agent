@@ -26,12 +26,19 @@ interface PlanningStageContentProps {
   projectId: string;
   stageKey: StageKey;
   creativeRefresh?: CreativeRefreshSnapshot | null;
+  storyboardRefresh?: StoryboardRefreshSnapshot | null;
   onCreativeLoaded?: (response: CreativeContentResponse) => void;
+  onStoryboardLoaded?: (response: StoryboardContentResponse) => void;
 }
 
 export interface CreativeRefreshSnapshot {
   revision: number;
   response: CreativeContentResponse;
+}
+
+export interface StoryboardRefreshSnapshot {
+  revision: number;
+  response: StoryboardContentResponse;
 }
 
 interface ContentError {
@@ -306,7 +313,9 @@ export function PlanningStageContent({
   projectId,
   stageKey,
   creativeRefresh = null,
+  storyboardRefresh = null,
   onCreativeLoaded,
+  onStoryboardLoaded,
 }: PlanningStageContentProps) {
   const planningStageKey = isPlanningStageKey(stageKey) ? stageKey : null;
   const [state, setState] = useState<ContentState>("loading");
@@ -329,6 +338,9 @@ export function PlanningStageContent({
       if (planningStageKey === "creative") {
         onCreativeLoaded?.(result as CreativeContentResponse);
       }
+      if (planningStageKey === "storyboard") {
+        onStoryboardLoaded?.(result as StoryboardContentResponse);
+      }
       setResponse(result);
       setState("success");
     } catch (caught) {
@@ -338,7 +350,7 @@ export function PlanningStageContent({
       });
       setState("error");
     }
-  }, [onCreativeLoaded, planningStageKey, projectId]);
+  }, [onCreativeLoaded, onStoryboardLoaded, planningStageKey, projectId]);
 
   useEffect(() => {
     if (planningStageKey) void loadContent();
@@ -355,6 +367,23 @@ export function PlanningStageContent({
       setState("success");
     }
   }, [creativeRefresh, onCreativeLoaded, planningStageKey, projectId]);
+
+  useEffect(() => {
+    if (
+      planningStageKey === "storyboard" &&
+      storyboardRefresh?.response.project_id === projectId
+    ) {
+      onStoryboardLoaded?.(storyboardRefresh.response);
+      setResponse(storyboardRefresh.response);
+      setError(null);
+      setState("success");
+    }
+  }, [
+    onStoryboardLoaded,
+    planningStageKey,
+    projectId,
+    storyboardRefresh,
+  ]);
 
   if (!planningStageKey) return null;
 

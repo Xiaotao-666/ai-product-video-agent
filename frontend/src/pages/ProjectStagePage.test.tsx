@@ -11,6 +11,7 @@ import {
   ApiClientError,
   approveCreative,
   generateCreative,
+  generateStoryboard,
   getAssembly,
   getCreativeContent,
   getExport,
@@ -31,6 +32,7 @@ import type {
   CreativeContentResponse,
   ProjectDetail,
   ProjectWorkflowResponse,
+  StoryboardContentResponse,
   WorkflowState,
 } from "../api/types";
 import { ProjectStagePage } from "./ProjectStagePage";
@@ -52,6 +54,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getVideoPrompts: vi.fn(),
     getVoice: vi.fn(),
     generateCreative: vi.fn(),
+    generateStoryboard: vi.fn(),
     getTask: vi.fn(),
     approveCreative: vi.fn(),
     regenerateCreative: vi.fn(),
@@ -72,10 +75,40 @@ const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockGetVoice = vi.mocked(getVoice);
 const mockGenerateCreative = vi.mocked(generateCreative);
+const mockGenerateStoryboard = vi.mocked(generateStoryboard);
 const mockGetTask = vi.mocked(getTask);
 const mockApproveCreative = vi.mocked(approveCreative);
 const mockRegenerateCreative = vi.mocked(regenerateCreative);
 const mockReviseCreative = vi.mocked(reviseCreative);
+
+function storyboardContentResponse(
+  status = "WAITING_REVIEW",
+): StoryboardContentResponse {
+  return {
+    project_id: "LEE柠檬",
+    status,
+    content: {
+      total_duration_seconds: 18,
+      shots: [
+        {
+          shot_id: 1,
+          duration_seconds: 6,
+          purpose: "建立产品视觉",
+          visual: "明亮黄色背景中的柠檬产品微距",
+          camera: "缓慢推近",
+          voiceover_cues: [
+            { text: "新鲜看得见", start_offset: 2, end_offset: 4, position: null },
+          ],
+          subtitle_cues: [],
+          video_constraints: {
+            reserve_subtitle_space: true,
+            subtitle_safe_area: "bottom_center",
+          },
+        },
+      ],
+    },
+  };
+}
 
 function creativeContentResponse(
   status = "APPROVED",
@@ -229,6 +262,7 @@ describe("ProjectStagePage", () => {
     mockGetVideoPrompts.mockReset();
     mockGetVoice.mockReset();
     mockGenerateCreative.mockReset();
+    mockGenerateStoryboard.mockReset();
     mockGetTask.mockReset();
     mockApproveCreative.mockReset();
     mockRegenerateCreative.mockReset();
@@ -654,6 +688,79 @@ describe("ProjectStagePage", () => {
     expect(screen.getByTestId("route-location")).toHaveTextContent(
       "/stages/storyboard",
     );
+  });
+
+  it("generates Storyboard through a durable task and refreshes canonical content", async () => {
+    const ready = workflow({
+      workflow_phase: "STORYBOARD",
+      status: "APPROVED",
+      available_actions: ["GENERATE_STORYBOARD"],
+    });
+    ready.stages.creative.status = "APPROVED";
+    ready.stages.storyboard.status = "NOT_STARTED";
+    const waiting = workflow({
+      workflow_phase: "STORYBOARD_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_STORYBOARD",
+        "REVISE_STORYBOARD",
+        "REGENERATE_STORYBOARD",
+      ],
+    });
+    waiting.stages.creative.status = "APPROVED";
+    waiting.stages.storyboard.status = "WAITING_REVIEW";
+
+    mockGetProject
+      .mockResolvedValueOnce({ data: detail(ready), correlationId: "req_initial" })
+      .mockResolvedValue({ data: detail(waiting), correlationId: "req_refreshed" });
+    mockGetProjectWorkflow
+      .mockResolvedValueOnce({ data: ready, correlationId: "req_initial" })
+      .mockResolvedValue({ data: waiting, correlationId: "req_refreshed" });
+    mockGetStoryboardContent
+      .mockResolvedValueOnce({
+        data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },
+        correlationId: "req_initial_storyboard",
+      })
+      .mockResolvedValue({
+        data: storyboardContentResponse(),
+        correlationId: "req_refreshed_storyboard",
+      });
+    mockGenerateStoryboard.mockResolvedValue({
+      data: {
+        task_id: `task_${"d".repeat(32)}`,
+        project_id: "LEE柠檬",
+        operation: "STORYBOARD_GENERATE",
+        status: "SUCCEEDED",
+        created_at: "2026-08-19T14:30:00Z",
+        started_at: "2026-08-19T14:30:01Z",
+        finished_at: "2026-08-19T14:30:02Z",
+        correlation_id: "req_storyboard_generate",
+        error: null,
+        result: {
+          resource_type: "STORYBOARD",
+          resource_id: "LEE柠檬",
+          version: null,
+        },
+      },
+      correlationId: "req_storyboard_generate",
+    });
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/storyboard");
+    expect(await screen.findByText("分镜规划尚未生成。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "生成分镜" }));
+
+    expect(await screen.findByText("明亮黄色背景中的柠檬产品微距")).toBeInTheDocument();
+    expect(mockGenerateStoryboard).toHaveBeenCalledTimes(1);
+    expect(mockGenerateStoryboard).toHaveBeenCalledWith("LEE柠檬");
+    expect(mockGetProject).toHaveBeenCalledTimes(2);
+    expect(mockGetProjectWorkflow).toHaveBeenCalledTimes(2);
+    expect(mockGetStoryboardContent).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("已生成")).toBeInTheDocument();
+    expect(screen.getAllByText("等待审核").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "生成分镜" })).not.toBeInTheDocument();
+    expect(screen.getByText("审核分镜")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "审核分镜" })).not.toBeInTheDocument();
+    expect(screen.getByText(/审核操作仍仅展示/)).toBeInTheDocument();
   });
 
   it("switches continuously through every Workflow Stage without a blank render", async () => {
