@@ -40,6 +40,7 @@ POST /api/projects/{project_id}/planning/creative/approve
 POST /api/projects/{project_id}/planning/creative/revise
 POST /api/projects/{project_id}/planning/creative/regenerate
 POST /api/projects/{project_id}/planning/storyboard/generate
+POST /api/projects/{project_id}/planning/storyboard/approve
 ```
 
 The workflow endpoint reports deterministic `available_actions`. The Creative
@@ -105,6 +106,12 @@ transition to Storyboard review. A successful task returns only a small
 Storyboard resource reference; clients reload Project, Workflow, and
 Storyboard through GET APIs. Generation never auto-approves Storyboard or
 starts Video Prompt generation.
+
+Storyboard approval is a short synchronous HTTP 200 action. It rejects active
+project tasks, validates `APPROVE_STORYBOARD` before and after acquiring the
+existing project write lock, then calls the shared Core approval transition.
+It creates no durable task, does not modify the Storyboard canonical, and does
+not generate Video Prompts or call any provider.
 
 The Backend loads the same repository `.env` file as the CLI during server
 startup. Capability preflight checks only whether DeepSeek is configured and

@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   approveCreative,
+  approveStoryboard,
   generateCreative,
   generateStoryboard,
   getAssembly,
@@ -57,6 +58,7 @@ vi.mock("../api/client", async (importOriginal) => {
     generateStoryboard: vi.fn(),
     getTask: vi.fn(),
     approveCreative: vi.fn(),
+    approveStoryboard: vi.fn(),
     regenerateCreative: vi.fn(),
     reviseCreative: vi.fn(),
   };
@@ -78,6 +80,7 @@ const mockGenerateCreative = vi.mocked(generateCreative);
 const mockGenerateStoryboard = vi.mocked(generateStoryboard);
 const mockGetTask = vi.mocked(getTask);
 const mockApproveCreative = vi.mocked(approveCreative);
+const mockApproveStoryboard = vi.mocked(approveStoryboard);
 const mockRegenerateCreative = vi.mocked(regenerateCreative);
 const mockReviseCreative = vi.mocked(reviseCreative);
 
@@ -265,6 +268,7 @@ describe("ProjectStagePage", () => {
     mockGenerateStoryboard.mockReset();
     mockGetTask.mockReset();
     mockApproveCreative.mockReset();
+    mockApproveStoryboard.mockReset();
     mockRegenerateCreative.mockReset();
     mockReviseCreative.mockReset();
     mockGetProjectTasks.mockResolvedValue({
@@ -758,9 +762,83 @@ describe("ProjectStagePage", () => {
     expect(screen.getByText("已生成")).toBeInTheDocument();
     expect(screen.getAllByText("等待审核").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "生成分镜" })).not.toBeInTheDocument();
-    expect(screen.getByText("审核分镜")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "审核分镜" })).not.toBeInTheDocument();
-    expect(screen.getByText(/审核操作仍仅展示/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeInTheDocument();
+    expect(screen.getByText("修改分镜")).toBeInTheDocument();
+    expect(screen.getByText("重新生成分镜")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "修改分镜" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新生成分镜" })).not.toBeInTheDocument();
+    expect(screen.getByText(/修改与重新生成仍仅展示/)).toBeInTheDocument();
+  });
+
+  it("approves Storyboard synchronously, refreshes durable state, and only navigates next", async () => {
+    const waiting = workflow({
+      workflow_phase: "STORYBOARD_REVIEW",
+      status: "WAITING_REVIEW",
+      available_actions: [
+        "APPROVE_STORYBOARD",
+        "REVISE_STORYBOARD",
+        "REGENERATE_STORYBOARD",
+      ],
+    });
+    waiting.stages.creative.status = "APPROVED";
+    waiting.stages.storyboard.status = "WAITING_REVIEW";
+    waiting.stages.video_prompt.status = "NOT_STARTED";
+    const approved = workflow({
+      workflow_phase: "VIDEO_PROMPT",
+      status: "APPROVED",
+      available_actions: ["GENERATE_VIDEO_PROMPTS"],
+    });
+    approved.stages.creative.status = "APPROVED";
+    approved.stages.storyboard.status = "APPROVED";
+    approved.stages.video_prompt.status = "NOT_STARTED";
+
+    mockGetProject
+      .mockResolvedValueOnce({ data: detail(waiting), correlationId: "req_initial" })
+      .mockResolvedValue({ data: detail(approved), correlationId: "req_refreshed" });
+    mockGetProjectWorkflow
+      .mockResolvedValueOnce({ data: waiting, correlationId: "req_initial" })
+      .mockResolvedValue({ data: approved, correlationId: "req_refreshed" });
+    mockGetStoryboardContent.mockResolvedValue({
+      data: storyboardContentResponse(),
+      correlationId: "req_storyboard",
+    });
+    mockGetVideoPrompts.mockResolvedValue({
+      data: { project_id: "LEE柠檬", status: "NOT_STARTED", content: null },
+      correlationId: "req_video_prompt_empty",
+    });
+    mockApproveStoryboard.mockResolvedValue({
+      data: approved,
+      correlationId: "req_storyboard_approve",
+    });
+
+    renderStage("/projects/LEE%E6%9F%A0%E6%AA%AC/stages/storyboard");
+    expect(await screen.findByText("明亮黄色背景中的柠檬产品微距")).toBeInTheDocument();
+    expect(screen.getByText("修改分镜")).toBeInTheDocument();
+    expect(screen.getByText("重新生成分镜")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "修改分镜" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新生成分镜" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "审核通过" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("确认通过当前分镜方案？");
+    fireEvent.click(screen.getByRole("button", { name: "确认通过" }));
+
+    expect(await screen.findByText("Storyboard 已审核通过。")).toBeInTheDocument();
+    expect(mockApproveStoryboard).toHaveBeenCalledTimes(1);
+    expect(mockApproveStoryboard).toHaveBeenCalledWith("LEE柠檬");
+    expect(mockGetProject).toHaveBeenCalledTimes(2);
+    expect(mockGetProjectWorkflow).toHaveBeenCalledTimes(2);
+    expect(mockGetStoryboardContent).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByText("已审核").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "前往视频提示词" }));
+    expect(
+      await screen.findByRole("heading", { name: "视频提示词" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("route-location")).toHaveTextContent(
+      "/stages/video-prompt",
+    );
+    expect(await screen.findByText("视频提示词尚未生成。")).toBeInTheDocument();
+    expect(mockGetVideoPrompts).toHaveBeenCalledTimes(1);
   });
 
   it("switches continuously through every Workflow Stage without a blank render", async () => {

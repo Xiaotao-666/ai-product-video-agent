@@ -233,3 +233,25 @@ def approve_creative(
         raise registered_api_error("ACTION_NOT_ALLOWED") from error
     except ProjectBusy as error:
         raise registered_api_error("PROJECT_BUSY") from error
+
+
+@router.post(
+    "/projects/{project_id}/planning/storyboard/approve",
+    response_model=ProjectWorkflowResponse,
+    status_code=200,
+)
+def approve_storyboard(
+    project_id: str,
+    service: Annotated[
+        CreativeActionService,
+        Depends(get_creative_action_service),
+    ],
+) -> ProjectWorkflowResponse:
+    try:
+        return service.approve_storyboard(project_id)
+    except ProjectRepositoryError as error:
+        _raise_project_error(error)
+    except ActionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error

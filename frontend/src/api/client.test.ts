@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   approveCreative,
+  approveStoryboard,
   createProject,
   generateCreative,
   generateStoryboard,
@@ -1178,6 +1179,41 @@ describe("API client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/creative/approve",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("approves Storyboard synchronously without creating a task request", async () => {
+    const approvedWorkflow = {
+      ...projectWorkflowPayload,
+      workflow_phase: "VIDEO_PROMPT",
+      status: "APPROVED",
+      stages: {
+        ...workflowStagesPayload,
+        storyboard: { status: "APPROVED" },
+        video_prompt: { status: "NOT_STARTED" },
+      },
+      available_actions: ["GENERATE_VIDEO_PROMPTS"],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(approvedWorkflow, 200, {
+        "X-Correlation-ID": "req_storyboard_approve",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await approveStoryboard("LEE柠檬");
+
+    expect(result.data.workflow_phase).toBe("VIDEO_PROMPT");
+    expect(result.data.stages.storyboard.status).toBe("APPROVED");
+    expect(result.data.stages.video_prompt.status).toBe("NOT_STARTED");
+    expect(result.correlationId).toBe("req_storyboard_approve");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/planning/storyboard/approve",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.not.objectContaining({ body: expect.anything() }),
     );
   });
 

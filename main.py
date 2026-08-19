@@ -67,7 +67,10 @@ from storyboard import (
     revise_shot_video_prompt,
     revise_video_prompts,
 )
-from storyboard_workflow import generate_storyboard_stage
+from storyboard_workflow import (
+    approve_storyboard_stage,
+    generate_storyboard_stage,
+)
 from shot_review import (
     ShotReviewError,
     active_prompt_payload,
@@ -583,9 +586,7 @@ def run_pipeline(
             on_waiting=lambda: checkpoint.advance_to(
                 ProjectStage.STORYBOARD_REVIEW, StageStatus.WAITING_REVIEW
             ),
-            on_approved=lambda: checkpoint.update_stage(
-                ProjectStage.STORYBOARD_REVIEW, StageStatus.APPROVED
-            ),
+            on_approved=lambda: approve_storyboard_stage(checkpoint),
             on_cancel=lambda: checkpoint.cancel(ProjectStage.STORYBOARD_REVIEW),
         )
 

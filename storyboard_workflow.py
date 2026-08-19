@@ -24,6 +24,32 @@ class StoryboardStageDataError(StoryboardStageError):
     """Raised when the approved canonical Creative cannot be loaded."""
 
 
+class StoryboardApprovalError(RuntimeError):
+    """Raised when Core Storyboard state cannot be approved safely."""
+
+
+def approve_storyboard_stage(checkpoint: ProjectCheckpoint) -> None:
+    """Approve Storyboard review without generating Video Prompts.
+
+    CLI and Web share this transition. Interactive review metadata remains the
+    caller's responsibility: CLI records it through ``ReviewRecorder`` while
+    the synchronous Web action creates neither a CLI review record nor a Web
+    durable task.
+    """
+
+    if (
+        checkpoint.stage_status(ProjectStage.STORYBOARD)
+        != StageStatus.COMPLETED
+        or checkpoint.stage_status(ProjectStage.STORYBOARD_REVIEW)
+        != StageStatus.WAITING_REVIEW
+    ):
+        raise StoryboardApprovalError("Storyboard is not waiting for review")
+    checkpoint.update_stage(
+        ProjectStage.STORYBOARD_REVIEW,
+        StageStatus.APPROVED,
+    )
+
+
 def _require_storyboard_generation_allowed(
     checkpoint: ProjectCheckpoint,
 ) -> None:

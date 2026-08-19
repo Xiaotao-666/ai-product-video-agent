@@ -286,6 +286,145 @@ class StoryboardWorkflowExtractionTests(unittest.TestCase):
                 )
         shared.assert_not_called()
 
+    def mark_storyboard_waiting_review(self) -> None:
+        from project_state import ProjectStage, StageStatus
+
+        self.paths.save_json(
+            self.paths.storyboard_file_path(),
+            self.board().model_dump(),
+        )
+        self.checkpoint.update_stage(ProjectStage.STORYBOARD, StageStatus.COMPLETED)
+        self.checkpoint.update_stage(
+            ProjectStage.STORYBOARD_REVIEW,
+            StageStatus.WAITING_REVIEW,
+        )
+
+    def test_07_shared_approval_transitions_to_video_prompt_without_generating(self):
+        from project_state import ProjectStage, StageStatus
+        from storyboard_workflow import approve_storyboard_stage
+
+        self.mark_storyboard_waiting_review()
+        approve_storyboard_stage(self.checkpoint)
+
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD),
+            StageStatus.COMPLETED,
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD_REVIEW),
+            StageStatus.APPROVED,
+        )
+        self.assertEqual(self.checkpoint.next_stage(), ProjectStage.VIDEO_PROMPT)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.VIDEO_PROMPT),
+            StageStatus.NOT_STARTED,
+        )
+        self.assertFalse(self.paths.video_prompts_path().exists())
+
+    def test_08_shared_approval_rejects_invalid_and_repeated_calls(self):
+        from storyboard_workflow import (
+            StoryboardApprovalError,
+            approve_storyboard_stage,
+        )
+
+        with self.assertRaises(StoryboardApprovalError):
+            approve_storyboard_stage(self.checkpoint)
+        self.mark_storyboard_waiting_review()
+        approve_storyboard_stage(self.checkpoint)
+        with self.assertRaises(StoryboardApprovalError):
+            approve_storyboard_stage(self.checkpoint)
+
+    def test_09_cli_approval_callback_uses_shared_core_callable(self):
+        import main
+
+        self.mark_storyboard_waiting_review()
+
+        class SharedApprovalReached(RuntimeError):
+            pass
+
+        def approve_from_gate(_title, artifact, *_args, **kwargs):
+            self.assertEqual(artifact, "storyboard")
+            kwargs["on_approved"]()
+            self.fail("shared approval should stop this gate")
+
+        with (
+            patch.object(main, "human_review_gate", side_effect=approve_from_gate),
+            patch.object(
+                main,
+                "approve_storyboard_stage",
+                side_effect=SharedApprovalReached,
+            ) as shared,
+        ):
+            with self.assertRaises(SharedApprovalReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        shared.assert_called_once_with(self.checkpoint)
+
+    def test_10_cli_resume_after_approval_enters_video_prompt_once(self):
+        import main
+        from storyboard_workflow import approve_storyboard_stage
+
+        self.mark_storyboard_waiting_review()
+        approve_storyboard_stage(self.checkpoint)
+
+        class VideoPromptReached(RuntimeError):
+            pass
+
+        with (
+            patch.object(main, "generate_storyboard_stage") as storyboard_generate,
+            patch.object(
+                main,
+                "generate_video_prompts",
+                side_effect=VideoPromptReached,
+            ) as video_prompt_generate,
+            patch.object(main, "human_review_gate") as review_gate,
+        ):
+            with self.assertRaises(VideoPromptReached):
+                main.run_pipeline(
+                    self.paths,
+                    self.request,
+                    self.checkpoint,
+                    "mock-key",
+                    {},
+                    self.logger,
+                )
+        storyboard_generate.assert_not_called()
+        review_gate.assert_not_called()
+        video_prompt_generate.assert_called_once()
+
+    def test_11_reset_from_storyboard_clears_review_and_downstream_state(self):
+        from project_state import ProjectStage, StageStatus
+        from storyboard_workflow import approve_storyboard_stage
+
+        self.mark_storyboard_waiting_review()
+        approve_storyboard_stage(self.checkpoint)
+        self.paths.save_json(self.paths.video_prompts_path(), {"legacy": True})
+        self.checkpoint.update_stage(ProjectStage.VIDEO_PROMPT, StageStatus.COMPLETED)
+
+        archived = self.checkpoint.reset_from(ProjectStage.STORYBOARD)
+
+        self.assertGreaterEqual(len(archived), 2)
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD),
+            StageStatus.NOT_STARTED,
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.STORYBOARD_REVIEW),
+            StageStatus.NOT_STARTED,
+        )
+        self.assertEqual(
+            self.checkpoint.stage_status(ProjectStage.VIDEO_PROMPT),
+            StageStatus.NOT_STARTED,
+        )
+        self.assertFalse(self.paths.storyboard_file_path().exists())
+        self.assertFalse(self.paths.video_prompts_path().exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ def _task_failure(code: str, message: str, *, retryable: bool = False) -> None:
 
 
 class CreativeActionService:
-    """Own the supported Creative generation and review Web actions."""
+    """Own the supported Creative and Storyboard planning Web actions."""
 
     def __init__(
         self,
@@ -191,6 +191,56 @@ class CreativeActionService:
 
                 raise ProjectBusy("project write lock is busy") from error
 
+    def approve_storyboard(self, project_id: str) -> ProjectWorkflowResponse:
+        """Synchronously approve Storyboard under the project write lock."""
+
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        with self._task_service.prevent_task_submission():
+            self._require_no_active_task(canonical_project_id)
+            self._require_storyboard_approve_allowed(canonical_project_id)
+
+            try:
+                with self._project_lock_manager.project_write(canonical_project_id):
+                    # Re-read task and workflow state while holding the write
+                    # lock so a stale page cannot approve a changed project.
+                    self._require_no_active_task(canonical_project_id)
+                    self._require_storyboard_approve_allowed(canonical_project_id)
+
+                    from project_manager import create_project_paths
+                    from project_state import ProjectCheckpoint, ProjectStateError
+                    from storyboard_workflow import (
+                        StoryboardApprovalError,
+                        approve_storyboard_stage,
+                    )
+
+                    try:
+                        paths = create_project_paths(
+                            self._project_repository.resolve_project_dir(
+                                canonical_project_id
+                            ),
+                            ensure_directories=False,
+                        )
+                        checkpoint = ProjectCheckpoint.load(paths)
+                        approve_storyboard_stage(checkpoint)
+                    except StoryboardApprovalError as error:
+                        raise ActionNotAllowed(
+                            "Storyboard approval is not allowed"
+                        ) from error
+                    except ProjectStateError as error:
+                        raise ProjectDataCorrupt(
+                            "project checkpoint is unreadable"
+                        ) from error
+
+                    return self._project_repository.get_workflow(
+                        canonical_project_id
+                    )
+            except ProjectLockBusy as error:
+                from web_backend.services.projects import ProjectBusy
+
+                raise ProjectBusy("project write lock is busy") from error
+
     def _require_generate_allowed(self, project_id: str) -> None:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.GENERATE_CREATIVE not in workflow.available_actions:
@@ -215,6 +265,11 @@ class CreativeActionService:
         workflow = self._project_repository.get_workflow(project_id)
         if AvailableAction.GENERATE_STORYBOARD not in workflow.available_actions:
             raise ActionNotAllowed("Storyboard generation is not allowed")
+
+    def _require_storyboard_approve_allowed(self, project_id: str) -> None:
+        workflow = self._project_repository.get_workflow(project_id)
+        if AvailableAction.APPROVE_STORYBOARD not in workflow.available_actions:
+            raise ActionNotAllowed("Storyboard approval is not allowed")
 
     def _require_no_active_task(self, project_id: str) -> None:
         if self._task_service.active_for_project(project_id) is not None:

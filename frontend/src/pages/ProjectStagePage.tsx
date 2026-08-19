@@ -24,6 +24,7 @@ import type {
 import { CreativeGenerateAction } from "../components/planning/CreativeGenerateAction";
 import { CreativeApproveAction } from "../components/planning/CreativeApproveAction";
 import { StoryboardGenerateAction } from "../components/planning/StoryboardGenerateAction";
+import { StoryboardApproveAction } from "../components/planning/StoryboardApproveAction";
 import { ShotsStageContent } from "../components/shots/ShotsStageContent";
 import {
   AVAILABLE_ACTION_LABELS,
@@ -314,7 +315,10 @@ export function ProjectStagePage() {
             ].includes(action),
         )
       : validStageKey === "storyboard"
-        ? stageActions.filter((action) => action !== "GENERATE_STORYBOARD")
+        ? stageActions.filter(
+            (action) =>
+              !["GENERATE_STORYBOARD", "APPROVE_STORYBOARD"].includes(action),
+          )
         : stageActions;
   const overviewPath = projectWorkspacePath(detail.project_id);
 
@@ -400,12 +404,19 @@ export function ProjectStagePage() {
       )}
 
       {validStageKey === "storyboard" && (
-        <StoryboardGenerateAction
-          projectId={detail.project_id}
-          availableActions={workflow.available_actions}
-          hasStoryboard={hasStoryboard}
-          onTerminalRefresh={refreshStoryboardState}
-        />
+        <>
+          <StoryboardGenerateAction
+            projectId={detail.project_id}
+            availableActions={workflow.available_actions}
+            hasStoryboard={hasStoryboard}
+            onTerminalRefresh={refreshStoryboardState}
+          />
+          <StoryboardApproveAction
+            projectId={detail.project_id}
+            availableActions={workflow.available_actions}
+            onApprovedRefresh={refreshStoryboardState}
+          />
+        </>
       )}
 
       <ShotsStageContent
@@ -438,7 +449,7 @@ export function ProjectStagePage() {
           {validStageKey === "creative"
             ? "Creative 生成、修改、重新生成与审核操作均以 Backend 当前状态为准。"
             : validStageKey === "storyboard"
-              ? "Storyboard 生成操作以 Backend 当前状态为准；审核操作仍仅展示，不会执行。"
+              ? "Storyboard 生成与审核通过以 Backend 当前状态为准；修改与重新生成仍仅展示，不会执行。"
             : "仅展示操作提示，本页面不会执行任何操作。"}
         </p>
       </section>
