@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  approveShot,
   getProject,
   getProjectTasks,
   getReferenceAssets,
@@ -19,6 +20,7 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    approveShot: vi.fn(),
     getProject: vi.fn(),
     getShot: vi.fn(),
     getReferenceAssets: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock("../api/client", async (importOriginal) => {
 });
 
 const mockGetProject = vi.mocked(getProject);
+const mockApproveShot = vi.mocked(approveShot);
 const mockGetShot = vi.mocked(getShot);
 const mockGetReferenceAssets = vi.mocked(getReferenceAssets);
 const mockGetShotGenerationOptions = vi.mocked(getShotGenerationOptions);
@@ -127,6 +130,44 @@ const shot: ShotDetail = {
   ],
 };
 
+const waitingInitialShot: ShotDetail = {
+  project_id: "LEE柠檬",
+  shot_id: "shot_01",
+  status: "WAITING_REVIEW",
+  official_version: null,
+  pending_review_version: 1,
+  version_count: 1,
+  generation_count: 1,
+  versions: [
+    {
+      version: 1,
+      role: "PENDING_REVIEW",
+      review_status: "WAITING_REVIEW",
+      created_at: "2026-08-19T12:00:00+08:00",
+      prompt: {
+        version: 2,
+        source: "ai_revision",
+        visual_prompt_core: "initial visual core",
+        final_prompt: "initial final prompt",
+      },
+      generation: { model: "MiniMax-Hailuo-2.3", visual_input_mode: "NONE" },
+      video_available: true,
+    },
+  ],
+};
+
+const approvedInitialShot: ShotDetail = {
+  ...waitingInitialShot,
+  status: "APPROVED",
+  official_version: 1,
+  pending_review_version: null,
+  versions: waitingInitialShot.versions.map((version) => ({
+    ...version,
+    role: "OFFICIAL",
+    review_status: "APPROVED",
+  })),
+};
+
 function renderPage(path = "/projects/LEE%E6%9F%A0%E6%AA%AC/stages/shots/shot_01") {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -141,12 +182,14 @@ function renderPage(path = "/projects/LEE%E6%9F%A0%E6%AA%AC/stages/shots/shot_01
 describe("ShotDetailPage", () => {
   beforeEach(() => {
     mockGetProject.mockReset();
+    mockApproveShot.mockReset();
     mockGetShot.mockReset();
     mockGetReferenceAssets.mockReset();
     mockGetShotGenerationOptions.mockReset();
     mockGetProjectTasks.mockReset();
     mockGetShotGenerationStatus.mockReset();
     mockGetProject.mockResolvedValue({ data: project, correlationId: "req_project" });
+    mockApproveShot.mockResolvedValue({ data: approvedInitialShot, correlationId: "req_approve" });
     mockGetShot.mockResolvedValue({ data: shot, correlationId: "req_shot" });
     mockGetReferenceAssets.mockResolvedValue({
       data: { project_id: "LEE柠檬", assets: [] },
@@ -214,7 +257,41 @@ describe("ShotDetailPage", () => {
     renderPage();
     const section = (await screen.findByRole("heading", { name: "待审核新版本", level: 2 })).closest("section");
     expect(within(section!).getByRole("heading", { name: "Video v3 / Prompt v4" })).toBeInTheDocument();
-    expect(within(section!).getByText("审核操作将在后续阶段开放。")).toBeInTheDocument();
+    expect(within(section!).getByText("现有正式版本的候选审核将在后续阶段开放。")).toBeInTheDocument();
+    expect(within(section!).queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+  });
+
+  it("approves an initial v001, refreshes it as official, and keeps video controls", async () => {
+    mockGetShot
+      .mockResolvedValueOnce({ data: waitingInitialShot, correlationId: "req_waiting" })
+      .mockResolvedValueOnce({ data: approvedInitialShot, correlationId: "req_approved" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "审核通过" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("确认通过当前视频版本？");
+    fireEvent.click(screen.getByRole("button", { name: "确认通过" }));
+    await waitFor(() => expect(mockGetShot).toHaveBeenCalledTimes(2));
+    const officialSection = screen.getByRole("heading", {
+      name: "当前正式版本",
+      level: 2,
+    }).closest("section");
+    expect(within(officialSection!).getByRole("heading", {
+      name: "Video v1 / Prompt v2",
+    })).toBeInTheDocument();
+    expect(mockApproveShot).toHaveBeenCalledTimes(1);
+    expect(mockApproveShot).toHaveBeenCalledWith("LEE柠檬", "shot_01");
+    expect(mockGetShotGenerationStatus).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Video v1 预览")).toHaveAttribute("controls");
+    expect(document.body).not.toHaveTextContent(/QUEUED|RUNNING|MiniMax 调用/);
+  });
+
+  it("restores the approved v001 directly from GET after F5", async () => {
+    mockGetShot.mockResolvedValue({ data: approvedInitialShot, correlationId: "req_f5" });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "Video v1 / Prompt v2" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "审核通过" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Video v1 预览")).toHaveAttribute("controls");
+    expect(mockApproveShot).not.toHaveBeenCalled();
   });
 
   it("is safe when no pending version exists", async () => {
@@ -373,8 +450,10 @@ describe("ShotDetailPage", () => {
     });
     renderPage();
     expect(await screen.findByRole("heading", { name: "生成设置" })).toBeInTheDocument();
-    expect(mockGetShotGenerationOptions).toHaveBeenCalledWith("LEE柠檬", "shot_01");
-    expect(mockGetReferenceAssets).toHaveBeenCalledWith("LEE柠檬");
+    await waitFor(() => {
+      expect(mockGetShotGenerationOptions).toHaveBeenCalledWith("LEE柠檬", "shot_01");
+      expect(mockGetReferenceAssets).toHaveBeenCalledWith("LEE柠檬");
+    });
     expect(screen.queryByRole("button", { name: "生成视频" })).not.toBeInTheDocument();
   });
 });

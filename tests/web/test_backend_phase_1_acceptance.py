@@ -192,6 +192,7 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/planning/video-prompts/approve",
                 "/api/projects/{project_id}/shots",
                 "/api/projects/{project_id}/shots/{shot_id}",
+                "/api/projects/{project_id}/shots/{shot_id}/approve",
                 "/api/projects/{project_id}/shots/{shot_id}/versions/{version}/video",
                 "/api/projects/{project_id}/references",
                 "/api/projects/{project_id}/references/{asset_id}/image",

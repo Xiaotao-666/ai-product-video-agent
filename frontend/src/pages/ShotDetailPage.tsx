@@ -5,6 +5,7 @@ import {
   ApiClientError,
   getProject,
   getShot,
+  getShotGenerationStatus,
   getShotVideoUrl,
 } from "../api/client";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ShotGenerationPreparation } from "../components/shots/ShotGenerationPreparation";
+import { ShotApproveAction } from "../components/shots/ShotApproveAction";
 import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import { projectStagePath, projectWorkspacePath } from "../stageDefinitions";
 
@@ -191,11 +193,16 @@ export function ShotDetailPage() {
     setData(null);
     setLoadError(null);
     try {
-      const [projectResult, shotResult] = await Promise.all([
+      const [projectResult, shotResult, generationStatusResult] = await Promise.all([
         getProject(projectId),
         getShot(projectId, shotId),
+        getShotGenerationStatus(projectId, shotId),
       ]);
-      if (projectResult.data.project_id !== shotResult.data.project_id) {
+      if (
+        projectResult.data.project_id !== shotResult.data.project_id
+        || generationStatusResult.data.project_id !== shotResult.data.project_id
+        || generationStatusResult.data.shot_id !== shotResult.data.shot_id
+      ) {
         throw new ApiClientError({
           message: "Project responses did not match.",
           code: "INVALID_RESPONSE",
@@ -330,7 +337,16 @@ export function ShotDetailPage() {
             <h2 id="pending-version-title">待审核新版本</h2>
           </div>
           <VersionCard projectId={project.project_id} shotId={shot.shot_id} version={pending} />
-          <p className="stage-readonly-note">审核操作将在后续阶段开放。</p>
+          {official ? (
+            <p className="stage-empty-copy">现有正式版本的候选审核将在后续阶段开放。</p>
+          ) : (
+            <ShotApproveAction
+              projectId={project.project_id}
+              shotId={shot.shot_id}
+              version={pending.version}
+              onApprovedRefresh={loadShot}
+            />
+          )}
         </section>
       )}
 

@@ -12,6 +12,7 @@ from project_manager import ProjectPaths
 from project_state import ProjectCheckpoint, ProjectStage, ShotStatus, now_iso
 from prompt_generator import PromptSafetyReview, ProductVideoRequest
 from review_manager import ReviewRecorder, TaskCancelled
+from shot_approval_workflow import approve_shot_stage
 from storyboard import CreativeBrief, ShotVideoPrompt, StoryboardShot, VideoPromptPlan
 from task_logger import TaskLogger
 from video_history import video_history_menu
@@ -550,19 +551,12 @@ def shot_video_review_gate(
         print("6. 取消本次任务")
         choice = input("请输入 1-6: ").strip()
         if choice == "1":
-            checkpoint.approve_shot(shot_id)
-            recorder.record_shot_action(
-                shot_id,
-                "approve",
-                prompt_version=entry.get("active_prompt_version"),
-                video_version=entry.get("active_video_version"),
-            )
-            task_logger.event(
-                "SHOT_REVIEW_APPROVED",
+            approve_shot_stage(
+                paths=paths,
+                checkpoint=checkpoint,
                 shot_id=shot_id,
-                approved_prompt_version=entry.get("active_prompt_version"),
-                approved_video_version=entry.get("active_video_version"),
-                generation_count=entry.get("generation_count", 0),
+                recorder=recorder,
+                task_logger=task_logger,
             )
             return "approve"
         if choice == "2":

@@ -492,6 +492,7 @@ export type ShotGenerationState =
   | "DOWNLOADING"
   | "LOCAL_FINALIZING"
   | "WAITING_REVIEW"
+  | "APPROVED"
   | "FAILED"
   | "INTERRUPTED"
   | "SUBMISSION_UNKNOWN";

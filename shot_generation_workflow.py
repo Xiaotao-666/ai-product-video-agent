@@ -251,8 +251,13 @@ def resume_shot_generation(
     video_generate: VideoGenerate = generate_video,
 ) -> Path:
     entry = checkpoint.shot_checkpoint(shot_id)
-    if checkpoint.shot_status(shot_id) is ShotStatus.WAITING_REVIEW:
-        raise ShotGenerationResumeUnavailable("Shot is already waiting for review.")
+    if checkpoint.shot_status(shot_id) in {
+        ShotStatus.WAITING_REVIEW,
+        ShotStatus.APPROVED,
+    }:
+        raise ShotGenerationResumeUnavailable(
+            "Shot review is already complete or awaiting a decision."
+        )
     if bool(entry.get("submission_unknown")):
         raise ShotGenerationResumeUnavailable(
             "A submission with no known provider task cannot be resumed safely."

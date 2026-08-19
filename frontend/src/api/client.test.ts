@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   approveCreative,
+  approveShot,
   approveStoryboard,
   approveVideoPrompts,
   createProject,
@@ -807,6 +808,58 @@ describe("API client", () => {
     expect(result.data.versions[0].prompt).not.toHaveProperty("task_id");
     expect(result.data.versions[0].generation).not.toHaveProperty(
       "credential_env_name",
+    );
+  });
+
+  it("posts Shot approval once and parses the approved public DTO", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf({
+        project_id: "LEE柠檬",
+        shot_id: "shot_01",
+        status: "APPROVED",
+        official_version: 1,
+        pending_review_version: null,
+        version_count: 1,
+        generation_count: 1,
+        versions: [
+          {
+            version: 1,
+            role: "OFFICIAL",
+            review_status: "APPROVED",
+            created_at: "2026-08-19T12:00:00+08:00",
+            prompt: {
+              version: 2,
+              source: "ai_revision",
+              visual_prompt_core: "visual core",
+              final_prompt: "final prompt",
+            },
+            generation: {
+              model: "MiniMax-Hailuo-2.3",
+              visual_input_mode: "NONE",
+            },
+            video_available: true,
+          },
+        ],
+        provider_task_id: "must-not-survive",
+        local_path: "D:\\private\\video.mp4",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await approveShot("LEE柠檬", "shot_01");
+
+    expect(result.data).toMatchObject({
+      status: "APPROVED",
+      official_version: 1,
+      pending_review_version: null,
+    });
+    expect(result.data).not.toHaveProperty("provider_task_id");
+    expect(result.data).not.toHaveProperty("local_path");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots/shot_01/approve",
+      ),
+      expect.objectContaining({ method: "POST" }),
     );
   });
 
@@ -1705,5 +1758,20 @@ describe("API client", () => {
     const result = await getShotGenerationStatus("中文项目", "shot_01");
     expect(result.data.state).toBe("READY_TO_DOWNLOAD");
     expect(JSON.stringify(result.data)).not.toMatch(/provider_task_id|file_id|path|credential/i);
+  });
+
+  it("parses an APPROVED generation status as non-resumable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "中文项目",
+      shot_id: "shot_01",
+      state: "APPROVED",
+      resume_available: false,
+      resume_kind: null,
+      video_version: 1,
+      provider_submission_known: true,
+    })));
+    const result = await getShotGenerationStatus("中文项目", "shot_01");
+    expect(result.data.state).toBe("APPROVED");
+    expect(result.data.resume_available).toBe(false);
   });
 });

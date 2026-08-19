@@ -2770,6 +2770,14 @@
   margin-top: 4px;
 }
 
+.shot-approve-action {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #e7dfca;
+}
+
 .creative-approval-success {
   border-color: #dce8bf;
   background: #f5f9ec;

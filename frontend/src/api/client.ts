@@ -1272,7 +1272,7 @@ function parseShotGenerationStatus(
   const states: ReadonlySet<string> = new Set([
     "NOT_STARTED", "QUEUED", "SUBMITTING", "PROVIDER_RUNNING",
     "READY_TO_DOWNLOAD", "DOWNLOADING", "LOCAL_FINALIZING",
-    "WAITING_REVIEW", "FAILED", "INTERRUPTED", "SUBMISSION_UNKNOWN",
+    "WAITING_REVIEW", "APPROVED", "FAILED", "INTERRUPTED", "SUBMISSION_UNKNOWN",
   ]);
   const resumeKinds: ReadonlySet<string> = new Set([
     "POLL_EXISTING_TASK", "DOWNLOAD_EXISTING_FILE", "FINALIZE_LOCAL_VIDEO",
@@ -1887,6 +1887,23 @@ export async function getShot(
 ): Promise<ApiResult<ShotDetail>> {
   const result = await get<unknown>(
     `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}`,
+  );
+  return {
+    data: parseShotDetailResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function approveShot(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<ShotDetail>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/approve`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
   );
   return {
     data: parseShotDetailResponse(result.data, result.correlationId),

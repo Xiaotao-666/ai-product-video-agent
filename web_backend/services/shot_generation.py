@@ -226,7 +226,7 @@ class ShotGenerationActionService:
                 video_exists = False
 
         resume_kind: ShotGenerationResumeKind | None = None
-        if status != "WAITING_REVIEW" and not submission_unknown and version is not None:
+        if status not in {"WAITING_REVIEW", "APPROVED"} and not submission_unknown and version is not None:
             if video_exists:
                 resume_kind = ShotGenerationResumeKind.FINALIZE_LOCAL_VIDEO
             elif file_id:
@@ -236,6 +236,8 @@ class ShotGenerationActionService:
 
         if status == "WAITING_REVIEW":
             public_state = ShotGenerationState.WAITING_REVIEW
+        elif status == "APPROVED":
+            public_state = ShotGenerationState.APPROVED
         elif submission_unknown:
             public_state = ShotGenerationState.SUBMISSION_UNKNOWN
         elif phase in ShotGenerationState._value2member_map_:

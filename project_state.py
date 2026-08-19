@@ -1253,6 +1253,8 @@ class ProjectCheckpoint:
         entry = self.shot_checkpoint(shot_id)
         timestamp = now_iso()
         entry["status"] = ShotStatus.APPROVED.value
+        entry["generation_phase"] = ShotStatus.APPROVED.value
+        entry["submission_unknown"] = False
         entry["approved_at"] = timestamp
         entry["approved_prompt_version"] = entry.get("active_prompt_version")
         entry["approved_video_version"] = entry.get("active_video_version")
@@ -1270,11 +1272,32 @@ class ProjectCheckpoint:
             status=ShotStatus.APPROVED.value,
             approved_at=timestamp,
             review_result=ShotStatus.APPROVED.value,
+            review_user_action="approve",
         )
         shots = self.completed_shots()
         shots.add(int(shot_id))
         self.data["video_generation"]["completed_shots"] = sorted(shots)
-        self.save()
+        self.data["project_schema_version"] = 2
+        self.data.pop("schema_version", None)
+        self.data["updated_at"] = timestamp
+
+        # Approval is a narrow metadata transaction. Do not rewrite immutable
+        # prompt/safety/generation snapshots or touch video.mp4.
+        from shot_storage import (
+            sync_shot_manifest_from_checkpoint,
+            write_review_snapshot,
+        )
+
+        sync_shot_manifest_from_checkpoint(self.project, shot_id, entry)
+        write_review_snapshot(
+            self.project,
+            shot_id,
+            int(entry["approved_video_version"]),
+            review_result=ShotStatus.APPROVED.value,
+            user_action="approve",
+            review_time=timestamp,
+        )
+        self.project.save_json(self.path, self.data)
 
     def mark_shot_failed(self, shot_id: int, error: BaseException | str) -> None:
         entry = self.shot_checkpoint(shot_id)

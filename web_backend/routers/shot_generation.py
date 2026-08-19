@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from web_backend.dependencies import (
     get_reference_asset_repository,
     get_reference_asset_upload_service,
+    get_shot_approval_service,
     get_shot_generation_action_service,
     get_shot_generation_preflight_service,
 )
@@ -24,6 +25,7 @@ from web_backend.models.generation import (
     ShotGenerationStatusResponse,
 )
 from web_backend.models.tasks import TaskOperation, TaskRecord
+from web_backend.models.shots import ShotDetail
 from web_backend.repositories.project_repository import (
     InvalidProjectId,
     ProjectDataCorrupt,
@@ -37,7 +39,15 @@ from web_backend.repositories.reference_asset_repository import (
     ReferenceAssetNotFound,
     ReferenceAssetRepository,
 )
-from web_backend.repositories.shot_repository import InvalidShotId, ShotNotFound
+from web_backend.repositories.shot_repository import (
+    InvalidShotId,
+    ShotDataCorrupt,
+    ShotNotFound,
+)
+from web_backend.services.shot_approval import (
+    ShotApprovalNotAllowed,
+    ShotApprovalService,
+)
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
@@ -71,6 +81,7 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {
     ProjectDataUnsupported: "PROJECT_DATA_UNSUPPORTED",
     InvalidShotId: "INVALID_SHOT_ID",
     ShotNotFound: "SHOT_NOT_FOUND",
+    ShotDataCorrupt: "SHOT_DATA_CORRUPT",
     InvalidReferenceAssetId: "INVALID_REFERENCE_ASSET_ID",
     ReferenceAssetNotFound: "REFERENCE_ASSET_NOT_FOUND",
     ReferenceAssetDataCorrupt: "REFERENCE_ASSET_DATA_CORRUPT",
@@ -330,3 +341,23 @@ def generation_status(
         return service.status(project_id, shot_id)
     except ProjectRepositoryError as error:
         _raise_mapped(error)
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/approve",
+    response_model=ShotDetail,
+    status_code=200,
+)
+def approve_shot(
+    project_id: str,
+    shot_id: str,
+    service: Annotated[ShotApprovalService, Depends(get_shot_approval_service)],
+) -> ShotDetail:
+    try:
+        return service.approve(project_id, shot_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except ShotApprovalNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
