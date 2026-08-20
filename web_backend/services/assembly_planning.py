@@ -35,6 +35,14 @@ class AssemblyPlanningBusy(ProjectRepositoryError):
     """The project changed under another local Web write."""
 
 
+class AssemblyPlanNotFound(ProjectRepositoryError):
+    """The requested immutable Assembly plan does not exist."""
+
+
+class AssemblyPlanOutdated(ProjectRepositoryError):
+    """The requested plan no longer matches approved Shot state."""
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -91,6 +99,44 @@ class AssemblyPlanningService:
 
     def readiness(self, project_id: str) -> AssemblyReadiness:
         return self._readiness(project_id)
+
+    def get_plan(self, project_id: str, assembly_version: int) -> AssemblyPlan:
+        """Return one exact plan and derive its status from current Shot state."""
+
+        readiness = self._readiness(project_id)
+        project_dir = self.project_repository.resolve_project_dir(project_id)
+        paths = create_project_paths(project_dir, ensure_directories=False)
+        manifest = self._load_manifest(paths)
+        record = next(
+            (
+                _mapping(item)
+                for item in manifest["plans"]
+                if _positive_int(_mapping(item).get("assembly_version"))
+                == assembly_version
+            ),
+            None,
+        )
+        if record is None:
+            raise AssemblyPlanNotFound("Assembly plan does not exist")
+        stored = self._plan_from_record(record, AssemblyPlanningStatus.READY)
+        status = (
+            AssemblyPlanningStatus.READY
+            if readiness.ready
+            and self._snapshot_key(stored.shots)
+            == self._snapshot_key(readiness.shots)
+            else AssemblyPlanningStatus.OUTDATED
+        )
+        return stored.model_copy(
+            update={"project_id": readiness.project_id, "status": status}
+        )
+
+    def require_current_plan(
+        self, project_id: str, assembly_version: int
+    ) -> AssemblyPlan:
+        plan = self.get_plan(project_id, assembly_version)
+        if plan.status is not AssemblyPlanningStatus.READY:
+            raise AssemblyPlanOutdated("Assembly plan is outdated")
+        return plan
 
     def create_plan(self, project_id: str) -> AssemblyPlan:
         try:

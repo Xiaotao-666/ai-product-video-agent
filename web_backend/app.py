@@ -36,8 +36,10 @@ from web_backend.routers.projects import router as projects_router
 from web_backend.routers.prompt_revision import router as prompt_revision_router
 from web_backend.routers.shot_generation import router as shot_generation_router
 from web_backend.routers.tasks import router as tasks_router
+from web_backend.routers.assembly_execution import router as assembly_execution_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.assembly_planning import AssemblyPlanningService
+from web_backend.services.assembly_execution import AssemblyExecutionService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
 from web_backend.services.prompt_revision import PromptRevisionDraftService
@@ -115,6 +117,11 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.task_repository,
         application.state.task_runner,
         application.state.project_repository,
+    )
+    application.state.assembly_execution_service = AssemblyExecutionService(
+        application.state.project_repository,
+        application.state.assembly_planning_service,
+        application.state.task_service,
     )
     application.state.project_service = ProjectService(
         settings.projects_root,
@@ -233,6 +240,7 @@ def create_app(
     application.include_router(prompt_revision_router, prefix="/api")
     application.include_router(planning_actions_router, prefix="/api")
     application.include_router(tasks_router, prefix="/api")
+    application.include_router(assembly_execution_router, prefix="/api")
     return application
 
 

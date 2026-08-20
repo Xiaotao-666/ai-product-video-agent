@@ -214,6 +214,30 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
         "ASSEMBLY_NOT_READY",
         "当前镜头尚未全部具备可用的正式视频版本。",
     ),
+    "ASSEMBLY_PLAN_NOT_FOUND": ErrorDefinition(
+        404,
+        "ASSEMBLY_ERROR",
+        "ASSEMBLY_PLAN_NOT_FOUND",
+        "合片计划不存在。",
+    ),
+    "ASSEMBLY_PLAN_OUTDATED": ErrorDefinition(
+        409,
+        "ASSEMBLY_ERROR",
+        "ASSEMBLY_PLAN_OUTDATED",
+        "合片计划已失效，请重新创建计划。",
+    ),
+    "ASSEMBLY_ALREADY_EXECUTED": ErrorDefinition(
+        409,
+        "ASSEMBLY_ERROR",
+        "ASSEMBLY_ALREADY_EXECUTED",
+        "该合片计划已经生成最终视频。",
+    ),
+    "ASSEMBLY_NOT_RESUMABLE": ErrorDefinition(
+        409,
+        "ASSEMBLY_ERROR",
+        "ASSEMBLY_NOT_RESUMABLE",
+        "当前合片计划没有可安全继续的执行进度。",
+    ),
     "ASSEMBLY_MEDIA_NOT_FOUND": ErrorDefinition(
         404, "ASSEMBLY_ERROR", "ASSEMBLY_MEDIA_NOT_FOUND", "合片视频不可用。"
     ),

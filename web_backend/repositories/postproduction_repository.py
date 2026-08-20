@@ -747,6 +747,22 @@ class PostProductionRepository:
     def _assembly_media(
         self, project_dir: Path, version: int | None, *, required: bool
     ) -> ResolvedMedia | None:
+        versioned = self._fixed_media(
+            project_dir,
+            (
+                "assembly_outputs",
+                f"v{version:03d}",
+                "final_video.mp4",
+            )
+            if version is not None
+            else None,
+            media_type="video/mp4",
+            required=False,
+            data_error=AssemblyDataCorrupt,
+            missing_error=AssemblyMediaNotFound,
+        )
+        if versioned is not None:
+            return versioned
         filename = (
             "final_video.mp4"
             if version == 1

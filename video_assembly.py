@@ -58,6 +58,19 @@ class MediaInfo:
         }
 
 
+@dataclass(frozen=True)
+class AssemblyExecutionResult:
+    """Validated media facts produced from an explicit source snapshot."""
+
+    mode: str
+    total_duration: float
+    width: int
+    height: int
+    fps: float
+    codec: str
+    pixel_format: str
+
+
 def _run_command(
     command: list[str],
     *,
@@ -385,6 +398,93 @@ def _normalize_and_concat(
         output,
         task_logger,
         runner=runner,
+    )
+
+
+def execute_assembly_snapshot(
+    paths: ProjectPaths,
+    *,
+    task_id: str,
+    sources: list[dict[str, Any]],
+    output: Path,
+    task_logger: TaskLogger,
+    runner: CommandRunner = subprocess.run,
+) -> AssemblyExecutionResult:
+    """Assemble only the exact paths supplied by an immutable Assembly plan.
+
+    State selection and persistence deliberately remain with the caller.  This
+    function owns media probing/normalization/concat and never consults current
+    Shot pointers.
+    """
+
+    if not sources:
+        raise AssemblyError("Assembly snapshot contains no source videos.")
+    detect_ffmpeg_tools(runner=runner)
+    ffmpeg_path = shutil.which("ffmpeg") or "ffmpeg"
+    ffprobe_path = shutil.which("ffprobe") or "ffprobe"
+    media = [
+        probe_media(
+            ffprobe_path,
+            int(source["shot_id"]),
+            paths.ensure_within_project(Path(source["path"])),
+            paths,
+            task_logger,
+            runner=runner,
+        )
+        for source in sources
+    ]
+    output = paths.ensure_within_project(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    compatible = media_are_concat_compatible(media)
+    mode = "concat_copy" if compatible else "normalized_concat"
+    if compatible:
+        try:
+            _concat_copy(
+                ffmpeg_path,
+                paths,
+                task_id,
+                [item.path for item in media],
+                output,
+                task_logger,
+                runner=runner,
+            )
+        except AssemblyError:
+            mode = "normalized_concat"
+            _normalize_and_concat(
+                ffmpeg_path,
+                paths,
+                task_id,
+                media,
+                output,
+                task_logger,
+                runner=runner,
+            )
+    else:
+        _normalize_and_concat(
+            ffmpeg_path,
+            paths,
+            task_id,
+            media,
+            output,
+            task_logger,
+            runner=runner,
+        )
+    final_info = probe_media(
+        ffprobe_path,
+        0,
+        output,
+        paths,
+        task_logger,
+        runner=runner,
+    )
+    return AssemblyExecutionResult(
+        mode=mode,
+        total_duration=final_info.duration,
+        width=final_info.width,
+        height=final_info.height,
+        fps=final_info.fps,
+        codec=final_info.codec,
+        pixel_format=final_info.pixel_format,
     )
 
 

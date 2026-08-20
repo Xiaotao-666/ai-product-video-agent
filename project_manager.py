@@ -48,6 +48,7 @@ class ProjectDirectoryError(ValueError):
 class ProjectPaths:
     project_path: Path
     videos_dir: Path
+    assembly_outputs_dir: Path
     shots_dir: Path
     voice_dir: Path
     voice_scripts_dir: Path
@@ -396,6 +397,40 @@ class ProjectPaths:
             self.videos_dir / "assembly_manifest.json"
         )
 
+    def assembly_output_version_dir(self, version: int) -> Path:
+        if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+            raise ProjectDirectoryError("Final Video version 必须是大于 0 的整数。")
+        return self.ensure_within_project(
+            self.assembly_outputs_dir / f"v{version:03d}"
+        )
+
+    def assembly_output_video_path(self, version: int) -> Path:
+        return self.ensure_within_project(
+            self.assembly_output_version_dir(version) / "final_video.mp4"
+        )
+
+    def assembly_output_metadata_path(self, version: int) -> Path:
+        return self.ensure_within_project(
+            self.assembly_output_version_dir(version) / "assembly.json"
+        )
+
+    def assembly_output_source_manifest_path(self, version: int) -> Path:
+        return self.ensure_within_project(
+            self.assembly_output_version_dir(version) / "source_manifest.json"
+        )
+
+    def assembly_output_review_path(self, version: int) -> Path:
+        return self.ensure_within_project(
+            self.assembly_output_version_dir(version) / "review.json"
+        )
+
+    def assembly_output_staging_dir(self, version: int, operation_id: str) -> Path:
+        safe_operation_id = self._safe_identifier(operation_id, fallback="assembly")
+        return self.ensure_within_project(
+            self.assembly_outputs_dir
+            / f".staging_v{version:03d}_{safe_operation_id}"
+        )
+
     def assembly_run_dir(self, task_id: str) -> Path:
         return self.ensure_within_project(
             self.assembly_work_dir / self._safe_identifier(task_id)
@@ -477,6 +512,7 @@ class ProjectPaths:
         return (
             self.project_path,
             self.videos_dir,
+            self.assembly_outputs_dir,
             self.shots_dir,
             self.voice_dir,
             self.voice_scripts_dir,
@@ -523,6 +559,7 @@ def create_project_paths(
     paths = ProjectPaths(
         project_path=selected_project_path,
         videos_dir=selected_project_path / "videos",
+        assembly_outputs_dir=selected_project_path / "assembly_outputs",
         shots_dir=selected_project_path / "shots",
         voice_dir=selected_project_path / "voice",
         voice_scripts_dir=selected_project_path / "voice" / "scripts",
