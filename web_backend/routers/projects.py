@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Response
 from fastapi.responses import FileResponse
 
 from web_backend.dependencies import (
+    get_assembly_planning_service,
     get_planning_content_repository,
     get_postproduction_repository,
     get_project_repository,
@@ -15,6 +16,7 @@ from web_backend.dependencies import (
     get_shot_repository,
     get_task_service,
 )
+from web_backend.models.assembly_planning import AssemblyPlan, AssemblyReadiness
 from web_backend.models.planning import (
     CreativeContentResponse,
     StoryboardContentResponse,
@@ -37,6 +39,11 @@ from web_backend.models.projects import (
     ProjectWorkflowResponse,
 )
 from web_backend.services.tasks import TaskService
+from web_backend.services.assembly_planning import (
+    AssemblyPlanNotReady,
+    AssemblyPlanningBusy,
+    AssemblyPlanningService,
+)
 from web_backend.models.shots import ShotDetail, ShotListResponse
 from web_backend.services.projects import (
     InvalidProjectName,
@@ -98,6 +105,8 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {
     InvalidShotVersion: "INVALID_SHOT_VERSION",
     VideoNotFound: "VIDEO_NOT_FOUND",
     AssemblyDataCorrupt: "ASSEMBLY_DATA_CORRUPT",
+    AssemblyPlanNotReady: "ASSEMBLY_NOT_READY",
+    AssemblyPlanningBusy: "PROJECT_BUSY",
     AssemblyMediaNotFound: "ASSEMBLY_MEDIA_NOT_FOUND",
     VoiceDataCorrupt: "VOICE_DATA_CORRUPT",
     VoiceMediaNotFound: "VOICE_MEDIA_NOT_FOUND",
@@ -309,6 +318,38 @@ async def get_project_shot_video(
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
     return _media_response(path, "video/mp4")
+
+
+@router.get(
+    "/projects/{project_id}/assembly/readiness",
+    response_model=AssemblyReadiness,
+)
+async def get_project_assembly_readiness(
+    project_id: str,
+    service: Annotated[
+        AssemblyPlanningService, Depends(get_assembly_planning_service)
+    ],
+) -> AssemblyReadiness:
+    try:
+        return service.readiness(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+
+
+@router.post(
+    "/projects/{project_id}/assembly/plan",
+    response_model=AssemblyPlan,
+)
+def create_project_assembly_plan(
+    project_id: str,
+    service: Annotated[
+        AssemblyPlanningService, Depends(get_assembly_planning_service)
+    ],
+) -> AssemblyPlan:
+    try:
+        return service.create_plan(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
 
 
 @router.get(

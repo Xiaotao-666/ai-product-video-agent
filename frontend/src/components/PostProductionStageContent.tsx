@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   ApiClientError,
+  createAssemblyPlan,
   getAssembly,
+  getAssemblyReadiness,
   getAssemblyVideoUrl,
   getExport,
   getExportVideoUrl,
@@ -14,6 +16,7 @@ import {
 } from "../api/client";
 import type {
   AssemblyDetail,
+  AssemblyReadiness,
   ExportDetail,
   MusicDetail,
   MusicMixDetail,
@@ -30,7 +33,7 @@ type DetailStageKey = "assembly" | "voice" | "subtitle" | "music" | "export";
 type LoadState = "loading" | "success" | "error";
 
 type LoadedDetail =
-  | { kind: "assembly"; data: AssemblyDetail }
+  | { kind: "assembly"; data: AssemblyDetail; readiness: AssemblyReadiness }
   | { kind: "voice"; data: VoiceDetail }
   | { kind: "subtitle"; data: SubtitleDetail }
   | { kind: "music"; data: MusicDetail }
@@ -60,6 +63,19 @@ const SOURCE_LABELS: Record<string, string> = {
   storyboard_edited: "Storyboard Edited",
   manual: "Manual",
   voice_script: "Voice Script",
+};
+
+const ASSEMBLY_ISSUE_LABELS: Record<string, string> = {
+  NO_SHOTS: "项目中没有可用于计划的镜头。",
+  NOT_STARTED: "镜头尚未生成正式视频。",
+  GENERATING: "镜头仍在生成。",
+  WAITING_REVIEW: "镜头仍在等待审核。",
+  FAILED: "镜头生成失败。",
+  APPROVED_VERSION_MISSING: "镜头缺少正式视频版本。",
+  APPROVED_INDEX_MISMATCH: "镜头正式版本索引不一致。",
+  BUNDLE_INCOMPLETE: "正式视频版本 Bundle 不完整。",
+  VIDEO_MISSING: "正式视频文件不可用。",
+  INVALID_ORDER: "镜头顺序无效。",
 };
 
 function isDetailStage(stageKey: StageKey): stageKey is DetailStageKey {
@@ -154,11 +170,120 @@ function MusicMix({ mix }: { mix: MusicMixDetail | null }) {
   );
 }
 
-function AssemblyContent({ projectId, detail }: { projectId: string; detail: AssemblyDetail }) {
+function AssemblyContent({
+  projectId,
+  detail,
+  initialReadiness,
+}: {
+  projectId: string;
+  detail: AssemblyDetail;
+  initialReadiness: AssemblyReadiness;
+}) {
+  const [readiness, setReadiness] = useState(initialReadiness);
+  const [creating, setCreating] = useState(false);
+  const [planError, setPlanError] = useState<DetailError | null>(null);
+  const [planCreated, setPlanCreated] = useState(false);
+  useEffect(() => setReadiness(initialReadiness), [initialReadiness]);
+
+  const createPlan = async () => {
+    setCreating(true);
+    setPlanError(null);
+    setPlanCreated(false);
+    try {
+      const result = await createAssemblyPlan(projectId);
+      setReadiness((current) => ({
+        ...current,
+        current_plan: result.data,
+      }));
+      setPlanCreated(true);
+    } catch (error) {
+      setPlanError({
+        code: error instanceof ApiClientError ? error.code : "UNKNOWN_ERROR",
+        correlationId: error instanceof ApiClientError ? error.correlationId : null,
+      });
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const status = statusPresentation(detail.needs_update ? "STALE" : detail.status);
+  const planningStatus = statusPresentation(
+    readiness.current_plan?.status ?? readiness.status,
+  );
+  const plannedShots = readiness.current_plan?.shots ?? readiness.shots;
+  const plannedDuration = readiness.current_plan?.total_duration ?? readiness.total_duration;
   return (
     <>
       <DetailHeading title="合片详情" />
+      <div className="postproduction-title-row">
+        <h3>Assembly 计划</h3>
+        <StatusBadge label={planningStatus.label} tone={planningStatus.tone} />
+      </div>
+      {readiness.current_plan?.status === "OUTDATED" && (
+        <div className="stale-warning" role="status">
+          <strong>当前镜头版本已变化，需要重新生成 Assembly 计划</strong>
+          <span>旧计划保持不变，新计划会重新快照当前正式版本。</span>
+        </div>
+      )}
+      <dl className="postproduction-facts">
+        <StateFact
+          label="计划版本"
+          value={readiness.current_plan ? versionLabel(readiness.current_plan.assembly_version) : "尚未创建"}
+        />
+        <StateFact label="镜头数" value={String(readiness.shot_count)} />
+        <StateFact label="已就绪" value={`${readiness.ready_count} / ${readiness.shot_count}`} />
+        <StateFact label="计划总时长" value={secondsLabel(plannedDuration)} />
+      </dl>
+      {plannedShots.length > 0 && (
+        <div className="postproduction-subsection">
+          <h3>正式 Shot 版本快照</h3>
+          <ul className="component-version-list assembly-plan-shot-list">
+            {plannedShots.map((shot) => (
+              <li key={`${shot.shot_id}-${shot.order}`}>
+                <span>Shot {String(shot.shot_id).padStart(2, "0")}</span>
+                <strong>
+                  Video {versionLabel(shot.approved_video_version)} · Prompt {versionLabel(shot.prompt_version)} · {secondsLabel(shot.duration)} · {shot.resolution}
+                </strong>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {readiness.issues.length > 0 && (
+        <div className="postproduction-error" role="status">
+          <p>以下镜头尚未满足 Assembly 计划条件：</p>
+          <ul>
+            {readiness.issues.map((issue, index) => (
+              <li key={`${issue.shot_id ?? "project"}-${issue.reason}-${index}`}>
+                {issue.shot_id ? `Shot ${String(issue.shot_id).padStart(2, "0")}：` : ""}
+                {ASSEMBLY_ISSUE_LABELS[issue.reason] ?? "镜头状态暂不允许创建计划。"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {readiness.ready && readiness.current_plan?.status !== "READY" && (
+        <button
+          className="primary-button"
+          type="button"
+          disabled={creating}
+          onClick={() => void createPlan()}
+        >
+          {creating ? "正在创建计划…" : "创建 Assembly 计划"}
+        </button>
+      )}
+      {planCreated && (
+        <p className="action-success" role="status">
+          Assembly 计划已创建。本阶段不会生成或拼接视频。
+        </p>
+      )}
+      {planError && (
+        <div className="postproduction-error" role="alert">
+          <p>{errorCopy(planError.code)}</p>
+          {planError.correlationId && <small>错误编号：{planError.correlationId}</small>}
+        </div>
+      )}
+      <div className="postproduction-subsection">
       <div className="postproduction-title-row">
         <h3>当前正式合片</h3>
         <StatusBadge label={status.label} tone={status.tone} />
@@ -208,6 +333,7 @@ function AssemblyContent({ projectId, detail }: { projectId: string; detail: Ass
           </div>
         </>
       )}
+      </div>
     </>
   );
 }
@@ -423,7 +549,11 @@ export function PostProductionStageContent({
     setLoadError(null);
     try {
       if (stageKey === "assembly") {
-        setLoaded({ kind: "assembly", data: (await getAssembly(projectId)).data });
+        const [detail, readiness] = await Promise.all([
+          getAssembly(projectId),
+          getAssemblyReadiness(projectId),
+        ]);
+        setLoaded({ kind: "assembly", data: detail.data, readiness: readiness.data });
       } else if (stageKey === "voice") {
         setLoaded({ kind: "voice", data: (await getVoice(projectId)).data });
       } else if (stageKey === "subtitle") {
@@ -476,12 +606,22 @@ export function PostProductionStageContent({
 
   return (
     <section className="stage-section postproduction-detail-section" aria-labelledby="postproduction-detail-title">
-      {loaded.kind === "assembly" && <AssemblyContent projectId={projectId} detail={loaded.data} />}
+      {loaded.kind === "assembly" && (
+        <AssemblyContent
+          projectId={projectId}
+          detail={loaded.data}
+          initialReadiness={loaded.readiness}
+        />
+      )}
       {loaded.kind === "voice" && <VoiceContent projectId={projectId} detail={loaded.data} />}
       {loaded.kind === "subtitle" && <SubtitleContent detail={loaded.data} />}
       {loaded.kind === "music" && <MusicContent projectId={projectId} detail={loaded.data} />}
       {loaded.kind === "export" && <ExportContent projectId={projectId} detail={loaded.data} />}
-      <p className="stage-readonly-note">本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。</p>
+      <p className="stage-readonly-note">
+        {loaded.kind === "assembly"
+          ? "本阶段只保存版本化 Assembly 计划，不会运行 FFmpeg、生成合片视频或修改 Shot 版本。"
+          : "本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。"}
+      </p>
     </section>
   );
 }

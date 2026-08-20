@@ -37,6 +37,7 @@ from web_backend.routers.prompt_revision import router as prompt_revision_router
 from web_backend.routers.shot_generation import router as shot_generation_router
 from web_backend.routers.tasks import router as tasks_router
 from web_backend.services.capabilities import CapabilityService
+from web_backend.services.assembly_planning import AssemblyPlanningService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
 from web_backend.services.prompt_revision import PromptRevisionDraftService
@@ -95,6 +96,11 @@ def _initialize_local_resources(application: FastAPI) -> None:
     )
     application.state.postproduction_repository = PostProductionRepository(
         application.state.project_repository
+    )
+    application.state.assembly_planning_service = AssemblyPlanningService(
+        application.state.project_repository,
+        application.state.shot_repository,
+        lock_manager,
     )
     application.state.task_repository = TaskRepository(settings.web_runtime_root)
     application.state.prompt_revision_draft_repository = (

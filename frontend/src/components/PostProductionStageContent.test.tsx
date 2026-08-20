@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClientError,
+  createAssemblyPlan,
   getAssembly,
+  getAssemblyReadiness,
   getExport,
   getMusic,
   getSubtitle,
@@ -11,6 +13,8 @@ import {
 } from "../api/client";
 import type {
   AssemblyDetail,
+  AssemblyPlan,
+  AssemblyReadiness,
   ExportDetail,
   MusicDetail,
   SubtitleDetail,
@@ -24,7 +28,9 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    createAssemblyPlan: vi.fn(),
     getAssembly: vi.fn(),
+    getAssemblyReadiness: vi.fn(),
     getVoice: vi.fn(),
     getSubtitle: vi.fn(),
     getMusic: vi.fn(),
@@ -33,6 +39,8 @@ vi.mock("../api/client", async (importOriginal) => {
 });
 
 const mockGetAssembly = vi.mocked(getAssembly);
+const mockGetAssemblyReadiness = vi.mocked(getAssemblyReadiness);
+const mockCreateAssemblyPlan = vi.mocked(createAssemblyPlan);
 const mockGetVoice = vi.mocked(getVoice);
 const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetMusic = vi.mocked(getMusic);
@@ -51,6 +59,44 @@ const assembly: AssemblyDetail = {
     { shot_id: 1, video_version: 2 },
     { shot_id: 2, video_version: 1 },
   ],
+};
+
+const assemblyPlan: AssemblyPlan = {
+  project_id: "LEE柠檬",
+  assembly_version: 3,
+  status: "READY",
+  created_at: "2026-08-20T10:00:00+08:00",
+  total_duration: 14,
+  shots: [
+    {
+      shot_id: 1,
+      order: 1,
+      approved_video_version: 2,
+      prompt_version: 3,
+      duration: 6,
+      resolution: "768P",
+    },
+    {
+      shot_id: 2,
+      order: 2,
+      approved_video_version: 1,
+      prompt_version: 1,
+      duration: 8,
+      resolution: "768P",
+    },
+  ],
+};
+
+const assemblyReadiness: AssemblyReadiness = {
+  project_id: "LEE柠檬",
+  status: "READY",
+  ready: true,
+  shot_count: 2,
+  ready_count: 2,
+  total_duration: 14,
+  shots: assemblyPlan.shots,
+  issues: [],
+  current_plan: null,
 };
 
 const voice: VoiceDetail = {
@@ -148,11 +194,15 @@ function renderStage(stageKey: StageKey, projectId = "LEE柠檬") {
 describe("PostProductionStageContent", () => {
   beforeEach(() => {
     mockGetAssembly.mockReset();
+    mockGetAssemblyReadiness.mockReset();
+    mockCreateAssemblyPlan.mockReset();
     mockGetVoice.mockReset();
     mockGetSubtitle.mockReset();
     mockGetMusic.mockReset();
     mockGetExport.mockReset();
     mockGetAssembly.mockResolvedValue({ data: assembly, correlationId: "req_a" });
+    mockGetAssemblyReadiness.mockResolvedValue({ data: assemblyReadiness, correlationId: "req_ar" });
+    mockCreateAssemblyPlan.mockResolvedValue({ data: assemblyPlan, correlationId: "req_ap" });
     mockGetVoice.mockResolvedValue({ data: voice, correlationId: "req_v" });
     mockGetSubtitle.mockResolvedValue({ data: subtitle, correlationId: "req_s" });
     mockGetMusic.mockResolvedValue({ data: music, correlationId: "req_m" });
@@ -386,5 +436,57 @@ describe("PostProductionStageContent", () => {
     renderStage("subtitle");
     const cue = await screen.findByText(longText);
     expect(cue.closest("ol")).toHaveClass("subtitle-cue-list");
+  });
+
+  it("39 renders Assembly readiness, ordered Shot versions, and duration", async () => {
+    renderStage("assembly");
+    expect(await screen.findByRole("heading", { name: "Assembly 计划" })).toBeInTheDocument();
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(screen.getByText("14s")).toBeInTheDocument();
+    expect(screen.getByText(/Video v002 · Prompt v003 · 6s · 768P/)).toBeInTheDocument();
+    expect(screen.getByText(/Video v001 · Prompt v001 · 8s · 768P/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建 Assembly 计划" })).toBeEnabled();
+  });
+
+  it("40 shows readiness issues and does not offer plan creation", async () => {
+    mockGetAssemblyReadiness.mockResolvedValue({
+      data: {
+        ...assemblyReadiness,
+        status: "NOT_READY",
+        ready: false,
+        ready_count: 1,
+        total_duration: null,
+        shots: assemblyReadiness.shots.slice(0, 1),
+        issues: [{ shot_id: 2, order: 2, reason: "WAITING_REVIEW" }],
+      },
+      correlationId: "req_issue",
+    });
+    renderStage("assembly");
+    expect(await screen.findByText("Shot 02：镜头仍在等待审核。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "创建 Assembly 计划" })).not.toBeInTheDocument();
+  });
+
+  it("41 creates only an Assembly plan and renders its version snapshot", async () => {
+    renderStage("assembly");
+    fireEvent.click(await screen.findByRole("button", { name: "创建 Assembly 计划" }));
+    expect(await screen.findByText("Assembly 计划已创建。本阶段不会生成或拼接视频。")).toBeInTheDocument();
+    expect(mockCreateAssemblyPlan).toHaveBeenCalledTimes(1);
+    expect(mockCreateAssemblyPlan).toHaveBeenCalledWith("LEE柠檬");
+    expect(screen.getByText("v003")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "创建 Assembly 计划" })).not.toBeInTheDocument();
+  });
+
+  it("42 shows an OUTDATED plan without mutating its stored Shot snapshot", async () => {
+    mockGetAssemblyReadiness.mockResolvedValue({
+      data: {
+        ...assemblyReadiness,
+        current_plan: { ...assemblyPlan, status: "OUTDATED" },
+      },
+      correlationId: "req_outdated",
+    });
+    renderStage("assembly");
+    expect(await screen.findByText("当前镜头版本已变化，需要重新生成 Assembly 计划")).toBeInTheDocument();
+    expect(screen.getByText(/Video v002 · Prompt v003/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建 Assembly 计划" })).toBeEnabled();
   });
 });

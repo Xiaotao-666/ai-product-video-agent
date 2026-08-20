@@ -21,6 +21,7 @@ from web_backend.repositories.prompt_revision_repository import (
 from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.repositories.task_repository import TaskRepository
 from web_backend.services.capabilities import CapabilityService
+from web_backend.services.assembly_planning import AssemblyPlanningService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
 from web_backend.services.prompt_revision import PromptRevisionDraftService
@@ -63,6 +64,10 @@ def get_reference_asset_upload_service(request: Request) -> ReferenceAssetUpload
 
 def get_postproduction_repository(request: Request) -> PostProductionRepository:
     return request.app.state.postproduction_repository
+
+
+def get_assembly_planning_service(request: Request) -> AssemblyPlanningService:
+    return request.app.state.assembly_planning_service
 
 
 def get_task_repository(request: Request) -> TaskRepository:

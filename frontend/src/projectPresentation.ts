@@ -33,6 +33,7 @@ const STATUS_LABELS: Record<string, string> = {
   RUNNING: "进行中",
   GENERATING: "生成中",
   READY: "已就绪",
+  NOT_READY: "未就绪",
   WAITING_REVIEW: "等待审核",
   APPROVED: "已审核",
   COMPLETED: "已完成",
@@ -41,6 +42,7 @@ const STATUS_LABELS: Record<string, string> = {
   REJECTED: "已拒绝",
   CANCELLED: "已取消",
   STALE: "需要更新",
+  OUTDATED: "需要更新",
   UNREADABLE: "数据异常",
   UNKNOWN: "未知状态",
 };
@@ -84,7 +86,7 @@ export function statusPresentation(status: string): {
   if (normalized === "WAITING_REVIEW") {
     return { label, tone: "review" };
   }
-  if (normalized === "STALE") {
+  if (["STALE", "OUTDATED"].includes(normalized)) {
     return { label, tone: "warning" };
   }
   if (["FAILED", "REJECTED", "CANCELLED", "UNREADABLE"].includes(normalized)) {

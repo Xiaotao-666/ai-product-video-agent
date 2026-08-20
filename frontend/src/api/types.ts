@@ -689,6 +689,44 @@ export interface AssemblyDetail {
   shots: AssemblyShotVersion[];
 }
 
+export type AssemblyPlanningStatus = "NOT_READY" | "READY" | "OUTDATED";
+
+export interface AssemblyPlanShot {
+  shot_id: number;
+  order: number;
+  approved_video_version: number;
+  prompt_version: number;
+  duration: number;
+  resolution: string;
+}
+
+export interface AssemblyPlan {
+  project_id: string;
+  assembly_version: number;
+  status: AssemblyPlanningStatus;
+  created_at: string;
+  total_duration: number;
+  shots: AssemblyPlanShot[];
+}
+
+export interface AssemblyReadinessIssue {
+  shot_id: number | null;
+  order: number | null;
+  reason: string;
+}
+
+export interface AssemblyReadiness {
+  project_id: string;
+  status: AssemblyPlanningStatus;
+  ready: boolean;
+  shot_count: number;
+  ready_count: number;
+  total_duration: number | null;
+  shots: AssemblyPlanShot[];
+  issues: AssemblyReadinessIssue[];
+  current_plan: AssemblyPlan | null;
+}
+
 export interface VoiceDetail {
   project_id: string;
   status: string;

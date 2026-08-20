@@ -8,6 +8,11 @@ import {
 import type {
   ApiResult,
   AssemblyDetail,
+  AssemblyPlan,
+  AssemblyPlanningStatus,
+  AssemblyPlanShot,
+  AssemblyReadiness,
+  AssemblyReadinessIssue,
   AssemblyShotVersion,
   AssemblyState,
   AvailableAction,
@@ -126,6 +131,11 @@ const VOICE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set([
   "OUT_OF_BOUNDS",
   "NOT_APPLICABLE",
   "UNKNOWN",
+]);
+const ASSEMBLY_PLANNING_STATUSES: ReadonlySet<string> = new Set([
+  "NOT_READY",
+  "READY",
+  "OUTDATED",
 ]);
 const TASK_ID_PATTERN = /^task_[0-9a-f]{32}$/;
 const TASK_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -1701,6 +1711,143 @@ function parseAssemblyDetail(
   };
 }
 
+function parseAssemblyPlanningStatus(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyPlanningStatus {
+  if (typeof value !== "string" || !ASSEMBLY_PLANNING_STATUSES.has(value)) {
+    return invalidResponse("Backend 返回了无法读取的 Assembly 计划状态。", correlationId);
+  }
+  return value as AssemblyPlanningStatus;
+}
+
+function parseAssemblyPlanShot(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyPlanShot {
+  if (
+    !isRecord(value)
+    || !isPositiveInteger(value.shot_id)
+    || !isPositiveInteger(value.order)
+    || !isPositiveInteger(value.approved_video_version)
+    || !isPositiveInteger(value.prompt_version)
+    || typeof value.duration !== "number"
+    || !Number.isFinite(value.duration)
+    || value.duration <= 0
+    || typeof value.resolution !== "string"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Assembly 镜头计划。", correlationId);
+  }
+  return {
+    shot_id: value.shot_id,
+    order: value.order,
+    approved_video_version: value.approved_video_version,
+    prompt_version: value.prompt_version,
+    duration: value.duration,
+    resolution: parseRequiredSafeText(
+      value.resolution,
+      "Assembly 分辨率无效。",
+      correlationId,
+    ),
+  };
+}
+
+function parseAssemblyPlan(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyPlan {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || !isPositiveInteger(value.assembly_version)
+    || typeof value.created_at !== "string"
+    || typeof value.total_duration !== "number"
+    || !Number.isFinite(value.total_duration)
+    || value.total_duration <= 0
+    || !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Assembly 计划。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(
+      value.project_id,
+      "项目标识无效。",
+      correlationId,
+    ),
+    assembly_version: value.assembly_version,
+    status: parseAssemblyPlanningStatus(value.status, correlationId),
+    created_at: parseRequiredSafeText(
+      value.created_at,
+      "Assembly 计划时间无效。",
+      correlationId,
+    ),
+    total_duration: value.total_duration,
+    shots: value.shots.map((shot) => parseAssemblyPlanShot(shot, correlationId)),
+  };
+}
+
+function parseAssemblyReadinessIssue(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyReadinessIssue {
+  if (
+    !isRecord(value)
+    || !isNullablePositiveInteger(value.shot_id)
+    || !isNullablePositiveInteger(value.order)
+    || typeof value.reason !== "string"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Assembly 就绪问题。", correlationId);
+  }
+  return {
+    shot_id: value.shot_id,
+    order: value.order,
+    reason: parseRequiredSafeText(
+      value.reason,
+      "Assembly 就绪问题无效。",
+      correlationId,
+    ),
+  };
+}
+
+function parseAssemblyReadiness(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyReadiness {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || typeof value.ready !== "boolean"
+    || !isNonNegativeInteger(value.shot_count)
+    || !isNonNegativeInteger(value.ready_count)
+    || !isNullableNonNegativeNumber(value.total_duration)
+    || !Array.isArray(value.shots)
+    || !Array.isArray(value.issues)
+    || (value.current_plan !== null && !isRecord(value.current_plan))
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Assembly 就绪状态。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(
+      value.project_id,
+      "项目标识无效。",
+      correlationId,
+    ),
+    status: parseAssemblyPlanningStatus(value.status, correlationId),
+    ready: value.ready,
+    shot_count: value.shot_count,
+    ready_count: value.ready_count,
+    total_duration: value.total_duration,
+    shots: value.shots.map((shot) => parseAssemblyPlanShot(shot, correlationId)),
+    issues: value.issues.map((issue) =>
+      parseAssemblyReadinessIssue(issue, correlationId),
+    ),
+    current_plan:
+      value.current_plan === null
+        ? null
+        : parseAssemblyPlan(value.current_plan, correlationId),
+  };
+}
+
 function parseCalibrationStatus(
   value: unknown,
   correlationId: string | null,
@@ -2700,6 +2847,31 @@ export async function getAssembly(
   );
   return {
     data: parseAssemblyDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getAssemblyReadiness(
+  projectId: string,
+): Promise<ApiResult<AssemblyReadiness>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/assembly/readiness`,
+  );
+  return {
+    data: parseAssemblyReadiness(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function createAssemblyPlan(
+  projectId: string,
+): Promise<ApiResult<AssemblyPlan>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/assembly/plan`,
+    { method: "POST", headers: { Accept: "application/json" } },
+  );
+  return {
+    data: parseAssemblyPlan(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

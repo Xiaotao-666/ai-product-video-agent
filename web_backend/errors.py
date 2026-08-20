@@ -208,6 +208,12 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "ASSEMBLY_DATA_CORRUPT": ErrorDefinition(
         422, "ASSEMBLY_ERROR", "ASSEMBLY_DATA_CORRUPT", "合片数据无法读取。"
     ),
+    "ASSEMBLY_NOT_READY": ErrorDefinition(
+        409,
+        "ASSEMBLY_ERROR",
+        "ASSEMBLY_NOT_READY",
+        "当前镜头尚未全部具备可用的正式视频版本。",
+    ),
     "ASSEMBLY_MEDIA_NOT_FOUND": ErrorDefinition(
         404, "ASSEMBLY_ERROR", "ASSEMBLY_MEDIA_NOT_FOUND", "合片视频不可用。"
     ),
