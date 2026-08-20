@@ -122,10 +122,15 @@ class TaskRepository:
         return matching
 
     def find_active_for_project(self, project_id: str) -> TaskRecord | None:
-        for record in self.list_for_project(project_id):
-            if record.status in ACTIVE_TASK_STATUSES:
-                return record
-        return None
+        active = self.list_active_for_project(project_id)
+        return active[0] if active else None
+
+    def list_active_for_project(self, project_id: str) -> list[TaskRecord]:
+        return [
+            record
+            for record in self.list_for_project(project_id)
+            if record.status in ACTIVE_TASK_STATUSES
+        ]
 
     def interrupt_active_tasks(self) -> list[TaskRecord]:
         """Mark abandoned queued/running records without executing any callable."""

@@ -54,12 +54,34 @@ class TaskService:
         target_id: str | None = None,
         correlation_id: str | None,
         callable_: TaskCallable,
+        allow_parallel_targets: bool = False,
+        acquire_project_lock: bool = True,
     ) -> TaskRecord:
+        if (
+            allow_parallel_targets or not acquire_project_lock
+        ) and operation != TaskOperation.SHOT_PROMPT_REVISION_DRAFT:
+            raise ValueError(
+                "project-lock-free execution is reserved for Prompt draft tasks"
+            )
         canonical_project_id = self._project_repository.get_project(
             project_id
         ).project_id
         with self._submission_guard:
-            if self._repository.find_active_for_project(canonical_project_id):
+            active_tasks = self._repository.list_active_for_project(
+                canonical_project_id
+            )
+            parallel_target_is_safe = (
+                allow_parallel_targets
+                and not acquire_project_lock
+                and target_id is not None
+                and all(
+                    active.operation == operation
+                    and active.target_id is not None
+                    and active.target_id != target_id
+                    for active in active_tasks
+                )
+            )
+            if active_tasks and not parallel_target_is_safe:
                 raise ProjectBusy("project already has an active Web task")
             task = TaskRecord(
                 task_id=self._id_factory(),
@@ -72,7 +94,11 @@ class TaskService:
             )
             self._repository.create(task)
             try:
-                self._runner.submit(task.task_id, callable_)
+                self._runner.submit(
+                    task.task_id,
+                    callable_,
+                    acquire_project_lock=acquire_project_lock,
+                )
             except TaskRunnerClosed:
                 interrupted_payload = task.model_dump()
                 interrupted_payload.update(

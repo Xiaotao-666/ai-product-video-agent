@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from threading import Lock
 from time import perf_counter
@@ -71,11 +72,22 @@ class TaskRunner:
         with self._state_guard:
             return self._closed
 
-    def submit(self, task_id: str, operation: TaskCallable) -> Future[None]:
+    def submit(
+        self,
+        task_id: str,
+        operation: TaskCallable,
+        *,
+        acquire_project_lock: bool = True,
+    ) -> Future[None]:
         with self._state_guard:
             if self._closed:
                 raise TaskRunnerClosed("task runner is shut down")
-            future = self._executor.submit(self._execute, task_id, operation)
+            future = self._executor.submit(
+                self._execute,
+                task_id,
+                operation,
+                acquire_project_lock,
+            )
             self._futures[task_id] = future
         future.add_done_callback(
             lambda completed, current_task_id=task_id: self._task_done(
@@ -92,7 +104,12 @@ class TaskRunner:
             self._closed = True
         self._executor.shutdown(wait=True, cancel_futures=True)
 
-    def _execute(self, task_id: str, operation: TaskCallable) -> None:
+    def _execute(
+        self,
+        task_id: str,
+        operation: TaskCallable,
+        acquire_project_lock: bool,
+    ) -> None:
         try:
             queued = self._repository.get(task_id)
         except TaskNotFound:
@@ -110,7 +127,12 @@ class TaskRunner:
         self._log_status(running)
 
         try:
-            with self._project_lock_manager.project_write(running.project_id):
+            lock_context = (
+                self._project_lock_manager.project_write(running.project_id)
+                if acquire_project_lock
+                else nullcontext()
+            )
+            with lock_context:
                 result = operation()
                 if result is not None and not isinstance(result, TaskResultReference):
                     raise TypeError("task callable returned an unsupported result")

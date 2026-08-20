@@ -143,6 +143,12 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
         "创意生成服务尚未配置。",
         retryable=True,
     ),
+    "PROMPT_REVISION_DRAFT_NOT_FOUND": ErrorDefinition(
+        404,
+        "PROMPT_REVISION_ERROR",
+        "PROMPT_REVISION_DRAFT_NOT_FOUND",
+        "当前镜头没有可查看的AI Prompt修改建议。",
+    ),
     "TASK_RUNNER_UNAVAILABLE": ErrorDefinition(
         503,
         "TASK_ERROR",

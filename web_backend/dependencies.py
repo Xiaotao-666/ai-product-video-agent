@@ -15,11 +15,15 @@ from web_backend.repositories.planning_content_repository import (
 from web_backend.repositories.postproduction_repository import (
     PostProductionRepository,
 )
+from web_backend.repositories.prompt_revision_repository import (
+    PromptRevisionDraftRepository,
+)
 from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.repositories.task_repository import TaskRepository
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
+from web_backend.services.prompt_revision import PromptRevisionDraftService
 from web_backend.services.reference_assets import ReferenceAssetUploadService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
@@ -64,6 +68,12 @@ def get_task_repository(request: Request) -> TaskRepository:
     return request.app.state.task_repository
 
 
+def get_prompt_revision_draft_repository(
+    request: Request,
+) -> PromptRevisionDraftRepository:
+    return request.app.state.prompt_revision_draft_repository
+
+
 def get_project_service(request: Request) -> ProjectService:
     return request.app.state.project_service
 
@@ -82,6 +92,12 @@ def get_task_runner(request: Request) -> TaskRunner:
 
 def get_task_service(request: Request) -> TaskService:
     return request.app.state.task_service
+
+
+def get_prompt_revision_draft_service(
+    request: Request,
+) -> PromptRevisionDraftService:
+    return request.app.state.prompt_revision_draft_service
 
 
 def get_creative_action_service(request: Request) -> CreativeActionService:

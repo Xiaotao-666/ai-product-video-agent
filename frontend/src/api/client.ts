@@ -32,6 +32,8 @@ import type {
   MusicDetail,
   MusicMixDetail,
   PostProductionState,
+  PromptRevisionDraftRequest,
+  PromptRevisionDraftResponse,
   ProjectDetail,
   ProjectListResponse,
   ProjectRequest,
@@ -1004,6 +1006,36 @@ function parseShotDetailResponse(
     version_count: value.version_count,
     generation_count: value.generation_count,
     versions,
+  };
+}
+
+function parsePromptRevisionDraft(
+  value: unknown,
+  correlationId: string | null,
+): PromptRevisionDraftResponse {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.base_prompt_version) ||
+    typeof value.original_prompt !== "string" ||
+    value.original_prompt.trim().length === 0 ||
+    typeof value.draft_prompt !== "string" ||
+    value.draft_prompt.trim().length === 0 ||
+    typeof value.feedback !== "string" ||
+    value.feedback.trim().length === 0 ||
+    typeof value.created_at !== "string" ||
+    value.created_at.trim().length === 0
+  ) {
+    return invalidResponse(
+      "Backend 返回了无法读取的Prompt修改建议。",
+      correlationId,
+    );
+  }
+  return {
+    base_prompt_version: value.base_prompt_version,
+    original_prompt: parseContentText(value.original_prompt, correlationId) ?? "",
+    draft_prompt: parseContentText(value.draft_prompt, correlationId) ?? "",
+    feedback: parseContentText(value.feedback, correlationId) ?? "",
+    created_at: parseContentText(value.created_at, correlationId) ?? "",
   };
 }
 
@@ -2053,6 +2085,41 @@ export async function getShot(
   );
   return {
     data: parseShotDetailResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getPromptRevisionDraft(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<PromptRevisionDraftResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/prompt/revision/draft`,
+  );
+  return {
+    data: parsePromptRevisionDraft(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function submitPromptRevisionDraft(
+  projectId: string,
+  shotId: string,
+  payload: PromptRevisionDraftRequest,
+): Promise<ApiResult<TaskRecord>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/prompt/revision/draft`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

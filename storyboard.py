@@ -462,6 +462,13 @@ class ShotVisualPromptCore(StrictPlanningModel):
     visual_prompt_core: str = Field(min_length=1)
 
 
+class PromptRevisionDraft(StrictPlanningModel):
+    """Validated, non-persistent result of revising one Shot Prompt."""
+
+    visual_prompt_core: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+
+
 def _planning_context(
     request: ProductVideoRequest,
     visual_analysis_result: list[dict[str, Any]] | None,
@@ -2136,6 +2143,7 @@ def _single_shot_prompt_context(
     reference_asset_context: dict[str, Any] | None,
     *,
     current_core: str | None = None,
+    current_prompt_version: int | None = None,
     revision_comment: str | None = None,
 ) -> str:
     reference = reference_asset_context or {}
@@ -2165,11 +2173,17 @@ def _single_shot_prompt_context(
             "purpose": shot.purpose,
             "visual": shot.visual,
             "camera": shot.camera,
+            # StoryboardShot intentionally models camera direction and motion as
+            # one authored field. Keep an explicit motion key for revision
+            # consumers without inventing a second source of truth.
+            "motion": shot.camera,
             "video_constraints": shot.video_constraints.model_dump(),
         },
     }
     if current_core is not None:
         payload["current_visual_prompt_core"] = current_core
+    if current_prompt_version is not None:
+        payload["current_prompt_version"] = current_prompt_version
     if revision_comment is not None:
         payload["revision_request"] = revision_comment
     return json.dumps(payload, ensure_ascii=False)
@@ -2184,6 +2198,7 @@ def _request_single_shot_visual_core(
     reference_asset_context: dict[str, Any] | None,
     *,
     current_core: str | None = None,
+    current_prompt_version: int | None = None,
     revision_comment: str | None = None,
     raw_stage_prefix: str = "video_prompt",
 ) -> str:
@@ -2214,6 +2229,7 @@ Return exactly one JSON object with one field:
             shot,
             reference_asset_context,
             current_core=current_core,
+            current_prompt_version=current_prompt_version,
             revision_comment=revision_comment,
         ),
         task_logger=task_logger,
@@ -2493,6 +2509,36 @@ def revise_shot_video_prompt(
     reference_asset_context: dict[str, Any] | None = None,
 ) -> str:
     """Use DeepSeek to revise only one active Shot prompt."""
+    return generate_prompt_revision_draft(
+        request=request,
+        brief=brief,
+        shot=shot,
+        current_prompt=current_prompt,
+        feedback=comment,
+        api_key=api_key,
+        task_logger=task_logger,
+        visual_analysis_result=visual_analysis_result,
+        visual_constraints=visual_constraints,
+        reference_asset_context=reference_asset_context,
+    ).prompt
+
+
+def generate_prompt_revision_draft(
+    *,
+    request: ProductVideoRequest,
+    brief: CreativeBrief,
+    shot: StoryboardShot,
+    current_prompt: str,
+    feedback: str,
+    api_key: str,
+    current_prompt_version: int | None = None,
+    task_logger: TaskLogger | None = None,
+    visual_analysis_result: list[dict[str, Any]] | None = None,
+    visual_constraints: dict[str, Any] | None = None,
+    reference_asset_context: dict[str, Any] | None = None,
+) -> PromptRevisionDraft:
+    """Generate one validated Prompt draft without mutating project state."""
+
     del visual_analysis_result, visual_constraints
     core = _request_single_shot_visual_core(
         request,
@@ -2502,11 +2548,15 @@ def revise_shot_video_prompt(
         task_logger,
         reference_asset_context,
         current_core=_extract_visual_prompt_core(current_prompt),
-        revision_comment=comment,
+        current_prompt_version=current_prompt_version,
+        revision_comment=feedback,
         raw_stage_prefix="shot_prompt_revision",
     )
     final_prompt = apply_video_overlay_constraints(
         core, shot, brief.global_constraints
     )
     _validate_final_video_prompt(final_prompt, shot, request.product_name)
-    return final_prompt
+    return PromptRevisionDraft(
+        visual_prompt_core=core,
+        prompt=final_prompt,
+    )

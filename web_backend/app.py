@@ -24,17 +24,22 @@ from web_backend.repositories.planning_content_repository import (
 from web_backend.repositories.postproduction_repository import (
     PostProductionRepository,
 )
+from web_backend.repositories.prompt_revision_repository import (
+    PromptRevisionDraftRepository,
+)
 from web_backend.repositories.shot_repository import ShotRepository
 from web_backend.repositories.task_repository import TaskRepository
 from web_backend.routers.capabilities import router as capabilities_router
 from web_backend.routers.health import router as health_router
 from web_backend.routers.planning_actions import router as planning_actions_router
 from web_backend.routers.projects import router as projects_router
+from web_backend.routers.prompt_revision import router as prompt_revision_router
 from web_backend.routers.shot_generation import router as shot_generation_router
 from web_backend.routers.tasks import router as tasks_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CreativeActionService
 from web_backend.services.projects import ProjectService
+from web_backend.services.prompt_revision import PromptRevisionDraftService
 from web_backend.services.reference_assets import ReferenceAssetUploadService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
@@ -91,6 +96,9 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.project_repository
     )
     application.state.task_repository = TaskRepository(settings.web_runtime_root)
+    application.state.prompt_revision_draft_repository = (
+        PromptRevisionDraftRepository(settings.web_runtime_root)
+    )
     application.state.task_runner = TaskRunner(
         application.state.task_repository,
         lock_manager,
@@ -106,6 +114,13 @@ def _initialize_local_resources(application: FastAPI) -> None:
         lock_manager,
     )
     application.state.capability_service = CapabilityService()
+    application.state.prompt_revision_draft_service = PromptRevisionDraftService(
+        application.state.project_repository,
+        application.state.reference_asset_repository,
+        application.state.prompt_revision_draft_repository,
+        application.state.task_service,
+        application.state.capability_service,
+    )
     application.state.shot_generation_preflight_service = (
         ShotGenerationPreflightService(
             application.state.project_repository,
@@ -199,6 +214,7 @@ def create_app(
     application.include_router(capabilities_router, prefix="/api")
     application.include_router(projects_router, prefix="/api")
     application.include_router(shot_generation_router, prefix="/api")
+    application.include_router(prompt_revision_router, prefix="/api")
     application.include_router(planning_actions_router, prefix="/api")
     application.include_router(tasks_router, prefix="/api")
     return application

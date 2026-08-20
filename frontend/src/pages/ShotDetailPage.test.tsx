@@ -7,11 +7,13 @@ import {
   approveShot,
   getProject,
   getProjectTasks,
+  getPromptRevisionDraft,
   getReferenceAssets,
   getShot,
   getShotGenerationOptions,
   getShotGenerationStatus,
   setOfficialShotVersion,
+  submitPromptRevisionDraft,
 } from "../api/client";
 import type { ProjectDetail, ShotDetail } from "../api/types";
 import { ShotDetailPage } from "./ShotDetailPage";
@@ -27,8 +29,10 @@ vi.mock("../api/client", async (importOriginal) => {
     getReferenceAssets: vi.fn(),
     getShotGenerationOptions: vi.fn(),
     getProjectTasks: vi.fn(),
+    getPromptRevisionDraft: vi.fn(),
     getShotGenerationStatus: vi.fn(),
     setOfficialShotVersion: vi.fn(),
+    submitPromptRevisionDraft: vi.fn(),
   };
 });
 
@@ -38,8 +42,10 @@ const mockGetShot = vi.mocked(getShot);
 const mockGetReferenceAssets = vi.mocked(getReferenceAssets);
 const mockGetShotGenerationOptions = vi.mocked(getShotGenerationOptions);
 const mockGetProjectTasks = vi.mocked(getProjectTasks);
+const mockGetPromptRevisionDraft = vi.mocked(getPromptRevisionDraft);
 const mockGetShotGenerationStatus = vi.mocked(getShotGenerationStatus);
 const mockSetOfficialShotVersion = vi.mocked(setOfficialShotVersion);
+const mockSubmitPromptRevisionDraft = vi.mocked(submitPromptRevisionDraft);
 
 const project: ProjectDetail = {
   project_id: "LEE柠檬",
@@ -264,8 +270,10 @@ describe("ShotDetailPage", () => {
     mockGetReferenceAssets.mockReset();
     mockGetShotGenerationOptions.mockReset();
     mockGetProjectTasks.mockReset();
+    mockGetPromptRevisionDraft.mockReset();
     mockGetShotGenerationStatus.mockReset();
     mockSetOfficialShotVersion.mockReset();
+    mockSubmitPromptRevisionDraft.mockReset();
     mockGetProject.mockResolvedValue({ data: project, correlationId: "req_project" });
     mockApproveShot.mockResolvedValue({ data: approvedInitialShot, correlationId: "req_approve" });
     mockGetShot.mockResolvedValue({ data: shot, correlationId: "req_shot" });
@@ -277,6 +285,13 @@ describe("ShotDetailPage", () => {
       data: { project_id: "LEE柠檬", tasks: [] },
       correlationId: "req_tasks",
     });
+    mockGetPromptRevisionDraft.mockRejectedValue(
+      new ApiClientError({
+        code: "PROMPT_REVISION_DRAFT_NOT_FOUND",
+        message: "missing",
+        status: 404,
+      }),
+    );
     mockGetShotGenerationStatus.mockResolvedValue({
       data: {
         project_id: "LEE柠檬", shot_id: "shot_01", state: "NOT_STARTED",

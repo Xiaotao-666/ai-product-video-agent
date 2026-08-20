@@ -19,6 +19,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { ShotGenerationPreparation } from "../components/shots/ShotGenerationPreparation";
 import { ShotApproveAction } from "../components/shots/ShotApproveAction";
 import { ShotSetOfficialAction } from "../components/shots/ShotSetOfficialAction";
+import { ShotPromptRevisionDraftAction } from "../components/shots/ShotPromptRevisionDraftAction";
 import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import { projectStagePath, projectWorkspacePath } from "../stageDefinitions";
 
@@ -381,17 +382,24 @@ export function ShotDetailPage() {
       )}
 
       {manualPromptBase?.prompt.version && editablePromptCore(manualPromptBase) && (
-        <ShotGenerationPreparation
-          projectId={project.project_id}
-          shotId={shot.shot_id}
-          intent="REGENERATE_MANUAL_PROMPT"
-          manualPrompt={{
-            videoVersion: manualPromptBase.version,
-            promptVersion: manualPromptBase.prompt.version,
-            editablePrompt: editablePromptCore(manualPromptBase),
-          }}
-          onCompleted={loadShot}
-        />
+        <>
+          <ShotGenerationPreparation
+            projectId={project.project_id}
+            shotId={shot.shot_id}
+            intent="REGENERATE_MANUAL_PROMPT"
+            manualPrompt={{
+              videoVersion: manualPromptBase.version,
+              promptVersion: manualPromptBase.prompt.version,
+              editablePrompt: editablePromptCore(manualPromptBase),
+            }}
+            onCompleted={loadShot}
+          />
+          <ShotPromptRevisionDraftAction
+            projectId={project.project_id}
+            shotId={shot.shot_id}
+            basePromptVersion={manualPromptBase.prompt.version}
+          />
+        </>
       )}
 
       <section

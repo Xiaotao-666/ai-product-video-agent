@@ -62,6 +62,7 @@ export const TASK_OPERATIONS = [
   "SHOT_GENERATE",
   "SHOT_REGENERATE",
   "SHOT_RESUME",
+  "SHOT_PROMPT_REVISION_DRAFT",
   "ASSEMBLY",
   "VOICE_GENERATE",
   "SUBTITLE_GENERATE",
@@ -386,6 +387,18 @@ export interface ShotDetail {
   version_count: number;
   generation_count: number;
   versions: ShotVersion[];
+}
+
+export interface PromptRevisionDraftRequest {
+  feedback: string;
+}
+
+export interface PromptRevisionDraftResponse {
+  base_prompt_version: number;
+  original_prompt: string;
+  draft_prompt: string;
+  feedback: string;
+  created_at: string;
 }
 
 export type GenerationModelSelection = "AUTO" | "MANUAL";
