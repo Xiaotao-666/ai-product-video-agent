@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import difflib
+import hashlib
 from pathlib import Path
 from typing import Callable
 
@@ -68,6 +69,8 @@ def create_prompt_version(
     parent_version: int | None = None,
     original_prompt: str | None = None,
     visual_prompt_core: str | None = None,
+    revision_metadata: dict | None = None,
+    diff_metadata: dict | None = None,
     persist_plan: bool = True,
     preserve_video_bundles: bool = False,
 ) -> dict:
@@ -110,6 +113,10 @@ def create_prompt_version(
         "safety_prompt": None,
         "safety_checked_at": None,
     }
+    if revision_metadata is not None:
+        payload["revision_metadata"] = dict(revision_metadata)
+    if diff_metadata is not None:
+        payload["diff_metadata"] = dict(diff_metadata)
     if persist_plan:
         item = _prompt_item(plan, shot_id)
         item.video_prompt = prompt
@@ -132,6 +139,80 @@ def create_prompt_version(
             generation_count=entry.get("generation_count", 0),
         )
     return payload
+
+
+def adopt_prompt_revision_draft(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    shot_id: int,
+    base_prompt_version: int,
+    original_prompt: str,
+    draft_prompt: str,
+    feedback: str,
+    task_logger: TaskLogger | None,
+    draft_created_at: str | None = None,
+) -> dict:
+    """Adopt one AI revision draft as a new immutable Prompt version only."""
+
+    entry = checkpoint.shot_checkpoint(shot_id)
+    candidate = checkpoint.candidate_checkpoint(shot_id)
+    candidate_status = str(candidate.get("status") or "NONE").upper()
+    current_version = (
+        int(candidate.get("prompt_version") or 0)
+        if candidate_status != "NONE"
+        else int(entry.get("active_prompt_version") or 0)
+    )
+    base_version = int(base_prompt_version)
+    if current_version <= 0 or current_version != base_version:
+        raise ShotReviewError("AI Prompt Draft 所基于的 Prompt version 已发生变化。")
+
+    original = checkpoint.prompt_version(shot_id, base_version)
+    original_text = str(original_prompt or "").strip()
+    if (
+        not isinstance(original, dict)
+        or not original_text
+        or str(original.get("prompt") or "").strip() != original_text
+    ):
+        raise ShotReviewError("AI Prompt Draft 的基础 Prompt 已发生变化。")
+
+    revised = str(draft_prompt or "").strip()
+    normalized_feedback = str(feedback or "").strip()
+    if not revised or not normalized_feedback:
+        raise ShotReviewError("AI Prompt Draft 或修改意见不能为空。")
+    if revised == original_text:
+        raise ShotReviewError("AI Prompt Draft 没有产生可采用的修改。")
+
+    revision_metadata = {
+        "kind": "ai_prompt_revision_draft_adoption",
+        "draft_created_at": draft_created_at,
+    }
+    diff_metadata = {
+        "base_prompt_version": base_version,
+        "changed": True,
+        "original_sha256": hashlib.sha256(
+            original_text.encode("utf-8")
+        ).hexdigest(),
+        "revised_sha256": hashlib.sha256(revised.encode("utf-8")).hexdigest(),
+        "original_length": len(original_text),
+        "revised_length": len(revised),
+    }
+    return create_prompt_version(
+        paths,
+        checkpoint,
+        plan,
+        shot_id,
+        revised,
+        "ai_revision",
+        task_logger,
+        user_feedback=normalized_feedback,
+        parent_version=base_version,
+        visual_prompt_core=extract_visual_prompt_core(revised),
+        revision_metadata=revision_metadata,
+        diff_metadata=diff_metadata,
+        preserve_video_bundles=True,
+    )
 
 
 def create_manual_prompt_version(

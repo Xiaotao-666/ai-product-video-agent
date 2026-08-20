@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from web_backend.models.projects import ResponseModel
 
@@ -65,7 +72,28 @@ class StoredPromptRevisionDraft(PromptRevisionDraftResponse):
 
     project_id: str = Field(min_length=1, max_length=255)
     shot_id: str = Field(pattern=r"^shot_[0-9]{2,}$")
-    base_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fingerprint_schema_version: int = Field(default=1, ge=1, le=2)
+    base_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    content_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    state_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def require_fingerprints_for_schema(self) -> "StoredPromptRevisionDraft":
+        if self.fingerprint_schema_version == 1:
+            if self.base_fingerprint is None:
+                raise ValueError("legacy draft requires base_fingerprint")
+        elif self.content_fingerprint is None or self.state_fingerprint is None:
+            raise ValueError("schema v2 draft requires content and state fingerprints")
+        return self
 
     def public_response(self) -> PromptRevisionDraftResponse:
         return PromptRevisionDraftResponse.model_validate(
@@ -79,3 +107,14 @@ class StoredPromptRevisionDraft(PromptRevisionDraftResponse):
                 }
             )
         )
+
+
+class PromptRevisionDraftAdoptResponse(ResponseModel):
+    project_id: str = Field(min_length=1, max_length=255)
+    shot_id: str = Field(pattern=r"^shot_[0-9]{2,}$")
+    prompt_version: int = Field(ge=1)
+    parent_version: int = Field(ge=1)
+    source: Literal["ai_revision"]
+    active_prompt_version: int = Field(ge=1)
+    approved_prompt_version: int | None = Field(default=None, ge=1)
+    created_at: str = Field(min_length=1)

@@ -2,13 +2,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  adoptPromptRevisionDraft,
   ApiClientError,
   getProjectTasks,
   getPromptRevisionDraft,
   getTask,
   submitPromptRevisionDraft,
 } from "../../api/client";
-import type { PromptRevisionDraftResponse, TaskRecord } from "../../api/types";
+import type {
+  PromptRevisionDraftAdoptResponse,
+  PromptRevisionDraftResponse,
+  TaskRecord,
+} from "../../api/types";
 import { ShotPromptRevisionDraftAction } from "./ShotPromptRevisionDraftAction";
 
 
@@ -16,6 +21,7 @@ vi.mock("../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client")>();
   return {
     ...actual,
+    adoptPromptRevisionDraft: vi.fn(),
     getProjectTasks: vi.fn(),
     getPromptRevisionDraft: vi.fn(),
     getTask: vi.fn(),
@@ -24,6 +30,7 @@ vi.mock("../../api/client", async (importOriginal) => {
 });
 
 const mockProjectTasks = vi.mocked(getProjectTasks);
+const mockAdopt = vi.mocked(adoptPromptRevisionDraft);
 const mockGetDraft = vi.mocked(getPromptRevisionDraft);
 const mockGetTask = vi.mocked(getTask);
 const mockSubmit = vi.mocked(submitPromptRevisionDraft);
@@ -62,6 +69,17 @@ const draft: PromptRevisionDraftResponse = {
   created_at: "2026-08-20T00:00:02Z",
 };
 
+const adoption: PromptRevisionDraftAdoptResponse = {
+  project_id: "project-a",
+  shot_id: "shot_01",
+  prompt_version: 3,
+  parent_version: 2,
+  source: "ai_revision",
+  active_prompt_version: 3,
+  approved_prompt_version: 2,
+  created_at: "2026-08-20T00:01:00+00:00",
+};
+
 const missingDraft = new ApiClientError({
   code: "PROMPT_REVISION_DRAFT_NOT_FOUND",
   message: "missing",
@@ -81,6 +99,7 @@ function renderAction() {
 describe("ShotPromptRevisionDraftAction", () => {
   beforeEach(() => {
     mockProjectTasks.mockReset();
+    mockAdopt.mockReset();
     mockGetDraft.mockReset();
     mockGetTask.mockReset();
     mockSubmit.mockReset();
@@ -92,6 +111,10 @@ describe("ShotPromptRevisionDraftAction", () => {
     mockSubmit.mockResolvedValue({
       data: queuedTask,
       correlationId: "req_prompt_revision",
+    });
+    mockAdopt.mockResolvedValue({
+      data: adoption,
+      correlationId: "req_adopt",
     });
   });
 
@@ -180,18 +203,47 @@ describe("ShotPromptRevisionDraftAction", () => {
     expect(await screen.findByText(draft.draft_prompt)).toBeInTheDocument();
   });
 
-  it("shows draft actions, keeps adopt disabled, and cancel is local only", async () => {
+  it("shows draft actions and cancel is local only", async () => {
     mockGetDraft.mockResolvedValue({ data: draft, correlationId: "req_draft" });
     renderAction();
     expect(await screen.findByText(draft.draft_prompt)).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "采用修改（下一阶段）" }),
-    ).toBeDisabled();
+      screen.getByRole("button", { name: "采用此修改" }),
+    ).toBeEnabled();
     expect(
       screen.getByRole("button", { name: "重新生成修改建议" }),
     ).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByText(draft.draft_prompt)).not.toBeInTheDocument();
+    expect(mockSubmit).not.toHaveBeenCalled();
+    expect(mockAdopt).not.toHaveBeenCalled();
+  });
+
+  it("requires confirmation and cancel creates zero Prompt versions", async () => {
+    mockGetDraft.mockResolvedValue({ data: draft, correlationId: "req_draft" });
+    renderAction();
+    await screen.findByText(draft.draft_prompt);
+    fireEvent.click(screen.getByRole("button", { name: "采用此修改" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("将创建新的Prompt Version");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockAdopt).not.toHaveBeenCalled();
+  });
+
+  it("adopts exactly once and shows the new Prompt without video generation", async () => {
+    mockGetDraft.mockResolvedValue({ data: draft, correlationId: "req_draft" });
+    renderAction();
+    await screen.findByText(draft.draft_prompt);
+    fireEvent.click(screen.getByRole("button", { name: "采用此修改" }));
+    const confirm = screen.getByRole("button", { name: "确认采用" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockAdopt).toHaveBeenCalledTimes(1));
+    expect(mockAdopt).toHaveBeenCalledWith("project-a", "shot_01");
+    expect(await screen.findByText("Prompt v3 已创建。")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "原 Prompt v2 保持不变，本阶段不会生成视频",
+    );
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 

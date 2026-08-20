@@ -401,6 +401,17 @@ export interface PromptRevisionDraftResponse {
   created_at: string;
 }
 
+export interface PromptRevisionDraftAdoptResponse {
+  project_id: string;
+  shot_id: string;
+  prompt_version: number;
+  parent_version: number;
+  source: "ai_revision";
+  active_prompt_version: number;
+  approved_prompt_version: number | null;
+  created_at: string;
+}
+
 export type GenerationModelSelection = "AUTO" | "MANUAL";
 export type GenerationVisualInputMode =
   | "none"

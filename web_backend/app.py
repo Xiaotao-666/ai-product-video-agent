@@ -120,6 +120,7 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.prompt_revision_draft_repository,
         application.state.task_service,
         application.state.capability_service,
+        lock_manager,
     )
     application.state.shot_generation_preflight_service = (
         ShotGenerationPreflightService(

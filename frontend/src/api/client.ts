@@ -33,6 +33,7 @@ import type {
   MusicMixDetail,
   PostProductionState,
   PromptRevisionDraftRequest,
+  PromptRevisionDraftAdoptResponse,
   PromptRevisionDraftResponse,
   ProjectDetail,
   ProjectListResponse,
@@ -1035,6 +1036,39 @@ function parsePromptRevisionDraft(
     original_prompt: parseContentText(value.original_prompt, correlationId) ?? "",
     draft_prompt: parseContentText(value.draft_prompt, correlationId) ?? "",
     feedback: parseContentText(value.feedback, correlationId) ?? "",
+    created_at: parseContentText(value.created_at, correlationId) ?? "",
+  };
+}
+
+function parsePromptRevisionDraftAdoption(
+  value: unknown,
+  correlationId: string | null,
+): PromptRevisionDraftAdoptResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    typeof value.shot_id !== "string" ||
+    !isPositiveInteger(value.prompt_version) ||
+    !isPositiveInteger(value.parent_version) ||
+    value.source !== "ai_revision" ||
+    !isPositiveInteger(value.active_prompt_version) ||
+    !isNullablePositiveInteger(value.approved_prompt_version) ||
+    typeof value.created_at !== "string" ||
+    value.created_at.trim().length === 0
+  ) {
+    return invalidResponse(
+      "Backend 返回了无法读取的Prompt采用结果。",
+      correlationId,
+    );
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    shot_id: parseShotId(value.shot_id, correlationId),
+    prompt_version: value.prompt_version,
+    parent_version: value.parent_version,
+    source: value.source,
+    active_prompt_version: value.active_prompt_version,
+    approved_prompt_version: value.approved_prompt_version,
     created_at: parseContentText(value.created_at, correlationId) ?? "",
   };
 }
@@ -2120,6 +2154,23 @@ export async function submitPromptRevisionDraft(
   );
   return {
     data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function adoptPromptRevisionDraft(
+  projectId: string,
+  shotId: string,
+): Promise<ApiResult<PromptRevisionDraftAdoptResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/prompt/revision/draft/adopt`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    },
+  );
+  return {
+    data: parsePromptRevisionDraftAdoption(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

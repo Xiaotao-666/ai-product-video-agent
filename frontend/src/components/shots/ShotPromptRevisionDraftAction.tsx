@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  adoptPromptRevisionDraft,
   ApiClientError,
   getPromptRevisionDraft,
   submitPromptRevisionDraft,
 } from "../../api/client";
 import type {
+  PromptRevisionDraftAdoptResponse,
   PromptRevisionDraftResponse,
   TaskRecord,
 } from "../../api/types";
@@ -61,7 +63,11 @@ export function ShotPromptRevisionDraftAction({
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState<PromptRevisionDraftResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmingAdoption, setConfirmingAdoption] = useState(false);
+  const [adopting, setAdopting] = useState(false);
+  const [adoption, setAdoption] = useState<PromptRevisionDraftAdoptResponse | null>(null);
   const submissionGuard = useRef(false);
+  const adoptionGuard = useRef(false);
   const normalizedFeedback = feedback.trim();
 
   const isDraftTask = useCallback(
@@ -107,7 +113,11 @@ export function ShotPromptRevisionDraftAction({
     setFeedback("");
     setDraft(null);
     setSubmitting(false);
+    setConfirmingAdoption(false);
+    setAdopting(false);
+    setAdoption(null);
     submissionGuard.current = false;
+    adoptionGuard.current = false;
     void loadDraft().catch((caught) => setError(toTaskActionError(caught)));
   }, [loadDraft, setError]);
 
@@ -163,7 +173,37 @@ export function ShotPromptRevisionDraftAction({
   };
 
   const draftTask = task && isDraftTask(task) ? task : null;
-  const busy = submitting || active || terminalRefreshPending;
+  const busy = submitting || active || terminalRefreshPending || adopting;
+
+  const adopt = async () => {
+    if (adoptionGuard.current || adopting || !draft) return;
+    adoptionGuard.current = true;
+    setAdopting(true);
+    setError(null);
+    try {
+      const result = await adoptPromptRevisionDraft(projectId, shotId);
+      if (
+        result.data.project_id !== projectId ||
+        result.data.shot_id !== shotId ||
+        result.data.parent_version !== draft.base_prompt_version ||
+        result.data.prompt_version !== result.data.active_prompt_version ||
+        result.data.source !== "ai_revision"
+      ) {
+        throw new ApiClientError({
+          message: "Prompt adoption response did not match the draft.",
+          code: "INVALID_RESPONSE",
+          correlationId: result.correlationId,
+        });
+      }
+      setAdoption(result.data);
+      setConfirmingAdoption(false);
+    } catch (caught) {
+      setError(toTaskActionError(caught));
+    } finally {
+      adoptionGuard.current = false;
+      setAdopting(false);
+    }
+  };
 
   return (
     <section
@@ -284,9 +324,18 @@ export function ShotPromptRevisionDraftAction({
               <p>{draft.draft_prompt}</p>
             </article>
           </div>
+          {!adoption && !confirmingAdoption && (
           <div className="creative-review-buttons">
-            <button className="primary-button" type="button" disabled>
-              采用修改（下一阶段）
+            <button
+              className="primary-button"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setError(null);
+                setConfirmingAdoption(true);
+              }}
+            >
+              采用此修改
             </button>
             <button
               className="secondary-button"
@@ -305,11 +354,45 @@ export function ShotPromptRevisionDraftAction({
                 setTask(null);
                 setFeedback("");
                 setError(null);
+                setConfirmingAdoption(false);
               }}
             >
               取消
             </button>
           </div>
+          )}
+          {!adoption && confirmingAdoption && (
+            <div className="creative-approval-confirmation" role="dialog" aria-modal="false">
+              <strong>确认采用AI修改结果？</strong>
+              <p>将创建新的Prompt Version。</p>
+              <div className="creative-approval-buttons">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={adopting}
+                  onClick={() => setConfirmingAdoption(false)}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={adopting}
+                  onClick={() => void adopt()}
+                >
+                  {adopting ? "正在采用…" : "确认采用"}
+                </button>
+              </div>
+            </div>
+          )}
+          {adoption && (
+            <div className="creative-action-message creative-approval-success" role="status">
+              <strong>Prompt v{adoption.prompt_version} 已创建。</strong>
+              <span>
+                AI Draft 已采用；原 Prompt v{adoption.parent_version} 保持不变，本阶段不会生成视频。
+              </span>
+            </div>
+          )}
         </div>
       )}
     </section>

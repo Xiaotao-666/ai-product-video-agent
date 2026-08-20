@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from web_backend.dependencies import get_prompt_revision_draft_service
 from web_backend.errors import registered_api_error
 from web_backend.models.prompt_revision import (
+    PromptRevisionDraftAdoptResponse,
     PromptRevisionDraftRequest,
     PromptRevisionDraftResponse,
 )
@@ -140,3 +141,30 @@ def get_prompt_revision_draft(
         _raise_mapped(error)
     except PromptRevisionNotAllowed as error:
         raise registered_api_error("ACTION_NOT_ALLOWED") from error
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/prompt/revision/draft/adopt",
+    response_model=PromptRevisionDraftAdoptResponse,
+    status_code=200,
+)
+def adopt_prompt_revision_draft_endpoint(
+    project_id: str,
+    shot_id: str,
+    service: Annotated[
+        PromptRevisionDraftService,
+        Depends(get_prompt_revision_draft_service),
+    ],
+) -> PromptRevisionDraftAdoptResponse:
+    try:
+        return service.adopt(project_id, shot_id)
+    except PromptRevisionDraftNotFound as error:
+        raise registered_api_error("PROMPT_REVISION_DRAFT_NOT_FOUND") from error
+    except PromptRevisionDraftDataCorrupt as error:
+        raise registered_api_error("PROJECT_DATA_CORRUPT") from error
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except PromptRevisionNotAllowed as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error

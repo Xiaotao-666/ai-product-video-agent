@@ -130,7 +130,7 @@ class PromptRevisionDraftRepository:
     @staticmethod
     def _atomic_write(path: Path, draft: StoredPromptRevisionDraft) -> None:
         rendered = json.dumps(
-            draft.model_dump(mode="json"),
+            draft.model_dump(mode="json", exclude_none=True),
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

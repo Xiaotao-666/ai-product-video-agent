@@ -12,6 +12,8 @@ from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
+from project_manager import create_project_paths
+from project_state import ProjectCheckpoint, ProjectStateError
 from prompt_generator import (
     ProductVideoRequest,
     PromptGenerationError,
@@ -24,7 +26,10 @@ from storyboard import (
     VideoPromptStructureError,
     generate_prompt_revision_draft,
 )
+from shot_review import ShotReviewError, adopt_prompt_revision_draft
+from web_backend.locking import ProjectLockBusy, ProjectLockManager
 from web_backend.models.prompt_revision import (
+    PromptRevisionDraftAdoptResponse,
     PromptRevisionDraftRequest,
     PromptRevisionDraftResponse,
     StoredPromptRevisionDraft,
@@ -51,6 +56,7 @@ from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CapabilityUnavailable
 from web_backend.services.task_runner import TaskExecutionFailure
 from web_backend.services.tasks import TaskService
+from web_backend.services.projects import ProjectBusy
 
 
 class PromptRevisionNotAllowed(RuntimeError):
@@ -67,7 +73,14 @@ class _PromptRevisionSource:
     brief: CreativeBrief
     shot: StoryboardShot
     reference_asset_count: int
-    fingerprint: str
+    content_fingerprint: str
+    state_fingerprint: str
+    shot_status: str
+    candidate_status: str
+    generation_phase: str
+    submission_unknown: bool
+    active_prompt_version: int | None
+    approved_prompt_version: int | None
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -103,12 +116,14 @@ class PromptRevisionDraftService:
         draft_repository: PromptRevisionDraftRepository,
         task_service: TaskService,
         capability_service: CapabilityService,
+        project_lock_manager: ProjectLockManager,
     ) -> None:
         self._project_repository = project_repository
         self._reference_repository = reference_repository
         self._draft_repository = draft_repository
         self._task_service = task_service
         self._capability_service = capability_service
+        self._project_lock_manager = project_lock_manager
 
     def submit(
         self,
@@ -129,7 +144,8 @@ class PromptRevisionDraftService:
             callable_=lambda: self._run(
                 source.project_id,
                 source.shot_id,
-                source.fingerprint,
+                source.content_fingerprint,
+                source.state_fingerprint,
                 payload.feedback,
             ),
             allow_parallel_targets=True,
@@ -139,15 +155,94 @@ class PromptRevisionDraftService:
     def get(self, project_id: str, shot_id: str) -> PromptRevisionDraftResponse:
         source = self._load_source(project_id, shot_id)
         draft = self._draft_repository.get(source.project_id, source.shot_id)
-        if draft.base_fingerprint != source.fingerprint:
-            raise PromptRevisionDraftNotFound("draft base is stale")
+        try:
+            self._require_read_compatible(source, draft)
+        except PromptRevisionNotAllowed as error:
+            raise PromptRevisionDraftNotFound("draft base is stale") from error
         return draft.public_response()
+
+    def adopt(
+        self,
+        project_id: str,
+        shot_id: str,
+    ) -> PromptRevisionDraftAdoptResponse:
+        source = self._load_source(project_id, shot_id)
+        draft = self._draft_repository.get(source.project_id, source.shot_id)
+        self._require_adopt_allowed(source, draft, strict_state=True)
+
+        with self._task_service.prevent_task_submission():
+            self._require_no_active_task(source.project_id)
+            source = self._load_source(source.project_id, source.shot_id)
+            draft = self._draft_repository.get(source.project_id, source.shot_id)
+            self._require_adopt_allowed(source, draft, strict_state=True)
+            try:
+                with self._project_lock_manager.project_write(source.project_id):
+                    self._require_no_active_task(source.project_id)
+                    locked_source = self._load_source(
+                        source.project_id,
+                        source.shot_id,
+                    )
+                    locked_draft = self._draft_repository.get(
+                        source.project_id,
+                        source.shot_id,
+                    )
+                    self._require_adopt_allowed(
+                        locked_source,
+                        locked_draft,
+                        strict_state=True,
+                    )
+                    paths = create_project_paths(
+                        self._project_repository.resolve_project_dir(
+                            source.project_id
+                        ),
+                        ensure_directories=False,
+                    )
+                    try:
+                        checkpoint = ProjectCheckpoint.load(paths)
+                        plan = self._load_prompt_plan(paths.video_prompts_path())
+                        payload = adopt_prompt_revision_draft(
+                            paths=paths,
+                            checkpoint=checkpoint,
+                            plan=plan,
+                            shot_id=locked_source.shot.shot_id,
+                            base_prompt_version=locked_draft.base_prompt_version,
+                            original_prompt=locked_draft.original_prompt,
+                            draft_prompt=locked_draft.draft_prompt,
+                            feedback=locked_draft.feedback,
+                            task_logger=None,
+                            draft_created_at=locked_draft.created_at.isoformat(),
+                        )
+                    except (ShotReviewError, ProjectStateError) as error:
+                        raise PromptRevisionNotAllowed(
+                            "Prompt revision draft adoption is not allowed"
+                        ) from error
+                    except (OSError, UnicodeError, ValidationError) as error:
+                        raise ProjectDataCorrupt(
+                            "project Prompt data is unreadable"
+                        ) from error
+            except ProjectLockBusy as error:
+                raise ProjectBusy("project write lock is busy") from error
+
+        current_entry = checkpoint.shot_checkpoint(locked_source.shot.shot_id)
+        return PromptRevisionDraftAdoptResponse(
+            project_id=locked_source.project_id,
+            shot_id=locked_source.shot_id,
+            prompt_version=int(payload["version"]),
+            parent_version=int(payload["parent_version"]),
+            source="ai_revision",
+            active_prompt_version=int(current_entry["active_prompt_version"]),
+            approved_prompt_version=_positive_int(
+                current_entry.get("approved_prompt_version")
+            ),
+            created_at=str(payload["created_at"]),
+        )
 
     def _run(
         self,
         project_id: str,
         shot_id: str,
-        expected_fingerprint: str,
+        expected_content_fingerprint: str,
+        expected_state_fingerprint: str,
         feedback: str,
     ) -> TaskResultReference:
         try:
@@ -157,7 +252,10 @@ class PromptRevisionDraftService:
                 "ACTION_NOT_ALLOWED",
                 "当前镜头Prompt状态已发生变化。",
             )
-        if source.fingerprint != expected_fingerprint:
+        if (
+            source.content_fingerprint != expected_content_fingerprint
+            or source.state_fingerprint != expected_state_fingerprint
+        ):
             _task_failure(
                 "ACTION_NOT_ALLOWED",
                 "当前镜头Prompt状态已发生变化。",
@@ -205,7 +303,10 @@ class PromptRevisionDraftService:
                 "ACTION_NOT_ALLOWED",
                 "当前镜头Prompt状态已发生变化。",
             )
-        if current.fingerprint != expected_fingerprint:
+        if (
+            current.content_fingerprint != expected_content_fingerprint
+            or current.state_fingerprint != expected_state_fingerprint
+        ):
             _task_failure(
                 "ACTION_NOT_ALLOWED",
                 "当前镜头Prompt状态已发生变化。",
@@ -216,7 +317,9 @@ class PromptRevisionDraftService:
                 project_id=source.project_id,
                 shot_id=source.shot_id,
                 base_prompt_version=source.prompt_version,
-                base_fingerprint=source.fingerprint,
+                fingerprint_schema_version=2,
+                content_fingerprint=source.content_fingerprint,
+                state_fingerprint=source.state_fingerprint,
                 original_prompt=source.prompt,
                 draft_prompt=result.prompt,
                 feedback=feedback,
@@ -282,7 +385,18 @@ class PromptRevisionDraftService:
         reference_asset_count = len(
             self._reference_repository.list_assets(canonical_project_id).assets
         )
-        fingerprint_payload = {
+        shot_status = str(entry.get("status") or "NOT_STARTED").upper()
+        candidate_status = str(candidate.get("status") or "NONE").upper()
+        active_state = candidate if candidate_status != "NONE" else entry
+        generation_phase = str(
+            active_state.get("generation_phase") or ""
+        ).upper()
+        submission_unknown = bool(active_state.get("submission_unknown"))
+        active_prompt_version = _positive_int(entry.get("active_prompt_version"))
+        approved_prompt_version = _positive_int(
+            entry.get("approved_prompt_version")
+        )
+        content_fingerprint_payload = {
             "project_id": canonical_project_id,
             "shot_id": canonical_shot_id,
             "prompt_version": prompt_version,
@@ -292,9 +406,24 @@ class PromptRevisionDraftService:
             "shot": shot.model_dump(mode="json"),
             "reference_asset_count": reference_asset_count,
         }
-        fingerprint = hashlib.sha256(
+        content_fingerprint = hashlib.sha256(
             json.dumps(
-                fingerprint_payload,
+                content_fingerprint_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        state_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "shot_status": shot_status,
+                    "candidate_status": candidate_status,
+                    "generation_phase": generation_phase,
+                    "submission_unknown": submission_unknown,
+                    "active_prompt_version": active_prompt_version,
+                    "approved_prompt_version": approved_prompt_version,
+                },
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -309,8 +438,78 @@ class PromptRevisionDraftService:
             brief=brief,
             shot=shot,
             reference_asset_count=reference_asset_count,
-            fingerprint=fingerprint,
+            content_fingerprint=content_fingerprint,
+            state_fingerprint=state_fingerprint,
+            shot_status=shot_status,
+            candidate_status=candidate_status,
+            generation_phase=generation_phase,
+            submission_unknown=submission_unknown,
+            active_prompt_version=active_prompt_version,
+            approved_prompt_version=approved_prompt_version,
         )
+
+    def _require_adopt_allowed(
+        self,
+        source: _PromptRevisionSource,
+        draft: StoredPromptRevisionDraft,
+        *,
+        strict_state: bool,
+    ) -> None:
+        self._require_read_compatible(source, draft)
+        if (
+            strict_state
+            and draft.fingerprint_schema_version >= 2
+            and draft.state_fingerprint != source.state_fingerprint
+        ):
+            raise PromptRevisionNotAllowed("Prompt revision draft state is stale")
+
+    def _require_read_compatible(
+        self,
+        source: _PromptRevisionSource,
+        draft: StoredPromptRevisionDraft,
+    ) -> None:
+        stored_content_fingerprint = (
+            draft.base_fingerprint
+            if draft.fingerprint_schema_version == 1
+            else draft.content_fingerprint
+        )
+        if (
+            draft.project_id != source.project_id
+            or draft.shot_id != source.shot_id
+            or draft.base_prompt_version != source.prompt_version
+            or stored_content_fingerprint != source.content_fingerprint
+            or draft.original_prompt.strip() != source.prompt
+        ):
+            raise PromptRevisionNotAllowed("Prompt revision draft is stale")
+        if (
+            source.shot_status == "GENERATING"
+            or source.candidate_status in {"EDITING", "GENERATING"}
+            or source.submission_unknown
+            or source.generation_phase
+            in {
+                "PREPARING",
+                "SUBMITTING",
+                "PROVIDER_RUNNING",
+                "READY_TO_DOWNLOAD",
+                "DOWNLOADING",
+                "LOCAL_FINALIZING",
+                "SUBMISSION_UNKNOWN",
+            }
+        ):
+            raise PromptRevisionNotAllowed("Shot state does not allow adoption")
+
+    def _require_no_active_task(self, project_id: str) -> None:
+        if self._task_service.active_for_project(project_id) is not None:
+            raise ProjectBusy("project already has an active Web task")
+
+    @staticmethod
+    def _load_prompt_plan(path: Path):
+        from storyboard import VideoPromptPlan
+
+        try:
+            return VideoPromptPlan.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValidationError) as error:
+            raise ProjectDataCorrupt("Video Prompt plan is unreadable") from error
 
     @staticmethod
     def _read_json(project_dir: Path, *parts: str) -> Mapping[str, Any]:
