@@ -4,12 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiClientError,
   createAssemblyPlan,
+  executeAssembly,
   getAssembly,
   getAssemblyReadiness,
   getExport,
   getMusic,
+  getProjectTasks,
   getSubtitle,
+  getTask,
   getVoice,
+  resumeAssembly,
 } from "../api/client";
 import type {
   AssemblyDetail,
@@ -18,6 +22,7 @@ import type {
   ExportDetail,
   MusicDetail,
   SubtitleDetail,
+  TaskRecord,
   VoiceDetail,
 } from "../api/types";
 import type { StageKey } from "../stageDefinitions";
@@ -29,18 +34,26 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     createAssemblyPlan: vi.fn(),
+    executeAssembly: vi.fn(),
     getAssembly: vi.fn(),
     getAssemblyReadiness: vi.fn(),
     getVoice: vi.fn(),
     getSubtitle: vi.fn(),
     getMusic: vi.fn(),
     getExport: vi.fn(),
+    getProjectTasks: vi.fn(),
+    getTask: vi.fn(),
+    resumeAssembly: vi.fn(),
   };
 });
 
 const mockGetAssembly = vi.mocked(getAssembly);
 const mockGetAssemblyReadiness = vi.mocked(getAssemblyReadiness);
 const mockCreateAssemblyPlan = vi.mocked(createAssemblyPlan);
+const mockExecuteAssembly = vi.mocked(executeAssembly);
+const mockResumeAssembly = vi.mocked(resumeAssembly);
+const mockGetProjectTasks = vi.mocked(getProjectTasks);
+const mockGetTask = vi.mocked(getTask);
 const mockGetVoice = vi.mocked(getVoice);
 const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetMusic = vi.mocked(getMusic);
@@ -58,6 +71,33 @@ const assembly: AssemblyDetail = {
   shots: [
     { shot_id: 1, video_version: 2 },
     { shot_id: 2, video_version: 1 },
+  ],
+  current_plan: null,
+  final_videos: [
+    {
+      final_video_version: 2,
+      assembly_version: 2,
+      created_at: "2026-08-18T10:00:00+08:00",
+      total_duration: 18.5,
+      video_available: true,
+      is_current: true,
+      shots: [
+        { shot_id: 1, order: 1, video_version: 2, prompt_version: 3 },
+        { shot_id: 2, order: 2, video_version: 1, prompt_version: 1 },
+      ],
+    },
+    {
+      final_video_version: 1,
+      assembly_version: 1,
+      created_at: "2026-08-17T10:00:00+08:00",
+      total_duration: 17,
+      video_available: true,
+      is_current: false,
+      shots: [
+        { shot_id: 1, order: 1, video_version: 1, prompt_version: 1 },
+        { shot_id: 2, order: 2, video_version: 1, prompt_version: 1 },
+      ],
+    },
   ],
 };
 
@@ -97,6 +137,20 @@ const assemblyReadiness: AssemblyReadiness = {
   shots: assemblyPlan.shots,
   issues: [],
   current_plan: null,
+};
+
+const assemblyTask: TaskRecord = {
+  task_id: "task_0123456789abcdef0123456789abcdef",
+  project_id: "LEE柠檬",
+  operation: "ASSEMBLY_EXECUTE",
+  target_id: "assembly_v003",
+  status: "QUEUED",
+  created_at: "2026-08-20T10:01:00+08:00",
+  started_at: null,
+  finished_at: null,
+  correlation_id: "req_0123456789abcdef0123456789abcdef",
+  error: null,
+  result: null,
 };
 
 const voice: VoiceDetail = {
@@ -196,6 +250,10 @@ describe("PostProductionStageContent", () => {
     mockGetAssembly.mockReset();
     mockGetAssemblyReadiness.mockReset();
     mockCreateAssemblyPlan.mockReset();
+    mockExecuteAssembly.mockReset();
+    mockResumeAssembly.mockReset();
+    mockGetProjectTasks.mockReset();
+    mockGetTask.mockReset();
     mockGetVoice.mockReset();
     mockGetSubtitle.mockReset();
     mockGetMusic.mockReset();
@@ -203,6 +261,13 @@ describe("PostProductionStageContent", () => {
     mockGetAssembly.mockResolvedValue({ data: assembly, correlationId: "req_a" });
     mockGetAssemblyReadiness.mockResolvedValue({ data: assemblyReadiness, correlationId: "req_ar" });
     mockCreateAssemblyPlan.mockResolvedValue({ data: assemblyPlan, correlationId: "req_ap" });
+    mockExecuteAssembly.mockResolvedValue({ data: assemblyTask, correlationId: "req_ae" });
+    mockResumeAssembly.mockResolvedValue({ data: assemblyTask, correlationId: "req_resume" });
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [] },
+      correlationId: "req_tasks",
+    });
+    mockGetTask.mockResolvedValue({ data: assemblyTask, correlationId: "req_task" });
     mockGetVoice.mockResolvedValue({ data: voice, correlationId: "req_v" });
     mockGetSubtitle.mockResolvedValue({ data: subtitle, correlationId: "req_s" });
     mockGetMusic.mockResolvedValue({ data: music, correlationId: "req_m" });
@@ -469,7 +534,7 @@ describe("PostProductionStageContent", () => {
   it("41 creates only an Assembly plan and renders its version snapshot", async () => {
     renderStage("assembly");
     fireEvent.click(await screen.findByRole("button", { name: "创建 Assembly 计划" }));
-    expect(await screen.findByText("Assembly 计划已创建。本阶段不会生成或拼接视频。")).toBeInTheDocument();
+    expect(await screen.findByText("Assembly 计划已创建，可以在确认后生成 Final Video。")).toBeInTheDocument();
     expect(mockCreateAssemblyPlan).toHaveBeenCalledTimes(1);
     expect(mockCreateAssemblyPlan).toHaveBeenCalledWith("LEE柠檬");
     expect(screen.getByText("v003")).toBeInTheDocument();
@@ -486,7 +551,83 @@ describe("PostProductionStageContent", () => {
     });
     renderStage("assembly");
     expect(await screen.findByText("当前镜头版本已变化，需要重新生成 Assembly 计划")).toBeInTheDocument();
-    expect(screen.getByText(/Video v002 · Prompt v003/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Video v002 · Prompt v003/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "创建 Assembly 计划" })).toBeEnabled();
+  });
+
+  it("43 asks for explicit confirmation and cancel creates no Task", async () => {
+    mockGetAssemblyReadiness.mockResolvedValue({
+      data: { ...assemblyReadiness, current_plan: assemblyPlan },
+      correlationId: "req_ready_plan",
+    });
+    renderStage("assembly");
+    fireEvent.click(await screen.findByRole("button", { name: "执行合片" }));
+    expect(screen.getByText("将根据当前Assembly Plan生成Final Video。不会修改Shot版本。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mockExecuteAssembly).not.toHaveBeenCalled();
+  });
+
+  it("44 confirms one Assembly execution Task with the current plan", async () => {
+    mockGetAssemblyReadiness.mockResolvedValue({
+      data: { ...assemblyReadiness, current_plan: assemblyPlan },
+      correlationId: "req_ready_plan",
+    });
+    renderStage("assembly");
+    fireEvent.click(await screen.findByRole("button", { name: "执行合片" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并执行" }));
+    expect(await screen.findByText("排队中")).toBeInTheDocument();
+    expect(mockExecuteAssembly).toHaveBeenCalledTimes(1);
+    expect(mockExecuteAssembly).toHaveBeenCalledWith("LEE柠檬", 3);
+  });
+
+  it("45 restores an active Assembly Task after refresh without another POST", async () => {
+    mockGetAssemblyReadiness.mockResolvedValue({
+      data: { ...assemblyReadiness, current_plan: assemblyPlan },
+      correlationId: "req_ready_plan",
+    });
+    mockGetProjectTasks.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        tasks: [{ ...assemblyTask, status: "RUNNING", started_at: "2026-08-20T10:02:00+08:00" }],
+      },
+      correlationId: "req_tasks",
+    });
+    renderStage("assembly");
+    expect(await screen.findByText("正在生成最终视频")).toBeInTheDocument();
+    expect(mockExecuteAssembly).not.toHaveBeenCalled();
+  });
+
+  it("46 renders historical Final Video versions with independent playback URLs", async () => {
+    const { container } = renderStage("assembly");
+    expect(await screen.findByRole("heading", { name: "Final Video 历史" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Final Video v001" })).toBeInTheDocument();
+    const urls = Array.from(container.querySelectorAll("video")).map((video) => video.getAttribute("src"));
+    expect(urls).toContain("http://127.0.0.1:8000/api/projects/LEE%E6%9F%A0%E6%AA%AC/assembly/versions/1/video");
+  });
+
+  it("47 offers durable resume for a retryable failed Assembly Task", async () => {
+    const failed = {
+      ...assemblyTask,
+      status: "FAILED" as const,
+      finished_at: "2026-08-20T10:03:00+08:00",
+      error: { code: "ASSEMBLY_EXECUTION_FAILED", message: "安全错误", retryable: true },
+    };
+    mockGetAssemblyReadiness.mockResolvedValue({
+      data: { ...assemblyReadiness, current_plan: assemblyPlan },
+      correlationId: "req_ready_plan",
+    });
+    mockGetProjectTasks.mockResolvedValue({
+      data: { project_id: "LEE柠檬", tasks: [failed] },
+      correlationId: "req_tasks",
+    });
+    mockResumeAssembly.mockResolvedValue({
+      data: { ...assemblyTask, task_id: "task_fedcba9876543210fedcba9876543210" },
+      correlationId: "req_resume",
+    });
+    renderStage("assembly");
+    fireEvent.click(await screen.findByRole("button", { name: "继续执行合片" }));
+    await waitFor(() => expect(mockResumeAssembly).toHaveBeenCalledWith("LEE柠檬", 3));
+    expect(mockExecuteAssembly).not.toHaveBeenCalled();
   });
 });

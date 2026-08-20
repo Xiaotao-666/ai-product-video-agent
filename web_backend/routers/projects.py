@@ -361,9 +361,14 @@ async def get_project_assembly(
     repository: Annotated[
         PostProductionRepository, Depends(get_postproduction_repository)
     ],
+    planning_service: Annotated[
+        AssemblyPlanningService, Depends(get_assembly_planning_service)
+    ],
 ) -> AssemblyDetail:
     try:
-        return repository.get_assembly(project_id)
+        detail = repository.get_assembly(project_id)
+        readiness = planning_service.readiness(project_id)
+        return detail.model_copy(update={"current_plan": readiness.current_plan})
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
 
@@ -380,6 +385,24 @@ async def get_project_assembly_video(
 ) -> FileResponse:
     try:
         media = repository.resolve_assembly_video(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped_error(error)
+    return _media_response(media.path, media.media_type)
+
+
+@router.get(
+    "/projects/{project_id}/assembly/versions/{version}/video",
+    response_class=FileResponse,
+)
+async def get_project_assembly_version_video(
+    project_id: str,
+    version: int,
+    repository: Annotated[
+        PostProductionRepository, Depends(get_postproduction_repository)
+    ],
+) -> FileResponse:
+    try:
+        media = repository.resolve_assembly_version_video(project_id, version)
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
     return _media_response(media.path, media.media_type)

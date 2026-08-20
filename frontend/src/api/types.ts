@@ -678,6 +678,23 @@ export interface AssemblyShotVersion {
   video_version: number;
 }
 
+export interface AssemblyFinalVideoSource {
+  shot_id: number;
+  video_version: number;
+  prompt_version: number | null;
+  order: number | null;
+}
+
+export interface AssemblyFinalVideoVersion {
+  final_video_version: number;
+  assembly_version: number | null;
+  created_at: string | null;
+  total_duration: number | null;
+  video_available: boolean;
+  is_current: boolean;
+  shots: AssemblyFinalVideoSource[];
+}
+
 export interface AssemblyDetail {
   project_id: string;
   status: string;
@@ -688,6 +705,8 @@ export interface AssemblyDetail {
   total_duration: number | null;
   video_available: boolean;
   shots: AssemblyShotVersion[];
+  current_plan: AssemblyPlan | null;
+  final_videos: AssemblyFinalVideoVersion[];
 }
 
 export type AssemblyPlanningStatus = "NOT_READY" | "READY" | "OUTDATED";

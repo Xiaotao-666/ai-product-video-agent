@@ -12,6 +12,8 @@ from typing import Any
 
 from web_backend.models.postproduction import (
     AssemblyDetail,
+    AssemblyFinalVideoVersion,
+    AssemblyFinalVideoSource,
     AssemblyShotVersion,
     ExportDetail,
     ExportVoiceTimingSummary,
@@ -217,21 +219,64 @@ class PostProductionRepository:
         raw_shots = recorded.get("shot_versions")
         if not isinstance(raw_shots, list):
             raw_shots = active_entry.get("shots")
-        shots: list[AssemblyShotVersion] = []
-        if isinstance(raw_shots, list):
-            for raw in raw_shots:
-                item = _mapping(raw)
-                shot_id = _safe_positive_int(item.get("shot_id"))
-                video_version = _safe_positive_int(
-                    item.get("approved_video_version")
-                )
-                if shot_id is not None and video_version is not None:
-                    shots.append(
-                        AssemblyShotVersion(
-                            shot_id=shot_id,
-                            video_version=video_version,
+        source_shots = self._assembly_source_shots(raw_shots)
+        shots = [
+            AssemblyShotVersion(
+                shot_id=item.shot_id,
+                video_version=item.video_version,
+            )
+            for item in source_shots
+        ]
+        final_videos: list[AssemblyFinalVideoVersion] = []
+        seen_versions: set[int] = set()
+        for raw in assemblies if isinstance(assemblies, list) else []:
+            entry = _mapping(raw)
+            final_version = _safe_positive_int(entry.get("assembly_version"))
+            if final_version is None or final_version in seen_versions:
+                continue
+            seen_versions.add(final_version)
+            final_videos.append(
+                AssemblyFinalVideoVersion(
+                    final_video_version=final_version,
+                    assembly_version=_safe_positive_int(entry.get("plan_version")),
+                    created_at=_safe_text(entry.get("created_at")),
+                    total_duration=_safe_nonnegative_number(
+                        entry.get("total_duration")
+                    ),
+                    video_available=(
+                        self._assembly_media(
+                            project_dir, final_version, required=False
                         )
-                    )
+                        is not None
+                    ),
+                    is_current=final_version == version,
+                    shots=self._assembly_source_shots(entry.get("shots")),
+                )
+            )
+        if version is not None and version not in seen_versions and has_manifest_version:
+            final_videos.append(
+                AssemblyFinalVideoVersion(
+                    final_video_version=version,
+                    assembly_version=_safe_positive_int(
+                        active_entry.get("plan_version")
+                    ),
+                    created_at=_safe_text(
+                        recorded.get("assembled_at") or active_entry.get("created_at")
+                    ),
+                    total_duration=_safe_nonnegative_number(
+                        recorded.get(
+                            "total_duration", active_entry.get("total_duration")
+                        )
+                    ),
+                    video_available=(
+                        self._assembly_media(project_dir, version, required=False)
+                        is not None
+                    ),
+                    is_current=True,
+                    shots=source_shots,
+                )
+            )
+        final_videos.sort(key=lambda item: item.final_video_version, reverse=True)
         return AssemblyDetail(
             project_id=api_id,
             status=status,
@@ -248,6 +293,7 @@ class PostProductionRepository:
                 self._assembly_media(project_dir, version, required=False) is not None
             ),
             shots=shots,
+            final_videos=final_videos,
         )
 
     def resolve_assembly_video(self, project_id: str) -> ResolvedMedia:
@@ -259,6 +305,46 @@ class PostProductionRepository:
         )
         assert media is not None
         return media
+
+    def resolve_assembly_version_video(
+        self, project_id: str, version: int
+    ) -> ResolvedMedia:
+        detail = self.get_assembly(project_id)
+        if not any(
+            item.final_video_version == version for item in detail.final_videos
+        ):
+            raise AssemblyMediaNotFound("assembly video version was not found")
+        media = self._assembly_media(
+            self.project_repository.resolve_project_dir(project_id).resolve(),
+            version,
+            required=True,
+        )
+        assert media is not None
+        return media
+
+    @staticmethod
+    def _assembly_source_shots(raw_shots: Any) -> list[AssemblyFinalVideoSource]:
+        shots: list[AssemblyFinalVideoSource] = []
+        if not isinstance(raw_shots, list):
+            return shots
+        for raw in raw_shots:
+            item = _mapping(raw)
+            shot_id = _safe_positive_int(item.get("shot_id"))
+            video_version = _safe_positive_int(
+                item.get("approved_video_version") or item.get("video_version")
+            )
+            if shot_id is None or video_version is None:
+                continue
+            shots.append(
+                AssemblyFinalVideoSource(
+                    shot_id=shot_id,
+                    video_version=video_version,
+                    prompt_version=_safe_positive_int(item.get("prompt_version")),
+                    order=_safe_positive_int(item.get("order")),
+                )
+            )
+        shots.sort(key=lambda item: (item.order or item.shot_id, item.shot_id))
+        return shots
 
     def get_voice(self, project_id: str) -> VoiceDetail:
         api_id, project_dir, project_data = self._project_context(project_id)

@@ -6,6 +6,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from web_backend.models.assembly_planning import AssemblyPlan
+
 
 class VoiceCalibrationStatus(StrEnum):
     PASS = "PASS"
@@ -21,6 +23,23 @@ class AssemblyShotVersion(BaseModel):
     video_version: int = Field(ge=1)
 
 
+class AssemblyFinalVideoSource(BaseModel):
+    shot_id: int = Field(ge=1)
+    video_version: int = Field(ge=1)
+    prompt_version: int | None = Field(default=None, ge=1)
+    order: int | None = Field(default=None, ge=1)
+
+
+class AssemblyFinalVideoVersion(BaseModel):
+    final_video_version: int = Field(ge=1)
+    assembly_version: int | None = Field(default=None, ge=1)
+    created_at: str | None = None
+    total_duration: float | None = Field(default=None, ge=0)
+    video_available: bool
+    is_current: bool
+    shots: list[AssemblyFinalVideoSource] = Field(default_factory=list)
+
+
 class AssemblyDetail(BaseModel):
     project_id: str
     status: str
@@ -31,6 +50,8 @@ class AssemblyDetail(BaseModel):
     total_duration: float | None = Field(default=None, ge=0)
     video_available: bool
     shots: list[AssemblyShotVersion] = Field(default_factory=list)
+    current_plan: AssemblyPlan | None = None
+    final_videos: list[AssemblyFinalVideoVersion] = Field(default_factory=list)
 
 
 class VoiceDetail(BaseModel):

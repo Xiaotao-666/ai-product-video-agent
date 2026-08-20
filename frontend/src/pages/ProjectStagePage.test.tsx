@@ -317,6 +317,8 @@ describe("ProjectStagePage", () => {
         total_duration: 18,
         video_available: true,
         shots: [],
+        current_plan: null,
+        final_videos: [],
       },
       correlationId: "req_assembly",
     });

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ApiClientError,
   createAssemblyPlan,
+  executeAssembly,
   getAssembly,
   getAssemblyReadiness,
   getAssemblyVideoUrl,
+  getAssemblyVersionVideoUrl,
   getExport,
   getExportVideoUrl,
   getMusic,
@@ -13,6 +15,7 @@ import {
   getSubtitle,
   getVoice,
   getVoiceAudioUrl,
+  resumeAssembly,
 } from "../api/client";
 import type {
   AssemblyDetail,
@@ -21,9 +24,14 @@ import type {
   MusicDetail,
   MusicMixDetail,
   SubtitleDetail,
+  TaskRecord,
   VoiceCalibrationStatus,
   VoiceDetail,
 } from "../api/types";
+import {
+  toTaskActionError,
+  useProjectTaskPolling,
+} from "../hooks/useProjectTaskPolling";
 import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import type { StageKey } from "../stageDefinitions";
 import { StatusBadge } from "./StatusBadge";
@@ -121,17 +129,37 @@ function errorCopy(code: string): string {
   if (code === "PROJECT_NOT_FOUND" || code === "INVALID_PROJECT_ID") {
     return "项目不存在或已被删除。";
   }
+  if (code === "ASSEMBLY_PLAN_OUTDATED") {
+    return "Assembly 计划已过期，请先基于当前正式镜头创建新计划。";
+  }
+  if (code === "PROJECT_BUSY") {
+    return "项目当前正在执行其他任务，请稍后重试。";
+  }
+  if (code === "ASSEMBLY_EXECUTION_FAILED") {
+    return "成片生成失败，可在确认计划仍有效后继续。";
+  }
+  if (code === "TASK_RUNNER_UNAVAILABLE") {
+    return "本地任务服务暂时不可用，请稍后重试。";
+  }
   return "暂时无法读取该阶段详情，请重试。";
 }
 
-function DetailHeading({ title }: { title: string }) {
+function DetailHeading({
+  title,
+  interactive = false,
+}: {
+  title: string;
+  interactive?: boolean;
+}) {
   return (
     <div className="stage-section-heading postproduction-heading">
       <div>
-        <p className="page-kicker">PERSISTED READ-ONLY DETAIL</p>
+        <p className="page-kicker">
+          {interactive ? "ASSEMBLY WORKFLOW" : "PERSISTED READ-ONLY DETAIL"}
+        </p>
         <h2 id="postproduction-detail-title">{title}</h2>
       </div>
-      <span>只读</span>
+      <span>{interactive ? "可执行" : "只读"}</span>
     </div>
   );
 }
@@ -179,11 +207,47 @@ function AssemblyContent({
   detail: AssemblyDetail;
   initialReadiness: AssemblyReadiness;
 }) {
+  const [assembly, setAssembly] = useState(detail);
   const [readiness, setReadiness] = useState(initialReadiness);
   const [creating, setCreating] = useState(false);
   const [planError, setPlanError] = useState<DetailError | null>(null);
   const [planCreated, setPlanCreated] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const submitGuard = useRef(false);
+  useEffect(() => setAssembly(detail), [detail]);
   useEffect(() => setReadiness(initialReadiness), [initialReadiness]);
+
+  const currentPlanVersion = readiness.current_plan?.assembly_version ?? null;
+  const isAssemblyTask = useCallback(
+    (candidate: TaskRecord) =>
+      candidate.operation === "ASSEMBLY_EXECUTE"
+      && (currentPlanVersion === null
+        || candidate.target_id === `assembly_v${String(currentPlanVersion).padStart(3, "0")}`),
+    [currentPlanVersion],
+  );
+  const refreshAssembly = useCallback(async () => {
+    const [detailResult, readinessResult] = await Promise.all([
+      getAssembly(projectId),
+      getAssemblyReadiness(projectId),
+    ]);
+    setAssembly(detailResult.data);
+    setReadiness(readinessResult.data);
+  }, [projectId]);
+  const {
+    task,
+    setTask,
+    error: taskError,
+    setError: setTaskError,
+    active,
+    terminalRefreshPending,
+    attachToExistingTask,
+  } = useProjectTaskPolling({
+    projectId,
+    isTask: isAssemblyTask,
+    onTerminalRefresh: refreshAssembly,
+    recoverLatestTerminalTask: true,
+  });
 
   const createPlan = async () => {
     setCreating(true);
@@ -196,6 +260,7 @@ function AssemblyContent({
         current_plan: result.data,
       }));
       setPlanCreated(true);
+      setTask(null);
     } catch (error) {
       setPlanError({
         code: error instanceof ApiClientError ? error.code : "UNKNOWN_ERROR",
@@ -206,15 +271,79 @@ function AssemblyContent({
     }
   };
 
-  const status = statusPresentation(detail.needs_update ? "STALE" : detail.status);
+  const submitExecution = async (resume: boolean) => {
+    const plan = readiness.current_plan;
+    if (!plan || submitGuard.current) return;
+    submitGuard.current = true;
+    setSubmitting(true);
+    setTaskError(null);
+    try {
+      const result = resume
+        ? await resumeAssembly(projectId, plan.assembly_version)
+        : await executeAssembly(projectId, plan.assembly_version);
+      const expectedTarget = `assembly_v${String(plan.assembly_version).padStart(3, "0")}`;
+      if (
+        result.data.project_id !== projectId
+        || result.data.operation !== "ASSEMBLY_EXECUTE"
+        || result.data.target_id !== expectedTarget
+      ) {
+        throw new ApiClientError({
+          message: "Assembly Task 与当前计划不匹配。",
+          code: "INVALID_RESPONSE",
+        });
+      }
+      setTask(result.data);
+      setConfirming(false);
+    } catch (caught) {
+      const safeError = toTaskActionError(caught);
+      if (safeError.code === "PROJECT_BUSY" && await attachToExistingTask()) {
+        setConfirming(false);
+      } else {
+        setTaskError(safeError);
+      }
+    } finally {
+      submitGuard.current = false;
+      setSubmitting(false);
+    }
+  };
+
+  const status = statusPresentation(assembly.needs_update ? "STALE" : assembly.status);
   const planningStatus = statusPresentation(
     readiness.current_plan?.status ?? readiness.status,
   );
   const plannedShots = readiness.current_plan?.shots ?? readiness.shots;
   const plannedDuration = readiness.current_plan?.total_duration ?? readiness.total_duration;
+  const planAlreadyExecuted = Boolean(
+    currentPlanVersion !== null
+    && assembly.final_videos.some(
+      (version) => version.assembly_version === currentPlanVersion,
+    ),
+  );
+  const resumable = Boolean(
+    task
+    && !planAlreadyExecuted
+    && (task.status === "FAILED" || task.status === "INTERRUPTED")
+    && task.error?.retryable,
+  );
+  const taskStatus = task
+    ? {
+        QUEUED: "排队中",
+        RUNNING: "正在生成最终视频",
+        SUCCEEDED: "已完成",
+        FAILED: "生成失败",
+        INTERRUPTED: "执行已中断",
+        CANCELLED: "执行已取消",
+      }[task.status]
+    : null;
+  const historicalFinalVideos = assembly.final_videos.filter(
+    (version) => !version.is_current,
+  );
+  const currentFinalVideo = assembly.final_videos.find(
+    (version) => version.is_current,
+  ) ?? null;
   return (
     <>
-      <DetailHeading title="合片详情" />
+      <DetailHeading title="合片详情" interactive />
       <div className="postproduction-title-row">
         <h3>Assembly 计划</h3>
         <StatusBadge label={planningStatus.label} tone={planningStatus.tone} />
@@ -274,7 +403,7 @@ function AssemblyContent({
       )}
       {planCreated && (
         <p className="action-success" role="status">
-          Assembly 计划已创建。本阶段不会生成或拼接视频。
+          Assembly 计划已创建，可以在确认后生成 Final Video。
         </p>
       )}
       {planError && (
@@ -283,34 +412,83 @@ function AssemblyContent({
           {planError.correlationId && <small>错误编号：{planError.correlationId}</small>}
         </div>
       )}
+      {readiness.current_plan?.status === "READY" && !planAlreadyExecuted && !active && !resumable && (
+        <button
+          className="primary-button"
+          type="button"
+          disabled={submitting}
+          onClick={() => setConfirming(true)}
+        >
+          执行合片
+        </button>
+      )}
+      {resumable && !active && (
+        <button
+          className="primary-button"
+          type="button"
+          disabled={submitting}
+          onClick={() => void submitExecution(true)}
+        >
+          {submitting ? "正在恢复…" : "继续执行合片"}
+        </button>
+      )}
+      {confirming && (
+        <div className="assembly-confirmation" role="dialog" aria-modal="true" aria-labelledby="assembly-confirm-title">
+          <h3 id="assembly-confirm-title">确认生成 Final Video？</h3>
+          <p>将根据当前Assembly Plan生成Final Video。不会修改Shot版本。</p>
+          <div className="assembly-confirmation-actions">
+            <button type="button" className="secondary-button" disabled={submitting} onClick={() => setConfirming(false)}>
+              取消
+            </button>
+            <button type="button" className="primary-button" disabled={submitting} onClick={() => void submitExecution(false)}>
+              {submitting ? "正在提交…" : "确认并执行"}
+            </button>
+          </div>
+        </div>
+      )}
+      {task && (
+        <div className="assembly-task-status" role="status">
+          <strong>{taskStatus}</strong>
+          <span>Assembly Plan {readiness.current_plan ? versionLabel(readiness.current_plan.assembly_version) : ""}</span>
+          {terminalRefreshPending && <span>正在刷新成片记录…</span>}
+          {task.error && <span>{errorCopy(task.error.code)}</span>}
+        </div>
+      )}
+      {taskError && (
+        <div className="postproduction-error" role="alert">
+          <p>{errorCopy(taskError.code)}</p>
+          {taskError.correlationId && <small>错误编号：{taskError.correlationId}</small>}
+        </div>
+      )}
       <div className="postproduction-subsection">
       <div className="postproduction-title-row">
         <h3>当前正式合片</h3>
         <StatusBadge label={status.label} tone={status.tone} />
       </div>
-      {detail.needs_update && (
+      {assembly.needs_update && (
         <div className="stale-warning" role="status">
           <strong>当前合片已过期，需要重新合片</strong>
-          <span>旧版本仍可只读播放，本页面不会启动合片任务。</span>
+          <span>旧版本仍可播放；请先创建新的 Assembly 计划，再生成新成片。</span>
         </div>
       )}
-      {detail.current_version === null ? (
+      {assembly.current_version === null ? (
         <p className="postproduction-empty-copy">尚未生成合片。</p>
       ) : (
         <>
           <dl className="postproduction-facts">
-            <StateFact label="正式版本" value={versionLabel(detail.current_version)} />
+            <StateFact label="正式版本" value={versionLabel(assembly.current_version)} />
+            <StateFact label="Assembly Plan" value={versionLabel(currentFinalVideo?.assembly_version ?? null)} />
             <StateFact label="状态" value={status.label} />
-            <StateFact label="创建时间" value={dateLabel(detail.created_at)} />
-            <StateFact label="总时长" value={secondsLabel(detail.total_duration)} />
+            <StateFact label="创建时间" value={dateLabel(assembly.created_at)} />
+            <StateFact label="总时长" value={secondsLabel(assembly.total_duration)} />
             <StateFact
               label="Changed Shot"
-              value={detail.changed_shot_id ? `Shot ${String(detail.changed_shot_id).padStart(2, "0")}` : "无"}
+              value={assembly.changed_shot_id ? `Shot ${String(assembly.changed_shot_id).padStart(2, "0")}` : "无"}
             />
           </dl>
           <div className="postproduction-media-card">
             <h3>合片视频</h3>
-            {detail.video_available ? (
+            {assembly.video_available && assembly.current_version ? (
               <video controls preload="metadata" src={getAssemblyVideoUrl(projectId)} />
             ) : (
               <MediaUnavailable kind="视频" />
@@ -318,12 +496,17 @@ function AssemblyContent({
           </div>
           <div className="postproduction-subsection">
             <h3>使用的 Shot 版本</h3>
-            {detail.shots.length > 0 ? (
+            {(currentFinalVideo?.shots.length ?? assembly.shots.length) > 0 ? (
               <ul className="component-version-list">
-                {detail.shots.map((shot) => (
+                {(currentFinalVideo?.shots ?? assembly.shots).map((shot) => (
                   <li key={shot.shot_id}>
                     <span>Shot {String(shot.shot_id).padStart(2, "0")}</span>
-                    <strong>{versionLabel(shot.video_version)}</strong>
+                    <strong>
+                      Video {versionLabel(shot.video_version)}
+                      {"prompt_version" in shot && typeof shot.prompt_version === "number"
+                        ? ` · Prompt ${versionLabel(shot.prompt_version)}`
+                        : ""}
+                    </strong>
                   </li>
                 ))}
               </ul>
@@ -334,6 +517,32 @@ function AssemblyContent({
         </>
       )}
       </div>
+      {historicalFinalVideos.length > 0 && (
+        <div className="postproduction-subsection">
+          <h3>Final Video 历史</h3>
+          <div className="assembly-version-history">
+            {historicalFinalVideos.map((version) => (
+              <article key={version.final_video_version} className="postproduction-media-card">
+                <div className="postproduction-title-row">
+                  <h3>Final Video {versionLabel(version.final_video_version)}</h3>
+                  <span>{version.is_current ? "当前版本" : "历史版本"}</span>
+                </div>
+                <dl className="postproduction-facts">
+                  <StateFact label="Assembly Plan" value={versionLabel(version.assembly_version)} />
+                  <StateFact label="总时长" value={secondsLabel(version.total_duration)} />
+                  <StateFact label="源镜头" value={`${version.shots.length} 个`} />
+                  <StateFact label="创建时间" value={dateLabel(version.created_at)} />
+                </dl>
+                {version.video_available ? (
+                  <video controls preload="metadata" src={getAssemblyVersionVideoUrl(projectId, version.final_video_version)} />
+                ) : (
+                  <MediaUnavailable kind="视频" />
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -619,7 +828,7 @@ export function PostProductionStageContent({
       {loaded.kind === "export" && <ExportContent projectId={projectId} detail={loaded.data} />}
       <p className="stage-readonly-note">
         {loaded.kind === "assembly"
-          ? "本阶段只保存版本化 Assembly 计划，不会运行 FFmpeg、生成合片视频或修改 Shot 版本。"
+          ? "Assembly 执行只使用已确认的计划快照；不会修改 Shot 或 Prompt 版本。"
           : "本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。"}
       </p>
     </section>

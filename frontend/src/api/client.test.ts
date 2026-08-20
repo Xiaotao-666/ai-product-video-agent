@@ -8,11 +8,13 @@ import {
   approveStoryboard,
   approveVideoPrompts,
   createProject,
+  executeAssembly,
   generateCreative,
   generateStoryboard,
   generateVideoPrompts,
   getAssembly,
   getAssemblyVideoUrl,
+  getAssemblyVersionVideoUrl,
   getCapabilities,
   getCreativeContent,
   getHealth,
@@ -45,6 +47,7 @@ import {
   regenerateVideoPrompts,
   preflightShotGeneration,
   resumeShotGeneration,
+  resumeAssembly,
   startShotGeneration,
   startMultiShotGeneration,
   retryCreative,
@@ -1090,11 +1093,22 @@ describe("API client", () => {
       needs_update: false, changed_shot_id: null,
       created_at: "2026-08-18T10:00:00+08:00", total_duration: 18.5,
       video_available: true, shots: [{ shot_id: 1, video_version: 2 }],
+      current_plan: null,
+      final_videos: [{
+        final_video_version: 2, assembly_version: 1,
+        created_at: "2026-08-18T10:00:00+08:00", total_duration: 18.5,
+        video_available: true, is_current: true,
+        shots: [{ shot_id: 1, video_version: 2, prompt_version: 3, order: 1 }],
+      }],
       final_video_path: "D:\\private\\final.mp4", ffmpeg_command: "hidden",
     })));
     const payload = (await getAssembly("LEE柠檬")).data;
     expect(payload.current_version).toBe(2);
     expect(payload.shots).toEqual([{ shot_id: 1, video_version: 2 }]);
+    expect(payload.final_videos[0]).toMatchObject({
+      final_video_version: 2,
+      assembly_version: 1,
+    });
     expect(payload).not.toHaveProperty("final_video_path");
   });
 
@@ -1163,10 +1177,31 @@ describe("API client", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     expect(getAssemblyVideoUrl("LEE柠檬")).toContain("/LEE%E6%9F%A0%E6%AA%AC/assembly/video");
+    expect(getAssemblyVersionVideoUrl("LEE柠檬", 2)).toContain("/assembly/versions/2/video");
     expect(getVoiceAudioUrl("LEE柠檬")).toContain("/post-production/voice/audio");
     expect(getMusicAudioUrl("LEE柠檬")).toContain("/post-production/music/audio");
     expect(getExportVideoUrl("LEE柠檬")).toContain("/LEE%E6%9F%A0%E6%AA%AC/export/video");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("submits and resumes one Assembly Task with only the plan version", async () => {
+    const task = {
+      ...taskPayload,
+      operation: "ASSEMBLY_EXECUTE",
+      target_id: "assembly_v003",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(task, 202))
+      .mockResolvedValueOnce(responseOf(task, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await executeAssembly("LEE柠檬", 3)).data.operation).toBe("ASSEMBLY_EXECUTE");
+    expect((await resumeAssembly("LEE柠檬", 3)).data.target_id).toBe("assembly_v003");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/assembly/execute");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/assembly/resume");
+    for (const call of fetchMock.mock.calls) {
+      expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({ assembly_version: 3 });
+    }
   });
 
   it("rejects malformed post-production DTOs", async () => {

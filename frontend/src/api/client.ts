@@ -8,6 +8,8 @@ import {
 import type {
   ApiResult,
   AssemblyDetail,
+  AssemblyFinalVideoVersion,
+  AssemblyFinalVideoSource,
   AssemblyPlan,
   AssemblyPlanningStatus,
   AssemblyPlanShot,
@@ -1678,6 +1680,56 @@ function parseAssemblyShotVersion(
   return { shot_id: value.shot_id, video_version: value.video_version };
 }
 
+function parseAssemblyFinalVideoSource(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyFinalVideoSource {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.shot_id) ||
+    !isPositiveInteger(value.video_version) ||
+    !isNullablePositiveInteger(value.prompt_version) ||
+    !isNullablePositiveInteger(value.order)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的成片来源版本。", correlationId);
+  }
+  return {
+    shot_id: value.shot_id,
+    video_version: value.video_version,
+    prompt_version: value.prompt_version,
+    order: value.order,
+  };
+}
+
+function parseAssemblyFinalVideoVersion(
+  value: unknown,
+  correlationId: string | null,
+): AssemblyFinalVideoVersion {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.final_video_version) ||
+    !isNullablePositiveInteger(value.assembly_version) ||
+    !isNullableString(value.created_at) ||
+    !isNullableNonNegativeNumber(value.total_duration) ||
+    typeof value.video_available !== "boolean" ||
+    typeof value.is_current !== "boolean" ||
+    !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的成片版本。", correlationId);
+  }
+  return {
+    final_video_version: value.final_video_version,
+    assembly_version: value.assembly_version,
+    created_at: parseContentText(value.created_at, correlationId),
+    total_duration: value.total_duration,
+    video_available: value.video_available,
+    is_current: value.is_current,
+    shots: value.shots.map((shot) =>
+      parseAssemblyFinalVideoSource(shot, correlationId),
+    ),
+  };
+}
+
 function parseAssemblyDetail(
   value: unknown,
   correlationId: string | null,
@@ -1692,7 +1744,8 @@ function parseAssemblyDetail(
     !isNullableString(value.created_at) ||
     !isNullableNonNegativeNumber(value.total_duration) ||
     typeof value.video_available !== "boolean" ||
-    !Array.isArray(value.shots)
+    !Array.isArray(value.shots) ||
+    !Array.isArray(value.final_videos)
   ) {
     return invalidResponse("Backend 返回了无法读取的合片详情。", correlationId);
   }
@@ -1707,6 +1760,13 @@ function parseAssemblyDetail(
     video_available: value.video_available,
     shots: value.shots.map((shot) =>
       parseAssemblyShotVersion(shot, correlationId),
+    ),
+    current_plan:
+      value.current_plan === null
+        ? null
+        : parseAssemblyPlan(value.current_plan, correlationId),
+    final_videos: value.final_videos.map((version) =>
+      parseAssemblyFinalVideoVersion(version, correlationId),
     ),
   };
 }
@@ -2876,8 +2936,69 @@ export async function createAssemblyPlan(
   };
 }
 
+export async function executeAssembly(
+  projectId: string,
+  assemblyVersion: number,
+): Promise<ApiResult<TaskRecord>> {
+  if (!isPositiveInteger(assemblyVersion)) {
+    throw new ApiClientError({
+      message: "Assembly Plan 版本无效。",
+      code: "INVALID_ASSEMBLY_VERSION",
+    });
+  }
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/assembly/execute`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ assembly_version: assemblyVersion }),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function resumeAssembly(
+  projectId: string,
+  assemblyVersion: number,
+): Promise<ApiResult<TaskRecord>> {
+  if (!isPositiveInteger(assemblyVersion)) {
+    throw new ApiClientError({
+      message: "Assembly Plan 版本无效。",
+      code: "INVALID_ASSEMBLY_VERSION",
+    });
+  }
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/assembly/resume`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ assembly_version: assemblyVersion }),
+    },
+  );
+  return {
+    data: parseTaskRecord(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
 export function getAssemblyVideoUrl(projectId: string): string {
   return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/assembly/video`;
+}
+
+export function getAssemblyVersionVideoUrl(
+  projectId: string,
+  version: number,
+): string {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({
+      message: "成片版本无效。",
+      code: "INVALID_ASSEMBLY_VERSION",
+    });
+  }
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/assembly/versions/${encodeURIComponent(String(version))}/video`;
 }
 
 export async function getVoice(

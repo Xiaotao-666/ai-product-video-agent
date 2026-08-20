@@ -214,6 +214,7 @@ class WebBackendPhase1AcceptanceTests(unittest.TestCase):
                 "/api/projects/{project_id}/assembly/execute",
                 "/api/projects/{project_id}/assembly/resume",
                 "/api/projects/{project_id}/assembly/video",
+                "/api/projects/{project_id}/assembly/versions/{version}/video",
                 "/api/projects/{project_id}/post-production/voice",
                 "/api/projects/{project_id}/post-production/voice/audio",
                 "/api/projects/{project_id}/post-production/subtitle",

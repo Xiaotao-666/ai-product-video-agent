@@ -2984,6 +2984,63 @@
   color: #7c8790;
 }
 
+.assembly-confirmation,
+.assembly-task-status {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #dfe5e8;
+  border-radius: 11px;
+  background: #f8faf9;
+}
+
+.assembly-confirmation h3,
+.assembly-confirmation p,
+.assembly-task-status strong,
+.assembly-task-status span {
+  margin: 0;
+}
+
+.assembly-confirmation h3,
+.assembly-task-status strong {
+  color: #2f3b45;
+  font-size: 14px;
+}
+
+.assembly-confirmation p,
+.assembly-task-status span {
+  color: #687580;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.assembly-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.assembly-version-history {
+  display: grid;
+  gap: 14px;
+}
+
+.assembly-version-history .postproduction-media-card {
+  margin-top: 0;
+  background: #fff;
+}
+
+.assembly-version-history .postproduction-title-row {
+  margin-top: 0;
+}
+
+.assembly-version-history .postproduction-title-row > span {
+  color: #66737d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .creative-action-heading {
   align-items: center;
 }
