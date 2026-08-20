@@ -221,7 +221,7 @@ export function ShotPromptRevisionDraftAction({
             基于当前 Prompt v{basePromptVersion} 生成一份修改建议。本阶段不会创建新Prompt版本，也不会生成视频。
           </p>
         </div>
-        {(draftTask || submitting) && (
+        {(submitting || (draftTask && (active || !draft))) && (
           <span className="creative-task-status" role="status">
             {taskStatusCopy(draftTask?.status ?? "SUBMITTING")}
           </span>
@@ -235,7 +235,7 @@ export function ShotPromptRevisionDraftAction({
         </div>
       )}
 
-      {draftTask?.status === "FAILED" && (
+      {draftTask?.status === "FAILED" && !draft && (
         <div className="creative-action-message creative-action-error" role="alert">
           <strong>{taskStatusCopy("FAILED")}</strong>
           <span>{taskFailureCopy(draftTask)}</span>
@@ -243,7 +243,7 @@ export function ShotPromptRevisionDraftAction({
         </div>
       )}
 
-      {draftTask?.status === "INTERRUPTED" && (
+      {draftTask?.status === "INTERRUPTED" && !draft && (
         <div className="creative-action-message" role="status">
           <strong>{taskStatusCopy("INTERRUPTED")}</strong>
           <span>刷新不会重新提交AI请求；可在确认当前Prompt后重新操作。</span>

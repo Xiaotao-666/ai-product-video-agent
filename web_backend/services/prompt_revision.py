@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from project_manager import create_project_paths
+from project_manager import ProjectDirectoryError, ProjectPaths, create_project_paths
 from project_state import ProjectCheckpoint, ProjectStateError
 from prompt_generator import (
     ProductVideoRequest,
@@ -188,6 +189,22 @@ class PromptRevisionDraftService:
                     try:
                         checkpoint = ProjectCheckpoint.load(paths)
                         plan = self._load_prompt_plan(paths.video_prompts_path())
+                    except (ShotReviewError, ProjectStateError) as error:
+                        raise PromptRevisionNotAllowed(
+                            "Prompt revision draft adoption is not allowed"
+                        ) from error
+                    except (
+                        OSError,
+                        UnicodeError,
+                        ValidationError,
+                        ProjectDirectoryError,
+                    ) as error:
+                        raise ProjectDataCorrupt(
+                            "project Prompt data is unreadable"
+                        ) from error
+                    project_snapshot = copy.deepcopy(checkpoint.data)
+                    prompt_plan_snapshot = plan.model_dump()
+                    try:
                         payload = adopt_prompt_revision_draft(
                             paths=paths,
                             checkpoint=checkpoint,
@@ -200,14 +217,30 @@ class PromptRevisionDraftService:
                             task_logger=None,
                             draft_created_at=locked_draft.created_at.isoformat(),
                         )
-                    except (ShotReviewError, ProjectStateError) as error:
-                        raise PromptRevisionNotAllowed(
-                            "Prompt revision draft adoption is not allowed"
-                        ) from error
-                    except (OSError, UnicodeError, ValidationError) as error:
-                        raise ProjectDataCorrupt(
-                            "project Prompt data is unreadable"
-                        ) from error
+                    except Exception as error:
+                        self._restore_adopt_snapshots(
+                            paths,
+                            checkpoint,
+                            project_snapshot,
+                            prompt_plan_snapshot,
+                        )
+                        if isinstance(error, (ShotReviewError, ProjectStateError)):
+                            raise PromptRevisionNotAllowed(
+                                "Prompt revision draft adoption is not allowed"
+                            ) from error
+                        if isinstance(
+                            error,
+                            (
+                                OSError,
+                                UnicodeError,
+                                ValidationError,
+                                ProjectDirectoryError,
+                            ),
+                        ):
+                            raise ProjectDataCorrupt(
+                                "project Prompt data is unreadable"
+                            ) from error
+                        raise
             except ProjectLockBusy as error:
                 raise ProjectBusy("project write lock is busy") from error
 
@@ -224,6 +257,25 @@ class PromptRevisionDraftService:
             ),
             created_at=str(payload["created_at"]),
         )
+
+    @staticmethod
+    def _restore_adopt_snapshots(
+        paths: ProjectPaths,
+        checkpoint: ProjectCheckpoint,
+        project_snapshot: dict[str, Any],
+        prompt_plan_snapshot: dict[str, Any],
+    ) -> None:
+        """Restore both canonical files when a synchronous adoption fails."""
+
+        try:
+            paths.save_json(paths.video_prompts_path(), prompt_plan_snapshot)
+            paths.save_json(paths.project_state_path(), project_snapshot)
+        except (OSError, UnicodeError, ProjectDirectoryError) as error:
+            raise ProjectDataCorrupt(
+                "project Prompt adoption rollback failed"
+            ) from error
+        checkpoint.data.clear()
+        checkpoint.data.update(copy.deepcopy(project_snapshot))
 
     def _run(
         self,

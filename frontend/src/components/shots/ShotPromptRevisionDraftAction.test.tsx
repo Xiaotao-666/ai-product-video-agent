@@ -203,6 +203,59 @@ describe("ShotPromptRevisionDraftAction", () => {
     expect(await screen.findByText(draft.draft_prompt)).toBeInTheDocument();
   });
 
+  it("uses a durable draft after F5 and suppresses its stale interrupted task", async () => {
+    const interrupted: TaskRecord = {
+      ...queuedTask,
+      status: "INTERRUPTED",
+      started_at: "2026-08-20T00:00:01Z",
+      finished_at: "2026-08-20T00:00:02Z",
+      error: {
+        code: "TASK_INTERRUPTED",
+        message: "上一次Web任务已中断，请根据当前项目状态继续。",
+        retryable: false,
+      },
+    };
+    mockProjectTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [interrupted] },
+      correlationId: "req_tasks",
+    });
+    mockGetDraft.mockResolvedValue({ data: draft, correlationId: "req_draft" });
+
+    renderAction();
+
+    expect(await screen.findByText(draft.draft_prompt)).toBeInTheDocument();
+    expect(screen.queryByText("修改任务已中断")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "采用此修改" })).toBeEnabled();
+    expect(mockSubmit).not.toHaveBeenCalled();
+  });
+
+  it("uses a durable draft instead of displaying an old failed task error", async () => {
+    const failed: TaskRecord = {
+      ...queuedTask,
+      status: "FAILED",
+      started_at: "2026-08-20T00:00:01Z",
+      finished_at: "2026-08-20T00:00:02Z",
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "AI Prompt修改服务暂时不可用，请稍后重试。",
+        retryable: true,
+      },
+    };
+    mockProjectTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [failed] },
+      correlationId: "req_tasks",
+    });
+    mockGetDraft.mockResolvedValue({ data: draft, correlationId: "req_draft" });
+
+    renderAction();
+
+    expect(await screen.findByText(draft.draft_prompt)).toBeInTheDocument();
+    expect(
+      screen.queryByText("AI Prompt修改服务暂时不可用，请稍后重试。"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "采用此修改" })).toBeEnabled();
+  });
+
   it("shows draft actions and cancel is local only", async () => {
     mockGetDraft.mockResolvedValue({ data: draft, correlationId: "req_draft" });
     renderAction();
