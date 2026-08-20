@@ -61,6 +61,7 @@ export const TASK_OPERATIONS = [
   "VIDEO_PROMPT_REGENERATE",
   "SHOT_GENERATE",
   "SHOT_REGENERATE",
+  "SHOT_PROMPT_VERSION_GENERATE",
   "SHOT_RESUME",
   "SHOT_PROMPT_REVISION_DRAFT",
   "ASSEMBLY",
@@ -315,7 +316,7 @@ export interface StoryboardContentResponse {
 
 export interface VideoPromptShotContent {
   shot_id: number | null;
-  prompt_version: number | null;
+  prompt_version?: number | null;
   prompt_source: string | null;
   visual_prompt_core: string | null;
   prompt_text: string | null;
@@ -362,6 +363,13 @@ export interface ShotPromptSummary {
   final_prompt: string | null;
 }
 
+export interface ShotPromptVersionSummary {
+  version: number;
+  source: string | null;
+  parent_version: number | null;
+  created_at: string | null;
+}
+
 export interface ShotGenerationSummary {
   model: string | null;
   visual_input_mode: ShotVisualInputMode;
@@ -386,6 +394,9 @@ export interface ShotDetail {
   pending_review_version: number | null;
   version_count: number;
   generation_count: number;
+  active_prompt_version?: number | null;
+  approved_prompt_version?: number | null;
+  prompt_versions?: ShotPromptVersionSummary[];
   versions: ShotVersion[];
 }
 
@@ -426,19 +437,23 @@ export interface GenerationIssue {
 export interface GenerationShotContext {
   shot_id: string;
   duration_seconds: number;
-  prompt_version: number | null;
+  prompt_version?: number | null;
   resolution: string;
   official_video_version?: number | null;
   pending_video_version?: number | null;
   next_video_version?: number | null;
   base_video_version?: number | null;
   next_prompt_version?: number | null;
+  official_prompt_version?: number | null;
+  prompt_source?: string | null;
+  prompt_parent_version?: number | null;
 }
 
 export type GenerationIntent =
   | "INITIAL"
   | "REGENERATE_CURRENT_PROMPT"
-  | "REGENERATE_MANUAL_PROMPT";
+  | "REGENERATE_MANUAL_PROMPT"
+  | "GENERATE_WITH_PROMPT_VERSION";
 
 export interface GenerationModelOption {
   model_id: string;
@@ -499,6 +514,7 @@ export interface GenerationPreflightRequest {
   };
   base_prompt_version?: number | null;
   edited_prompt?: string | null;
+  target_prompt_version?: number | null;
 }
 
 export interface ResolvedGeneration {
@@ -556,6 +572,7 @@ export interface ShotGenerationStatusResponse {
   resume_available: boolean;
   resume_kind: ShotGenerationResumeKind | null;
   video_version: number | null;
+  prompt_version?: number | null;
   provider_submission_known: boolean;
   generation_intent?: GenerationIntent | null;
 }

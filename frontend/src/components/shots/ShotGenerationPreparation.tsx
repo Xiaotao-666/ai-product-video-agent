@@ -9,6 +9,7 @@ import {
   getShotGenerationOptions,
   getShotGenerationStatus,
   getTask,
+  generateShotWithPromptVersion,
   preflightShotGeneration,
   resumeShotGeneration,
   regenerateShotGeneration,
@@ -37,6 +38,7 @@ interface Props {
     promptVersion: number;
     editablePrompt: string;
   };
+  targetPromptVersion?: number;
 }
 
 type LoadState = "loading" | "success" | "error";
@@ -118,6 +120,9 @@ function requestErrorMessage(error: unknown): string {
 
 function taskOperationMatchesIntent(task: TaskRecord, intent: GenerationIntent): boolean {
   if (task.operation === "SHOT_RESUME") return true;
+  if (intent === "GENERATE_WITH_PROMPT_VERSION") {
+    return task.operation === "SHOT_PROMPT_VERSION_GENERATE";
+  }
   return intent === "INITIAL"
     ? task.operation === "SHOT_GENERATE"
     : task.operation === "SHOT_REGENERATE";
@@ -128,8 +133,13 @@ function findRecoverableTask(
   status: ShotGenerationStatusResponse,
   shotId: string,
   intent: GenerationIntent,
+  targetPromptVersion: number | null,
 ): TaskRecord | null {
   if (intent !== "INITIAL" && status.generation_intent !== intent) return null;
+  if (
+    intent === "GENERATE_WITH_PROMPT_VERSION"
+    && status.prompt_version !== targetPromptVersion
+  ) return null;
   if (
     intent === "INITIAL"
     && status.generation_intent !== null
@@ -149,9 +159,11 @@ export function ShotGenerationPreparation({
   onCompleted,
   intent = "INITIAL",
   manualPrompt,
+  targetPromptVersion,
 }: Props) {
   const regenerating = intent !== "INITIAL";
   const manualRegeneration = intent === "REGENERATE_MANUAL_PROMPT";
+  const selectedPromptGeneration = intent === "GENERATE_WITH_PROMPT_VERSION";
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [options, setOptions] = useState<GenerationOptionsResponse | null>(null);
   const [assets, setAssets] = useState<ReferenceAsset[]>([]);
@@ -175,6 +187,7 @@ export function ShotGenerationPreparation({
   const [editedPrompt, setEditedPrompt] = useState(manualPrompt?.editablePrompt ?? "");
   const [editorError, setEditorError] = useState<string | null>(null);
   const [manualSession, setManualSession] = useState<ManualSessionState>("IDLE");
+  const [selectedPromptOpen, setSelectedPromptOpen] = useState(false);
   const submitGuard = useRef(false);
 
   const loadGenerationState = useCallback(async () => {
@@ -191,6 +204,7 @@ export function ShotGenerationPreparation({
       statusResult.data,
       shotId,
       intent,
+      targetPromptVersion ?? null,
     );
     setActiveTask(active);
     if (manualRegeneration) {
@@ -203,7 +217,7 @@ export function ShotGenerationPreparation({
         && statusResult.data.state === "SUBMISSION_UNKNOWN"
       ) setManualSession("STATUS_UNCERTAIN");
     }
-  }, [intent, manualRegeneration, projectId, shotId]);
+  }, [intent, manualRegeneration, projectId, shotId, targetPromptVersion]);
 
   useEffect(() => {
     if (manualRegeneration && !editorOpen) {
@@ -224,6 +238,7 @@ export function ShotGenerationPreparation({
           statusResult.data,
           shotId,
           intent,
+          targetPromptVersion ?? null,
         );
         const ownsDurableProgress = statusResult.data.generation_intent === intent
           && (recovered !== null
@@ -248,7 +263,14 @@ export function ShotGenerationPreparation({
     setLoadError(null);
     Promise.all([
       regenerating
-        ? getShotGenerationOptions(projectId, shotId, intent)
+        ? selectedPromptGeneration
+          ? getShotGenerationOptions(
+              projectId,
+              shotId,
+              intent,
+              targetPromptVersion ?? null,
+            )
+          : getShotGenerationOptions(projectId, shotId, intent)
         : getShotGenerationOptions(projectId, shotId),
       getReferenceAssets(projectId),
       getShotGenerationStatus(projectId, shotId),
@@ -266,8 +288,19 @@ export function ShotGenerationPreparation({
         statusResult.data,
         shotId,
         intent,
+        targetPromptVersion ?? null,
       );
       setActiveTask(recovered);
+      if (
+        selectedPromptGeneration
+        && (
+          recovered
+          || (
+            statusResult.data.generation_intent === intent
+            && statusResult.data.prompt_version === targetPromptVersion
+          )
+        )
+      ) setSelectedPromptOpen(true);
       if (manualRegeneration && recovered) setManualSession("TASK_ATTACHED");
       else if (
         manualRegeneration
@@ -281,7 +314,7 @@ export function ShotGenerationPreparation({
       setLoadState("error");
     });
     return () => { mounted = false; };
-  }, [editorOpen, intent, manualRegeneration, projectId, shotId]);
+  }, [editorOpen, intent, manualRegeneration, projectId, selectedPromptGeneration, shotId, targetPromptVersion]);
 
   useEffect(() => {
     if (!activeTask || !ACTIVE_TASK_STATUSES.has(activeTask.status)) return;
@@ -358,6 +391,9 @@ export function ShotGenerationPreparation({
             edited_prompt: editedPrompt,
           }
         : {}),
+      ...(selectedPromptGeneration
+        ? { target_prompt_version: targetPromptVersion ?? null }
+        : {}),
       model_selection: selection,
       requested_model: selection === "MANUAL" ? requestedModel : null,
       visual_input: { mode: visualMode, asset_ids: visualMode === "none" || !assetId ? [] : [assetId] },
@@ -411,7 +447,13 @@ export function ShotGenerationPreparation({
       getProjectTasks(projectId),
       getShotGenerationStatus(projectId, shotId),
     ]);
-    const active = findRecoverableTask(tasks.data.tasks, status.data, shotId, intent);
+    const active = findRecoverableTask(
+      tasks.data.tasks,
+      status.data,
+      shotId,
+      intent,
+      targetPromptVersion ?? null,
+    );
     if (active) {
       setActiveTask(active);
       setGenerationStatus(status.data);
@@ -428,12 +470,19 @@ export function ShotGenerationPreparation({
     if (manualRegeneration) setManualSession("SUBMITTING");
     setSubmitError(null);
     try {
-      const response = await (regenerating ? regenerateShotGeneration : startShotGeneration)(projectId, shotId, {
+      const submit = selectedPromptGeneration
+        ? generateShotWithPromptVersion
+        : regenerating
+          ? regenerateShotGeneration
+          : startShotGeneration;
+      const response = await submit(projectId, shotId, {
         ...generationPayload(),
         preflight_fingerprint: result.preflight_fingerprint,
         confirm_paid_call: true,
       });
-      const expectedOperation = regenerating ? "SHOT_REGENERATE" : "SHOT_GENERATE";
+      const expectedOperation = selectedPromptGeneration
+        ? "SHOT_PROMPT_VERSION_GENERATE"
+        : regenerating ? "SHOT_REGENERATE" : "SHOT_GENERATE";
       if (
         response.data.operation !== expectedOperation
         || response.data.target_id !== shotId
@@ -491,7 +540,9 @@ export function ShotGenerationPreparation({
         getProjectTasks(projectId),
         getShotGenerationStatus(projectId, shotId),
       ]);
-      const expectedOperation = regenerating ? "SHOT_REGENERATE" : "SHOT_GENERATE";
+      const expectedOperation = selectedPromptGeneration
+        ? "SHOT_PROMPT_VERSION_GENERATE"
+        : regenerating ? "SHOT_REGENERATE" : "SHOT_GENERATE";
       const matching = tasksResult.data.tasks.filter((task) =>
         task.operation === expectedOperation
         && task.target_id === shotId
@@ -551,14 +602,34 @@ export function ShotGenerationPreparation({
   return (
     <section className="shot-generation-preparation" aria-labelledby={`generation-preparation-title-${intent}`}>
       <div className="stage-section-heading">
-        <p className="page-kicker">{manualRegeneration ? "NEW PROMPT + VIDEO VERSION" : regenerating ? "NEW VIDEO VERSION" : "GENERATION PREPARATION"}</p>
-        <h2 id={`generation-preparation-title-${intent}`}>{manualRegeneration ? "手动编辑 Prompt 并生成" : regenerating ? "用当前 Prompt 重新生成" : "生成设置"}</h2>
+        <p className="page-kicker">{selectedPromptGeneration ? "ADOPTED AI PROMPT + VIDEO" : manualRegeneration ? "NEW PROMPT + VIDEO VERSION" : regenerating ? "NEW VIDEO VERSION" : "GENERATION PREPARATION"}</p>
+        <h2 id={`generation-preparation-title-${intent}`}>{selectedPromptGeneration ? "使用 AI 修改后的 Prompt 生成" : manualRegeneration ? "手动编辑 Prompt 并生成" : regenerating ? "用当前 Prompt 重新生成" : "生成设置"}</h2>
         <p>{regenerating
-          ? manualRegeneration
+          ? selectedPromptGeneration
+            ? "使用已经采用的 AI Revision Prompt 创建新 Video；不会修改 Prompt Version 或当前正式组合。"
+            : manualRegeneration
             ? "将创建新的 Prompt Version 与 Video Version；当前正式组合会保留到新视频审核通过。"
             : "可重新选择模型与 Visual Input。当前正式版本会保留，只有新版本审核通过后才会替换。"
           : "先检查模型、Visual Input 和素材兼容性，再明确确认付费生成。"}</p>
       </div>
+      {selectedPromptGeneration && !selectedPromptOpen && (
+        <div className="manual-prompt-entry">
+          <dl className="generation-context-facts">
+            <div><dt>Prompt Version</dt><dd>v{targetPromptVersion ?? "-"}</dd></div>
+            <div><dt>Source</dt><dd>AI Revision</dd></div>
+          </dl>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={paidActionBlocked || loadState !== "success" || !options?.eligible}
+            onClick={() => {
+              clearResult();
+              setSelectedPromptOpen(true);
+            }}
+          >使用此 Prompt 生成视频</button>
+          <p>当前正式 Video 与 Prompt 会保留，只有新视频审核通过后才会替换。</p>
+        </div>
+      )}
       {manualRegeneration && !editorOpen && (
         <div className="manual-prompt-entry">
           <button className="primary-button" type="button" disabled={paidActionBlocked || !manualPrompt} onClick={() => {
@@ -571,9 +642,9 @@ export function ShotGenerationPreparation({
           <p>编辑内容只会先保留在当前页面；取消不会创建 Prompt Version 或生成任务。</p>
         </div>
       )}
-      {loadState === "loading" && (!manualRegeneration || editorOpen) && <p aria-live="polite">正在读取生成选项…</p>}
+      {loadState === "loading" && (!manualRegeneration || editorOpen) && !selectedPromptGeneration && <p aria-live="polite">正在读取生成选项…</p>}
       {loadState === "error" && (!manualRegeneration || editorOpen) && <p role="alert">{loadError}</p>}
-      {loadState === "success" && options && (
+      {loadState === "success" && options && (!selectedPromptGeneration || selectedPromptOpen) && (
         <>
           {manualRegeneration && editorOpen && (
             <section className="manual-prompt-editor" aria-labelledby="manual-prompt-editor-title">
@@ -681,7 +752,13 @@ export function ShotGenerationPreparation({
           )}
           <dl className="generation-context-facts">
             <div><dt>镜头</dt><dd>{options.shot.shot_id.replace("shot_", "Shot ")}</dd></div>
-            {manualRegeneration ? <>
+            {selectedPromptGeneration ? <>
+              <div><dt>当前正式 Video</dt><dd>{options.shot.official_video_version ? `v${options.shot.official_video_version}` : "尚无"}</dd></div>
+              <div><dt>当前正式 Prompt</dt><dd>{options.shot.official_prompt_version ? `v${options.shot.official_prompt_version}` : "尚无"}</dd></div>
+              <div><dt>生成使用 Prompt</dt><dd>{optionVersions?.generationPromptVersion ? `v${optionVersions.generationPromptVersion}` : "未就绪"}</dd></div>
+              <div><dt>Prompt Source</dt><dd>AI Revision</dd></div>
+              <div><dt>此次将生成</dt><dd>{versionLabel("Video", optionVersions?.nextVideoVersion ?? null)}</dd></div>
+            </> : manualRegeneration ? <>
               <div><dt>基础 Prompt</dt><dd>{optionVersions?.basePromptVersion ? `v${optionVersions.basePromptVersion}` : "未就绪"}</dd></div>
               <div><dt>此次将创建</dt><dd>{versionLabel("Prompt", optionVersions?.nextPromptVersion ?? null)}</dd></div>
               <div><dt>生成将使用</dt><dd>{versionLabel("Prompt", optionVersions?.generationPromptVersion ?? null)}</dd></div>
@@ -718,7 +795,12 @@ export function ShotGenerationPreparation({
               <p className="page-kicker">PREFLIGHT</p><h3>{result.ready ? "配置检查通过" : "配置尚未就绪"}</h3>
               <dl>
                 <div><dt>镜头</dt><dd>{result.shot.shot_id.replace("shot_", "Shot ")}</dd></div>
-                {manualRegeneration ? <>
+                {selectedPromptGeneration ? <>
+                  <div><dt>当前正式 Video</dt><dd>{result.shot.official_video_version ? `v${result.shot.official_video_version}` : "尚无"}</dd></div>
+                  <div><dt>当前正式 Prompt</dt><dd>{result.shot.official_prompt_version ? `v${result.shot.official_prompt_version}` : "尚无"}</dd></div>
+                  <div><dt>生成使用 Prompt</dt><dd>{versionLabel("Prompt", resultVersions?.generationPromptVersion ?? null)}</dd></div>
+                  <div><dt>此次将生成</dt><dd>{versionLabel("Video", resultVersions?.nextVideoVersion ?? null)}</dd></div>
+                </> : manualRegeneration ? <>
                   <div><dt>基础 Prompt</dt><dd>{resultVersions?.basePromptVersion ? `v${resultVersions.basePromptVersion}` : "未就绪"}</dd></div>
                   <div><dt>此次将创建</dt><dd>{versionLabel("Prompt", resultVersions?.nextPromptVersion ?? null)}</dd></div>
                   <div><dt>生成将使用</dt><dd>{versionLabel("Prompt", resultVersions?.generationPromptVersion ?? null)}</dd></div>
@@ -727,16 +809,20 @@ export function ShotGenerationPreparation({
                 <div><dt>时长</dt><dd>{result.shot.duration_seconds} 秒</dd></div><div><dt>分辨率</dt><dd>{result.shot.resolution}</dd></div><div><dt>Visual Input</dt><dd>{options.visual_input_modes.find((item) => item.mode === result.resolved?.visual_input_mode)?.display_name ?? visualMode}{selectedAsset ? ` · ${selectedAsset.asset_id}` : ""}</dd></div><div><dt>模型</dt><dd>{result.resolved?.model_display_name ?? "未解析"}</dd></div><div><dt>Provider</dt><dd>{result.resolved?.provider_display_name ?? "未解析"}</dd></div><div><dt>API Version</dt><dd>{result.resolved?.api_version ?? "未解析"}</dd></div><div><dt>生成模式</dt><dd>{result.resolved?.generation_mode_display_name ?? "未解析"}</dd></div>
               </dl>
               {result.issues.length > 0 && <ul className="generation-issues-list">{result.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}</ul>}
-              {result.ready && result.preflight_fingerprint && <button className="primary-button" type="button" disabled={paidActionBlocked} onClick={() => setConfirmOpen(true)}>{manualRegeneration ? "确认 Prompt 修改与生成配置" : regenerating ? "生成新的待审核版本" : "生成视频"}</button>}
+              {result.ready && result.preflight_fingerprint && <button className="primary-button" type="button" disabled={paidActionBlocked} onClick={() => setConfirmOpen(true)}>{selectedPromptGeneration ? "使用此 Prompt 生成视频" : manualRegeneration ? "确认 Prompt 修改与生成配置" : regenerating ? "生成新的待审核版本" : "生成视频"}</button>}
               {!result.ready && <p>配置未通过，不会创建任务或调用视频模型。</p>}
             </section>
           )}
           {confirmOpen && result?.ready && result.resolved && (
             <div className="generation-confirm-backdrop" role="presentation"><section className="generation-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="paid-generation-title">
-              <p className="page-kicker">FINAL CONFIRMATION</p><h3 id="paid-generation-title">{manualRegeneration ? "确认修改并生成" : regenerating ? "确认生成新的待审核版本" : "确认生成视频"}</h3>
+              <p className="page-kicker">FINAL CONFIRMATION</p><h3 id="paid-generation-title">{selectedPromptGeneration ? "确认使用 AI Revision Prompt 生成" : manualRegeneration ? "确认修改并生成" : regenerating ? "确认生成新的待审核版本" : "确认生成视频"}</h3>
               <dl>
                 <div><dt>Shot</dt><dd>{result.shot.shot_id.replace("shot_", "Shot ")}</dd></div>
-                {manualRegeneration ? <>
+                {selectedPromptGeneration ? <>
+                  <div><dt>当前正式</dt><dd>{versionLabel("Video", result.shot.official_video_version ?? null)} / {versionLabel("Prompt", result.shot.official_prompt_version ?? null)}</dd></div>
+                  <div><dt>本次视频生成将使用</dt><dd>{versionLabel("Prompt", resultVersions?.generationPromptVersion ?? null)}</dd></div>
+                  <div><dt>将创建</dt><dd>{versionLabel("Video", resultVersions?.nextVideoVersion ?? null)}</dd></div>
+                </> : manualRegeneration ? <>
                   <div><dt>当前基础 Prompt</dt><dd>{resultVersions?.basePromptVersion ? `v${resultVersions.basePromptVersion}` : "未就绪"}</dd></div>
                   <div><dt>将创建新 Prompt</dt><dd>{resultVersions?.nextPromptVersion ? `v${resultVersions.nextPromptVersion}` : "待计算"}</dd></div>
                   <div><dt>本次视频生成将使用</dt><dd>{versionLabel("Prompt", resultVersions?.generationPromptVersion ?? null)}</dd></div>
@@ -745,8 +831,9 @@ export function ShotGenerationPreparation({
                 <div><dt>Duration</dt><dd>{result.shot.duration_seconds} 秒</dd></div><div><dt>Resolution</dt><dd>{result.shot.resolution}</dd></div><div><dt>Visual Input</dt><dd>{result.resolved.visual_input_mode}{selectedAsset ? ` · ${selectedAsset.asset_id}` : ""}</dd></div><div><dt>Provider</dt><dd>{result.resolved.provider_display_name}</dd></div><div><dt>Model</dt><dd>{result.resolved.model_display_name}</dd></div><div><dt>API Version</dt><dd>{result.resolved.api_version}</dd></div><div><dt>Generation Mode</dt><dd>{result.resolved.generation_mode_display_name}</dd></div>
               </dl>
               {manualRegeneration && <p>本次将创建 {versionLabel("Prompt", resultVersions?.nextPromptVersion ?? null)}，并使用 {versionLabel("Prompt", resultVersions?.generationPromptVersion ?? null)} 生成 {versionLabel("Video", resultVersions?.nextVideoVersion ?? null)}。</p>}
-              <p className="paid-call-warning"><strong>{manualRegeneration ? "确认后将调用付费视频模型。" : regenerating ? "确认后将调用付费视频模型并创建新的视频版本。" : "确认后将向视频生成模型提交付费请求。"}</strong></p>
-              <div className="generation-confirm-actions"><button className="secondary-button" type="button" disabled={submissionPending} onClick={() => setConfirmOpen(false)}>取消</button><button className="primary-button" type="button" disabled={submissionPending || acceptedStatusUncertain} onClick={() => void confirmGeneration()}>{manualRegeneration ? "确认修改并生成" : "确认并生成视频"}</button></div>
+              {selectedPromptGeneration && <p>本次将使用 {versionLabel("Prompt", resultVersions?.generationPromptVersion ?? null)} 生成 {versionLabel("Video", resultVersions?.nextVideoVersion ?? null)}；不会创建或修改 Prompt Version。</p>}
+              <p className="paid-call-warning"><strong>{selectedPromptGeneration || manualRegeneration ? "确认后将调用付费视频模型。" : regenerating ? "确认后将调用付费视频模型并创建新的视频版本。" : "确认后将向视频生成模型提交付费请求。"}</strong></p>
+              <div className="generation-confirm-actions"><button className="secondary-button" type="button" disabled={submissionPending} onClick={() => setConfirmOpen(false)}>取消</button><button className="primary-button" type="button" disabled={submissionPending || acceptedStatusUncertain} onClick={() => void confirmGeneration()}>{selectedPromptGeneration ? "确认使用此 Prompt 生成" : manualRegeneration ? "确认修改并生成" : "确认并生成视频"}</button></div>
             </section></div>
           )}
           </>}

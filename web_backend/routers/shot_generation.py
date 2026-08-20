@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from web_backend.dependencies import (
@@ -203,9 +203,15 @@ def generation_options(
         Depends(get_shot_generation_preflight_service),
     ],
     intent: GenerationIntent = GenerationIntent.INITIAL,
+    target_prompt_version: Annotated[int | None, Query(ge=1)] = None,
 ) -> GenerationOptionsResponse:
     try:
-        return service.options(project_id, shot_id, intent)
+        return service.options(
+            project_id,
+            shot_id,
+            intent,
+            target_prompt_version=target_prompt_version,
+        )
     except ProjectRepositoryError as error:
         _raise_mapped(error)
 
@@ -320,6 +326,44 @@ def regenerate_generation(
 ) -> TaskRecord:
     try:
         task = service.submit_regenerate(
+            project_id,
+            shot_id,
+            payload,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except PaidCallConfirmationRequired as error:
+        raise registered_api_error("PAID_CALL_CONFIRMATION_REQUIRED") from error
+    except GenerationPreflightStale as error:
+        raise registered_api_error("GENERATION_PREFLIGHT_STALE") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
+
+
+@router.post(
+    "/projects/{project_id}/shots/{shot_id}/generation/prompt-version",
+    response_model=TaskRecord,
+    status_code=202,
+    responses=_accepted_task_response(TaskOperation.SHOT_PROMPT_VERSION_GENERATE),
+)
+def generate_with_prompt_version(
+    project_id: str,
+    shot_id: str,
+    payload: GenerationStartRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        ShotGenerationActionService,
+        Depends(get_shot_generation_action_service),
+    ],
+) -> TaskRecord:
+    try:
+        task = service.submit_prompt_version_generation(
             project_id,
             shot_id,
             payload,

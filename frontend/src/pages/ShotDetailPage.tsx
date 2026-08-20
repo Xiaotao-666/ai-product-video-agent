@@ -333,6 +333,13 @@ export function ShotDetailPage() {
     ["NOT_STARTED", "GENERATING", "FAILED"].includes(shot.status);
   const showCurrentPromptRegeneration = Boolean(official || pending);
   const manualPromptBase = pending ?? official;
+  const adoptedAiPrompt = (shot.prompt_versions ?? []).find(
+    (prompt) => prompt.version === shot.active_prompt_version,
+  );
+  const showAdoptedAiPromptGeneration = Boolean(
+    adoptedAiPrompt?.source === "ai_revision"
+    && shot.active_prompt_version !== shot.approved_prompt_version,
+  );
 
   return (
     <main className="main-content shot-detail-page">
@@ -381,6 +388,16 @@ export function ShotDetailPage() {
         />
       )}
 
+      {showAdoptedAiPromptGeneration && adoptedAiPrompt && (
+        <ShotGenerationPreparation
+          projectId={project.project_id}
+          shotId={shot.shot_id}
+          intent="GENERATE_WITH_PROMPT_VERSION"
+          targetPromptVersion={adoptedAiPrompt.version}
+          onCompleted={loadShot}
+        />
+      )}
+
       {manualPromptBase?.prompt.version && editablePromptCore(manualPromptBase) && (
         <>
           <ShotGenerationPreparation
@@ -398,6 +415,7 @@ export function ShotDetailPage() {
             projectId={project.project_id}
             shotId={shot.shot_id}
             basePromptVersion={manualPromptBase.prompt.version}
+            onAdoptedRefresh={loadShot}
           />
         </>
       )}

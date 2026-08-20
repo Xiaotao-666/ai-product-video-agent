@@ -24,6 +24,7 @@ interface ShotPromptRevisionDraftActionProps {
   projectId: string;
   shotId: string;
   basePromptVersion: number;
+  onAdoptedRefresh?: () => void | Promise<void>;
 }
 
 function taskStatusCopy(status: TaskRecord["status"] | "SUBMITTING"): string {
@@ -58,6 +59,7 @@ export function ShotPromptRevisionDraftAction({
   projectId,
   shotId,
   basePromptVersion,
+  onAdoptedRefresh,
 }: ShotPromptRevisionDraftActionProps) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -197,6 +199,7 @@ export function ShotPromptRevisionDraftAction({
       }
       setAdoption(result.data);
       setConfirmingAdoption(false);
+      await onAdoptedRefresh?.();
     } catch (caught) {
       setError(toTaskActionError(caught));
     } finally {

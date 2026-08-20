@@ -17,6 +17,7 @@ from shot_generation_workflow import (
     CurrentPromptRegenerationNotAllowed,
     InitialShotGenerationNotAllowed,
     ManualPromptRegenerationNotAllowed,
+    SelectedPromptVersionGenerationNotAllowed,
     ShotGenerationResumeUnavailable,
     ShotGenerationWorkflowError,
     ShotPromptSafetyRejected,
@@ -24,6 +25,7 @@ from shot_generation_workflow import (
     generate_initial_shot,
     regenerate_shot_with_current_prompt,
     regenerate_shot_with_manual_prompt,
+    regenerate_shot_with_prompt_version,
     resume_shot_generation,
 )
 from storyboard import CreativeBrief, Storyboard, StoryboardShot, VideoPromptPlan
@@ -329,6 +331,54 @@ class ShotGenerationActionService:
             ),
         )
 
+    def submit_prompt_version_generation(
+        self,
+        project_id: str,
+        shot_id: str,
+        payload: GenerationStartRequest,
+        *,
+        correlation_id: str | None,
+    ) -> TaskRecord:
+        if not payload.confirm_paid_call:
+            raise PaidCallConfirmationRequired("paid call was not confirmed")
+        if payload.intent is not GenerationIntent.GENERATE_WITH_PROMPT_VERSION:
+            raise GenerationPreflightStale("selected Prompt generation intent is invalid")
+        canonical_project_id = self._project_repository.get_project(project_id).project_id
+        canonical_shot_id, _shot_number = normalize_shot_id(shot_id)
+        preflight_payload = GenerationPreflightRequest.model_validate(
+            payload.model_dump(
+                include={
+                    "intent",
+                    "model_selection",
+                    "requested_model",
+                    "visual_input",
+                    "target_prompt_version",
+                }
+            )
+        )
+        current = self._preflight_service.preflight(
+            canonical_project_id, canonical_shot_id, preflight_payload
+        )
+        if (
+            not current.ready
+            or current.preflight_fingerprint is None
+            or current.preflight_fingerprint != payload.preflight_fingerprint
+        ):
+            raise GenerationPreflightStale("generation preflight changed")
+        return self._task_service.submit(
+            project_id=canonical_project_id,
+            operation=TaskOperation.SHOT_PROMPT_VERSION_GENERATE,
+            target_id=canonical_shot_id,
+            correlation_id=correlation_id,
+            callable_=lambda: self._run_start(
+                canonical_project_id,
+                canonical_shot_id,
+                preflight_payload,
+                payload.preflight_fingerprint,
+                regenerate=True,
+            ),
+        )
+
     def status(
         self, project_id: str, shot_id: str
     ) -> ShotGenerationStatusResponse:
@@ -350,7 +400,11 @@ class ShotGenerationActionService:
         candidate_active = (
             candidate_status not in {"NONE", "EDITING"}
             and str(candidate.get("generation_intent") or "")
-            in {"REGENERATE_CURRENT_PROMPT", "REGENERATE_MANUAL_PROMPT"}
+            in {
+                "REGENERATE_CURRENT_PROMPT",
+                "REGENERATE_MANUAL_PROMPT",
+                "GENERATE_WITH_PROMPT_VERSION",
+            }
         )
         status = str(
             candidate.get("status") if candidate_active else entry.get("status") or "NOT_STARTED"
@@ -409,6 +463,7 @@ class ShotGenerationActionService:
             in {
                 TaskOperation.SHOT_GENERATE,
                 TaskOperation.SHOT_REGENERATE,
+                TaskOperation.SHOT_PROMPT_VERSION_GENERATE,
                 TaskOperation.SHOT_RESUME,
             }
             and active.target_id == canonical_shot_id
@@ -432,6 +487,27 @@ class ShotGenerationActionService:
                 if active_for_shot
                 else ShotGenerationState.NOT_STARTED
             )
+        raw_intent = str(
+            candidate.get("generation_intent")
+            if candidate_active
+            else entry.get("generation_intent")
+            or ""
+        )
+        if raw_intent in GenerationIntent._value2member_map_:
+            public_intent: GenerationIntent | None = GenerationIntent(raw_intent)
+        elif active_for_shot and active.operation is TaskOperation.SHOT_PROMPT_VERSION_GENERATE:
+            public_intent = GenerationIntent.GENERATE_WITH_PROMPT_VERSION
+        elif active_for_shot and active.operation is TaskOperation.SHOT_REGENERATE:
+            public_intent = GenerationIntent.REGENERATE_CURRENT_PROMPT
+        elif entry.get("generation_intent"):
+            public_intent = GenerationIntent.INITIAL
+        else:
+            public_intent = None
+        public_prompt_version = _positive_int(
+            candidate.get("prompt_version")
+            if candidate_active
+            else entry.get("active_prompt_version")
+        )
         return ShotGenerationStatusResponse(
             project_id=canonical_project_id,
             shot_id=canonical_shot_id,
@@ -439,24 +515,9 @@ class ShotGenerationActionService:
             resume_available=resume_kind is not None,
             resume_kind=resume_kind,
             video_version=version,
+            prompt_version=public_prompt_version,
             provider_submission_known=not submission_unknown,
-            generation_intent=(
-                GenerationIntent.REGENERATE_MANUAL_PROMPT
-                if str(
-                    candidate.get("generation_intent")
-                    if candidate_active
-                    else entry.get("generation_intent")
-                    or ""
-                ) == "REGENERATE_MANUAL_PROMPT"
-                else GenerationIntent.REGENERATE_CURRENT_PROMPT
-                if candidate_active
-                or (active_for_shot and active.operation is TaskOperation.SHOT_REGENERATE)
-                or str(entry.get("generation_intent") or "")
-                in {"REGENERATE_CURRENT_PROMPT", "REGENERATE_MANUAL_PROMPT"}
-                else GenerationIntent.INITIAL
-                if entry.get("generation_intent")
-                else None
-            ),
+            generation_intent=public_intent,
         )
 
     def _run_start(
@@ -571,7 +632,27 @@ class ShotGenerationActionService:
                 )
                 if resume
                 else (
-                    regenerate_shot_with_manual_prompt(
+                    regenerate_shot_with_prompt_version(
+                        paths=paths,
+                        checkpoint=checkpoint,
+                        plan=plan,
+                        shot=shot,
+                        shot_id=shot_number,
+                        target_prompt_version=int(
+                            preflight_payload.target_prompt_version or 0
+                        ),
+                        visual_input=visual_input or none_visual_input(),
+                        deepseek_key=deepseek_key,
+                        provider_credentials=credentials,
+                        task_logger=logger,
+                        provider_selection=provider_selection,
+                        provider_registry=registry,
+                    )
+                    if regenerate
+                    and preflight_payload is not None
+                    and preflight_payload.intent
+                    is GenerationIntent.GENERATE_WITH_PROMPT_VERSION
+                    else regenerate_shot_with_manual_prompt(
                         paths=paths,
                         checkpoint=checkpoint,
                         plan=plan,
@@ -636,6 +717,7 @@ class ShotGenerationActionService:
             CurrentPromptRegenerationNotAllowed,
             InitialShotGenerationNotAllowed,
             ManualPromptRegenerationNotAllowed,
+            SelectedPromptVersionGenerationNotAllowed,
             ShotGenerationResumeUnavailable,
         ):
             _task_failure("ACTION_NOT_ALLOWED", "当前镜头状态不允许执行此操作。")

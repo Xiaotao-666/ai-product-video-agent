@@ -22,6 +22,7 @@ class GenerationIntent(StrEnum):
     INITIAL = "INITIAL"
     REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
     REGENERATE_MANUAL_PROMPT = "REGENERATE_MANUAL_PROMPT"
+    GENERATE_WITH_PROMPT_VERSION = "GENERATE_WITH_PROMPT_VERSION"
 
 
 class GenerationVisualInputMode(StrEnum):
@@ -49,6 +50,8 @@ class GenerationIssueCode(StrEnum):
     PROMPT_INVALID = "PROMPT_INVALID"
     PROMPT_UNCHANGED = "PROMPT_UNCHANGED"
     PROMPT_BASE_STALE = "PROMPT_BASE_STALE"
+    PROMPT_VERSION_NOT_FOUND = "PROMPT_VERSION_NOT_FOUND"
+    PROMPT_VERSION_NOT_ELIGIBLE = "PROMPT_VERSION_NOT_ELIGIBLE"
 
 
 class GenerationIssue(ResponseModel):
@@ -66,6 +69,9 @@ class GenerationShotContext(ResponseModel):
     next_video_version: int | None = None
     base_video_version: int | None = None
     next_prompt_version: int | None = None
+    official_prompt_version: int | None = None
+    prompt_source: str | None = None
+    prompt_parent_version: int | None = None
 
 
 class GenerationModelOption(ResponseModel):
@@ -143,6 +149,7 @@ class GenerationPreflightRequest(BaseModel):
     visual_input: GenerationVisualInputRequest
     base_prompt_version: int | None = Field(default=None, ge=1)
     edited_prompt: str | None = Field(default=None, max_length=12000)
+    target_prompt_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_selection(self) -> "GenerationPreflightRequest":
@@ -159,6 +166,15 @@ class GenerationPreflightRequest(BaseModel):
         elif self.base_prompt_version is not None or self.edited_prompt is not None:
             raise ValueError(
                 "manual Prompt fields are only valid for manual Prompt regeneration"
+            )
+        if self.intent is GenerationIntent.GENERATE_WITH_PROMPT_VERSION:
+            if self.target_prompt_version is None:
+                raise ValueError(
+                    "target_prompt_version is required for selected Prompt generation"
+                )
+        elif self.target_prompt_version is not None:
+            raise ValueError(
+                "target_prompt_version is only valid for selected Prompt generation"
             )
         return self
 
@@ -222,5 +238,6 @@ class ShotGenerationStatusResponse(ResponseModel):
     resume_available: bool
     resume_kind: ShotGenerationResumeKind | None = None
     video_version: int | None = Field(default=None, ge=1)
+    prompt_version: int | None = Field(default=None, ge=1)
     provider_submission_known: bool
     generation_intent: GenerationIntent | None = None

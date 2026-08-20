@@ -96,6 +96,8 @@ _ISSUE_MESSAGES = {
     GenerationIssueCode.PROMPT_INVALID: "修改后的视觉 Prompt 核心不符合当前项目约束。",
     GenerationIssueCode.PROMPT_UNCHANGED: "Prompt 没有发生变化，无需创建新版本。",
     GenerationIssueCode.PROMPT_BASE_STALE: "作为编辑基础的 Prompt Version 已发生变化。",
+    GenerationIssueCode.PROMPT_VERSION_NOT_FOUND: "所选 Prompt Version 不存在或不属于当前镜头。",
+    GenerationIssueCode.PROMPT_VERSION_NOT_ELIGIBLE: "所选 Prompt Version 不是可用于生成的 AI Revision。",
 }
 
 
@@ -133,6 +135,13 @@ class _ShotContext:
     prompt_core: str
     active_prompt_version: int | None
     approved_prompt_version: int | None
+    prompt_source: str | None
+    prompt_parent_version: int | None
+    shot_status: str
+    candidate_status: str
+    generation_phase: str
+    video_prompt_stage_status: str
+    prompt_review_stage_status: str
     storyboard_shot: StoryboardShot | None
     creative_brief: CreativeBrief | None
     product_name: str | None
@@ -159,8 +168,14 @@ class ShotGenerationPreflightService:
         project_id: str,
         shot_id: str,
         intent: GenerationIntent = GenerationIntent.INITIAL,
+        target_prompt_version: int | None = None,
     ) -> GenerationOptionsResponse:
-        context = self._context(project_id, shot_id, intent)
+        context = self._context(
+            project_id,
+            shot_id,
+            intent,
+            target_prompt_version=target_prompt_version,
+        )
         registry = self._registry()
         models = self._models(registry)
         modes = [
@@ -196,7 +211,12 @@ class ShotGenerationPreflightService:
         shot_id: str,
         payload: GenerationPreflightRequest,
     ) -> GenerationPreflightResponse:
-        context = self._context(project_id, shot_id, payload.intent)
+        context = self._context(
+            project_id,
+            shot_id,
+            payload.intent,
+            target_prompt_version=payload.target_prompt_version,
+        )
         issues = list(context.state_issues)
         effective_prompt = context.prompt
         if payload.intent is GenerationIntent.REGENERATE_MANUAL_PROMPT:
@@ -289,6 +309,9 @@ class ShotGenerationPreflightService:
                         GenerationIssueCode.VISUAL_INPUT_ASSET_COUNT_INVALID,
                         GenerationIssueCode.INVALID_DURATION,
                         GenerationIssueCode.INVALID_RESOLUTION,
+                        GenerationIssueCode.PROMPT_NOT_APPROVED,
+                        GenerationIssueCode.PROMPT_VERSION_NOT_FOUND,
+                        GenerationIssueCode.PROMPT_VERSION_NOT_ELIGIBLE,
                     }
                     for item in issues
                 ):
@@ -369,6 +392,9 @@ class ShotGenerationPreflightService:
             "next_video_version": context.public.next_video_version,
             "prompt_version": context.public.prompt_version,
             "prompt_sha256": hashlib.sha256(context.prompt.encode("utf-8")).hexdigest(),
+            "prompt_source": context.prompt_source,
+            "prompt_parent_version": context.prompt_parent_version,
+            "target_prompt_version": payload.target_prompt_version,
             "active_prompt_version": context.active_prompt_version,
             "approved_prompt_version": context.approved_prompt_version,
             "base_prompt_version": payload.base_prompt_version,
@@ -384,6 +410,11 @@ class ShotGenerationPreflightService:
                 effective_prompt.encode("utf-8")
             ).hexdigest(),
             "expected_next_prompt_version": context.public.next_prompt_version,
+            "shot_status": context.shot_status,
+            "candidate_status": context.candidate_status,
+            "generation_phase": context.generation_phase,
+            "video_prompt_stage_status": context.video_prompt_stage_status,
+            "prompt_review_stage_status": context.prompt_review_stage_status,
             "duration": context.public.duration_seconds,
             "resolution": context.public.resolution,
             "model_selection": payload.model_selection.value,
@@ -446,6 +477,8 @@ class ShotGenerationPreflightService:
         project_id: str,
         shot_id: str,
         intent: GenerationIntent,
+        *,
+        target_prompt_version: int | None = None,
     ) -> _ShotContext:
         canonical_id, shot_number = normalize_shot_id(shot_id)
         workflow = self.project_repository.get_workflow(project_id)
@@ -488,15 +521,20 @@ class ShotGenerationPreflightService:
             if candidate_status not in {"NONE", "EDITING"}
             else None
         )
-        prompt_version = _positive_int(
-            candidate.get("prompt_version")
-            if intent is GenerationIntent.REGENERATE_CURRENT_PROMPT
-            and candidate_status not in {"NONE", "EDITING"}
-            else checkpoint.get("approved_prompt_version")
-            if intent is GenerationIntent.REGENERATE_CURRENT_PROMPT
-            and approved_version is not None
-            else checkpoint.get("active_prompt_version")
-        )
+        if intent is GenerationIntent.GENERATE_WITH_PROMPT_VERSION:
+            prompt_version = _positive_int(
+                target_prompt_version or checkpoint.get("active_prompt_version")
+            )
+        else:
+            prompt_version = _positive_int(
+                candidate.get("prompt_version")
+                if intent is GenerationIntent.REGENERATE_CURRENT_PROMPT
+                and candidate_status not in {"NONE", "EDITING"}
+                else checkpoint.get("approved_prompt_version")
+                if intent is GenerationIntent.REGENERATE_CURRENT_PROMPT
+                and approved_version is not None
+                else checkpoint.get("active_prompt_version")
+            )
         prompt_record = next(
             (
                 _mapping(value)
@@ -506,20 +544,35 @@ class ShotGenerationPreflightService:
             {},
         )
         prompt = str(prompt_record.get("prompt") or "").strip()
+        prompt_source = str(prompt_record.get("source") or "").strip() or None
+        prompt_parent_version = _positive_int(prompt_record.get("parent_version"))
+        active_prompt_version = _positive_int(checkpoint.get("active_prompt_version"))
+        approved_prompt_version = _positive_int(checkpoint.get("approved_prompt_version"))
         prompt_core = str(
             prompt_record.get("visual_prompt_core")
             or extract_visual_prompt_core(prompt)
         ).strip()
         stages = _mapping(project.get("stages"))
+        video_prompt_stage_status = str(
+            _mapping(stages.get("VIDEO_PROMPT")).get("status") or ""
+        ).upper()
+        prompt_review_stage_status = str(
+            _mapping(stages.get("PROMPT_REVIEW")).get("status") or ""
+        ).upper()
         prompt_approved = (
-            str(_mapping(stages.get("VIDEO_PROMPT")).get("status") or "").upper()
-            == "COMPLETED"
-            and str(_mapping(stages.get("PROMPT_REVIEW")).get("status") or "").upper()
-            == "APPROVED"
+            video_prompt_stage_status == "COMPLETED"
+            and prompt_review_stage_status == "APPROVED"
             and prompt_version is not None
             and bool(prompt)
         )
         issues: list[GenerationIssue] = []
+        if intent is GenerationIntent.GENERATE_WITH_PROMPT_VERSION:
+            if not prompt_record or prompt_version is None or not prompt:
+                issues.append(_issue(GenerationIssueCode.PROMPT_VERSION_NOT_FOUND))
+            elif (prompt_source or "").lower() != "ai_revision":
+                issues.append(_issue(GenerationIssueCode.PROMPT_VERSION_NOT_ELIGIBLE))
+            elif approved_version is None and prompt_version != active_prompt_version:
+                issues.append(_issue(GenerationIssueCode.PROMPT_VERSION_NOT_ELIGIBLE))
         if not prompt_approved:
             issues.append(_issue(GenerationIssueCode.PROMPT_NOT_APPROVED))
 
@@ -533,6 +586,12 @@ class ShotGenerationPreflightService:
             )
         )
         shot_status = str(checkpoint.get("status") or "NOT_STARTED").upper()
+        generation_phase = str(
+            candidate.get("generation_phase")
+            if candidate_status != "NONE"
+            else checkpoint.get("generation_phase")
+            or ""
+        ).upper()
         if intent is GenerationIntent.INITIAL:
             if generated:
                 issues.append(_issue(GenerationIssueCode.SHOT_ALREADY_GENERATED))
@@ -614,12 +673,24 @@ class ShotGenerationPreflightService:
                     if intent is GenerationIntent.REGENERATE_MANUAL_PROMPT
                     else None
                 ),
+                official_prompt_version=_positive_int(
+                    checkpoint.get("approved_prompt_version")
+                ),
+                prompt_source=prompt_source,
+                prompt_parent_version=prompt_parent_version,
             ),
             project_dir=project_dir,
             prompt=prompt or "unavailable",
             prompt_core=prompt_core,
-            active_prompt_version=_positive_int(checkpoint.get("active_prompt_version")),
-            approved_prompt_version=_positive_int(checkpoint.get("approved_prompt_version")),
+            active_prompt_version=active_prompt_version,
+            approved_prompt_version=approved_prompt_version,
+            prompt_source=prompt_source,
+            prompt_parent_version=prompt_parent_version,
+            shot_status=shot_status,
+            candidate_status=candidate_status,
+            generation_phase=generation_phase,
+            video_prompt_stage_status=video_prompt_stage_status,
+            prompt_review_stage_status=prompt_review_stage_status,
             storyboard_shot=storyboard_shot,
             creative_brief=creative_brief,
             product_name=product_name,

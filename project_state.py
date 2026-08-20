@@ -1702,6 +1702,7 @@ class ProjectCheckpoint:
         duration: int,
         resolution: str,
         visual_input: dict[str, Any],
+        prompt_snapshot: dict[str, Any] | None = None,
     ) -> None:
         """Allocate the immutable Candidate Bundle before the billable submit."""
 
@@ -1718,8 +1719,12 @@ class ProjectCheckpoint:
             self.project.shot_version_dir(shot_id, version).mkdir(
                 parents=True, exist_ok=False
             )
-            prompt_payload = self.prompt_version(
-                shot_id, int(candidate.get("prompt_version") or 0)
+            prompt_payload = (
+                copy.deepcopy(prompt_snapshot)
+                if isinstance(prompt_snapshot, dict)
+                else self.prompt_version(
+                    shot_id, int(candidate.get("prompt_version") or 0)
+                )
             )
             safe_metadata = {
                 key: metadata.get(key)
@@ -1823,6 +1828,7 @@ class ProjectCheckpoint:
         generation_mode: str | None = None,
         provider_model: str | None = None,
         provider_api_version: str | None = None,
+        prompt_snapshot: dict[str, Any] | None = None,
     ) -> None:
         task_values = self._provider_task_values(
             provider_task_id,
@@ -1844,8 +1850,12 @@ class ProjectCheckpoint:
             self.project.shot_version_dir(
                 shot_id, int(candidate["video_version"])
             ).mkdir(parents=True, exist_ok=False)
-            prompt_payload = self.prompt_version(
-                shot_id, int(candidate.get("prompt_version") or 0)
+            prompt_payload = (
+                copy.deepcopy(prompt_snapshot)
+                if isinstance(prompt_snapshot, dict)
+                else self.prompt_version(
+                    shot_id, int(candidate.get("prompt_version") or 0)
+                )
             )
             entry.setdefault("generation_versions", []).append(
                 {

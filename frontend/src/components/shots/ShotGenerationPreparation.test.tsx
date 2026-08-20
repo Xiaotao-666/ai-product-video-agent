@@ -9,6 +9,7 @@ import {
   getShotGenerationOptions,
   getShotGenerationStatus,
   getTask,
+  generateShotWithPromptVersion,
   preflightShotGeneration,
   resumeShotGeneration,
   regenerateShotGeneration,
@@ -32,6 +33,7 @@ vi.mock("../../api/client", async (importOriginal) => {
     preflightShotGeneration: vi.fn(),
     getShotGenerationStatus: vi.fn(),
     getTask: vi.fn(),
+    generateShotWithPromptVersion: vi.fn(),
     resumeShotGeneration: vi.fn(),
     regenerateShotGeneration: vi.fn(),
     startShotGeneration: vi.fn(),
@@ -44,6 +46,7 @@ const mockPreflight = vi.mocked(preflightShotGeneration);
 const mockTasks = vi.mocked(getProjectTasks);
 const mockStatus = vi.mocked(getShotGenerationStatus);
 const mockTask = vi.mocked(getTask);
+const mockGenerateWithPrompt = vi.mocked(generateShotWithPromptVersion);
 const mockResume = vi.mocked(resumeShotGeneration);
 const mockRegenerate = vi.mocked(regenerateShotGeneration);
 const mockStart = vi.mocked(startShotGeneration);
@@ -184,6 +187,19 @@ function renderManualPreparation() {
   );
 }
 
+function renderSelectedPromptPreparation() {
+  return render(
+    <MemoryRouter>
+      <ShotGenerationPreparation
+        projectId="project-a"
+        shotId="shot_01"
+        intent="GENERATE_WITH_PROMPT_VERSION"
+        targetPromptVersion={3}
+      />
+    </MemoryRouter>,
+  );
+}
+
 function expectFact(container: HTMLElement, label: string, value: string) {
   const term = within(container).getByText(label, { selector: "dt" });
   expect(term.closest("div")).toHaveTextContent(value);
@@ -197,6 +213,7 @@ describe("ShotGenerationPreparation", () => {
     mockTasks.mockReset();
     mockStatus.mockReset();
     mockTask.mockReset();
+    mockGenerateWithPrompt.mockReset();
     mockResume.mockReset();
     mockRegenerate.mockReset();
     mockStart.mockReset();
@@ -1103,5 +1120,130 @@ describe("ShotGenerationPreparation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("请勿重复提交");
     expect(screen.getByRole("button", { name: "确认 Prompt 修改与生成配置" })).toBeDisabled();
     expect(mockRegenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps adopted AI Prompt generation separate and explains the exact version binding", async () => {
+    const selectedShot = {
+      ...options.shot,
+      prompt_version: 3,
+      official_video_version: 1,
+      official_prompt_version: 2,
+      next_video_version: 2,
+      prompt_source: "ai_revision",
+      prompt_parent_version: 2,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: selectedShot }, correlationId: "req_selected_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: selectedShot }, correlationId: "req_selected_preflight" });
+
+    renderSelectedPromptPreparation();
+
+    expect(await screen.findByRole("heading", { name: "使用 AI 修改后的 Prompt 生成" })).toBeInTheDocument();
+    expectFact(document.body, "Prompt Version", "v3");
+    expect(screen.queryByRole("heading", { name: "用当前 Prompt 重新生成" })).not.toBeInTheDocument();
+    expect(mockOptions).toHaveBeenCalledWith("project-a", "shot_01", "GENERATE_WITH_PROMPT_VERSION", 3);
+
+    fireEvent.click(screen.getByRole("button", { name: "使用此 Prompt 生成视频" }));
+    await screen.findByRole("button", { name: "检查生成配置" });
+    expectFact(document.body, "当前正式 Video", "v1");
+    expectFact(document.body, "当前正式 Prompt", "v2");
+    expectFact(document.body, "生成使用 Prompt", "v3");
+    expectFact(document.body, "此次将生成", "Video v2");
+
+    fireEvent.click(screen.getByRole("button", { name: "检查生成配置" }));
+    await waitFor(() => expect(mockPreflight).toHaveBeenCalledWith("project-a", "shot_01", expect.objectContaining({
+      intent: "GENERATE_WITH_PROMPT_VERSION",
+      target_prompt_version: 3,
+    })));
+    fireEvent.click(await screen.findByRole("button", { name: "使用此 Prompt 生成视频" }));
+    const dialog = screen.getByRole("dialog", { name: "确认使用 AI Revision Prompt 生成" });
+    expect(dialog).toHaveTextContent("Video v1 / Prompt v2");
+    expect(dialog).toHaveTextContent("本次将使用 Prompt v3 生成 Video v2；不会创建或修改 Prompt Version。");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    expect(mockGenerateWithPrompt).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("submits adopted AI Prompt generation once despite a confirmation double click", async () => {
+    const selectedShot = {
+      ...options.shot,
+      prompt_version: 3,
+      official_video_version: 1,
+      official_prompt_version: 2,
+      next_video_version: 2,
+      prompt_source: "ai_revision",
+      prompt_parent_version: 2,
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: selectedShot }, correlationId: "req_selected_options" });
+    mockPreflight.mockResolvedValue({ data: { ...ready, shot: selectedShot }, correlationId: "req_selected_preflight" });
+    mockGenerateWithPrompt.mockResolvedValue({
+      data: { ...queuedTask, operation: "SHOT_PROMPT_VERSION_GENERATE" },
+      correlationId: "req_selected_generate",
+    });
+
+    renderSelectedPromptPreparation();
+    fireEvent.click(await screen.findByRole("button", { name: "使用此 Prompt 生成视频" }));
+    fireEvent.click(await screen.findByRole("button", { name: "检查生成配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "使用此 Prompt 生成视频" }));
+    const confirm = screen.getByRole("button", { name: "确认使用此 Prompt 生成" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(mockGenerateWithPrompt).toHaveBeenCalledTimes(1));
+    expect(mockGenerateWithPrompt).toHaveBeenCalledWith("project-a", "shot_01", expect.objectContaining({
+      intent: "GENERATE_WITH_PROMPT_VERSION",
+      target_prompt_version: 3,
+      confirm_paid_call: true,
+    }));
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(await screen.findByText("排队中…")).toBeInTheDocument();
+  });
+
+  it("recovers only the matching adopted-Prompt task after refresh without another POST", async () => {
+    const selectedShot = {
+      ...options.shot,
+      prompt_version: 3,
+      official_video_version: 1,
+      official_prompt_version: 2,
+      next_video_version: 2,
+      prompt_source: "ai_revision",
+      prompt_parent_version: 2,
+    };
+    const runningTask = {
+      ...queuedTask,
+      operation: "SHOT_PROMPT_VERSION_GENERATE" as const,
+      status: "RUNNING" as const,
+      started_at: "2026-08-19T00:00:01Z",
+    };
+    mockOptions.mockResolvedValue({ data: { ...options, shot: selectedShot }, correlationId: "req_selected_options" });
+    mockTasks.mockResolvedValue({
+      data: { project_id: "project-a", tasks: [runningTask] },
+      correlationId: "req_tasks",
+    });
+    mockStatus.mockResolvedValue({
+      data: {
+        project_id: "project-a",
+        shot_id: "shot_01",
+        state: "PROVIDER_RUNNING",
+        resume_available: false,
+        resume_kind: null,
+        generation_intent: "GENERATE_WITH_PROMPT_VERSION",
+        prompt_version: 3,
+        video_version: 2,
+        provider_submission_known: true,
+      },
+      correlationId: "req_status",
+    });
+    mockTask.mockResolvedValue({ data: runningTask, correlationId: "req_task" });
+
+    renderSelectedPromptPreparation();
+
+    expect(await screen.findByRole("heading", { name: "使用 AI 修改后的 Prompt 生成" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "正在生成视频…" })).toBeInTheDocument();
+    expect(mockGenerateWithPrompt).not.toHaveBeenCalled();
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 });

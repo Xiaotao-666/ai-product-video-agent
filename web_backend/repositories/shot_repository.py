@@ -14,6 +14,7 @@ from web_backend.models.shots import (
     ShotGenerationSummary,
     ShotListResponse,
     ShotPromptSummary,
+    ShotPromptVersionSummary,
     ShotSummary,
     ShotVersion,
     ShotVersionHistoryReason,
@@ -188,6 +189,15 @@ class ShotRepository:
         )
         canonical_prompt = self._canonical_prompt(project_dir, shot_number)
         prompt_versions = self._records_by_version(checkpoint.get("prompt_versions"))
+        prompt_history = [
+            ShotPromptVersionSummary(
+                version=version,
+                source=_safe_text(record.get("source")),
+                parent_version=_safe_positive_int(record.get("parent_version")),
+                created_at=_safe_text(record.get("created_at")),
+            )
+            for version, record in sorted(prompt_versions.items())
+        ]
         generation_versions = self._records_by_version(
             checkpoint.get("generation_versions"), key="video_version"
         )
@@ -219,6 +229,13 @@ class ShotRepository:
             pending_review_version=summary.pending_review_version,
             version_count=len(versions),
             generation_count=summary.generation_count,
+            active_prompt_version=_safe_positive_int(
+                checkpoint.get("active_prompt_version")
+            ),
+            approved_prompt_version=_safe_positive_int(
+                checkpoint.get("approved_prompt_version")
+            ),
+            prompt_versions=prompt_history,
             versions=versions,
         )
 

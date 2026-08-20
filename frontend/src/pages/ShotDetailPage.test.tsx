@@ -551,7 +551,7 @@ describe("ShotDetailPage", () => {
     const setOfficial = await screen.findByRole("button", { name: "设为正式版本" });
     await waitFor(() => expect(setOfficial).toBeEnabled());
     fireEvent.click(setOfficial);
-    const dialog = screen.getByRole("dialog");
+    const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("当前正式版本v2");
     expect(dialog).toHaveTextContent("目标版本v1");
     expect(dialog).toHaveTextContent("目标 PromptPrompt v1");
@@ -663,7 +663,7 @@ describe("ShotDetailPage", () => {
   it("confirms replacing an official version while retaining it as history", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "审核通过" }));
-    const dialog = screen.getByRole("dialog");
+    const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("确认将 v3 设为新的正式版本？");
     expect(dialog).toHaveTextContent("当前正式 v2 将保留为历史版本。");
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
@@ -740,5 +740,62 @@ describe("ShotDetailPage", () => {
       expect(mockGetReferenceAssets).toHaveBeenCalledWith("LEE柠檬");
     });
     expect(screen.queryByRole("button", { name: "生成视频" })).not.toBeInTheDocument();
+  });
+
+  it("shows an adopted AI Prompt as a separate exact-version generation action", async () => {
+    const adoptedPromptShot: ShotDetail = {
+      ...switchableShot,
+      active_prompt_version: 3,
+      approved_prompt_version: 2,
+      prompt_versions: [
+        { version: 3, source: "ai_revision", parent_version: 2, created_at: "2026-08-20T10:00:00Z" },
+        { version: 2, source: "ai_revision", parent_version: 1, created_at: "2026-08-19T10:00:00Z" },
+      ],
+    };
+    mockGetShot.mockResolvedValue({ data: adoptedPromptShot, correlationId: "req_adopted_prompt" });
+    mockGetShotGenerationOptions.mockImplementation(async (_projectId, _shotId, intent, targetPromptVersion) => ({
+      data: {
+        project_id: "LEE柠檬",
+        eligible: true,
+        shot: {
+          shot_id: "shot_01",
+          duration_seconds: 6,
+          prompt_version: intent === "GENERATE_WITH_PROMPT_VERSION" ? 3 : 2,
+          official_video_version: 2,
+          official_prompt_version: 2,
+          next_video_version: 3,
+          prompt_source: intent === "GENERATE_WITH_PROMPT_VERSION" ? "ai_revision" : null,
+          prompt_parent_version: intent === "GENERATE_WITH_PROMPT_VERSION" ? 2 : null,
+          resolution: "768P",
+        },
+        selection_modes: ["AUTO", "MANUAL"],
+        visual_input_modes: [
+          { mode: "none", display_name: "不使用参考图", description: "完全根据提示词生成。", compatible_model_ids: ["MiniMax-Hailuo-2.3"] },
+        ],
+        models: [{
+          model_id: "MiniMax-Hailuo-2.3", display_name: "MiniMax Hailuo 2.3",
+          provider: "minimax", provider_display_name: "MiniMax", api_version: "v1",
+          available: true, supported_visual_input_modes: ["none"], supported_resolutions: ["768P"],
+          supported_durations: [6], min_duration: null, max_duration: null,
+        }],
+        issues: targetPromptVersion === 3 || intent !== "GENERATE_WITH_PROMPT_VERSION" ? [] : [{ code: "ACTION_NOT_ALLOWED", message: "wrong target" }],
+        paid_call_required: true,
+      },
+      correlationId: "req_adopted_options",
+    }));
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "使用 AI 修改后的 Prompt 生成" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "用当前 Prompt 重新生成" })).toBeInTheDocument();
+    const selectedSection = screen.getByRole("heading", { name: "使用 AI 修改后的 Prompt 生成" }).closest("section");
+    expect(within(selectedSection!).getByText("v3")).toBeInTheDocument();
+    expect(within(selectedSection!).getByRole("button", { name: "使用此 Prompt 生成视频" })).toBeInTheDocument();
+    await waitFor(() => expect(mockGetShotGenerationOptions).toHaveBeenCalledWith(
+      "LEE柠檬",
+      "shot_01",
+      "GENERATE_WITH_PROMPT_VERSION",
+      3,
+    ));
   });
 });

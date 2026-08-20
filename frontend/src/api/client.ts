@@ -51,6 +51,7 @@ import type {
   ShotGenerationStatusResponse,
   ShotListResponse,
   ShotPromptSummary,
+  ShotPromptVersionSummary,
   ShotStageState,
   ShotSummary,
   ShotVersion,
@@ -976,6 +977,27 @@ function parseShotVersion(
   };
 }
 
+function parseShotPromptVersionSummary(
+  value: unknown,
+  correlationId: string | null,
+): ShotPromptVersionSummary {
+  if (
+    !isRecord(value)
+    || !isPositiveInteger(value.version)
+    || !isNullableString(value.source)
+    || !isNullablePositiveInteger(value.parent_version)
+    || !isNullableString(value.created_at)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Prompt Version。", correlationId);
+  }
+  return {
+    version: value.version,
+    source: parseContentText(value.source, correlationId),
+    parent_version: value.parent_version,
+    created_at: parseContentText(value.created_at, correlationId),
+  };
+}
+
 function parseShotDetailResponse(
   value: unknown,
   correlationId: string | null,
@@ -988,12 +1010,20 @@ function parseShotDetailResponse(
     !isNullablePositiveInteger(value.pending_review_version) ||
     !isNonNegativeInteger(value.version_count) ||
     !isNonNegativeInteger(value.generation_count) ||
+    (value.active_prompt_version !== undefined
+      && !isNullablePositiveInteger(value.active_prompt_version)) ||
+    (value.approved_prompt_version !== undefined
+      && !isNullablePositiveInteger(value.approved_prompt_version)) ||
+    (value.prompt_versions !== undefined && !Array.isArray(value.prompt_versions)) ||
     !Array.isArray(value.versions)
   ) {
     return invalidResponse("Backend 返回了无法读取的镜头详情。", correlationId);
   }
   const versions = value.versions.map((version) =>
     parseShotVersion(version, correlationId),
+  );
+  const promptVersions = (value.prompt_versions ?? []).map((version: unknown) =>
+    parseShotPromptVersionSummary(version, correlationId),
   );
   if (value.version_count !== versions.length) {
     return invalidResponse("Backend 返回了不一致的镜头版本。", correlationId);
@@ -1006,6 +1036,9 @@ function parseShotDetailResponse(
     pending_review_version: value.pending_review_version,
     version_count: value.version_count,
     generation_count: value.generation_count,
+    active_prompt_version: value.active_prompt_version ?? null,
+    approved_prompt_version: value.approved_prompt_version ?? null,
+    prompt_versions: promptVersions,
     versions,
   };
 }
@@ -1165,6 +1198,15 @@ function parseGenerationShotContext(
       : null,
     next_prompt_version: isNullablePositiveInteger(value.next_prompt_version)
       ? value.next_prompt_version
+      : null,
+    official_prompt_version: isNullablePositiveInteger(value.official_prompt_version)
+      ? value.official_prompt_version
+      : null,
+    prompt_source: isNullableString(value.prompt_source)
+      ? parseContentText(value.prompt_source, correlationId)
+      : null,
+    prompt_parent_version: isNullablePositiveInteger(value.prompt_parent_version)
+      ? value.prompt_parent_version
       : null,
   };
 }
@@ -1374,6 +1416,8 @@ function parseShotGenerationStatus(
     !isNullableString(value.resume_kind) ||
     (typeof value.resume_kind === "string" && !resumeKinds.has(value.resume_kind)) ||
     !isNullablePositiveInteger(value.video_version) ||
+    (value.prompt_version !== undefined
+      && !isNullablePositiveInteger(value.prompt_version)) ||
     typeof value.provider_submission_known !== "boolean"
   ) {
     return invalidResponse("Backend 返回了无法读取的镜头生成状态。", correlationId);
@@ -1385,11 +1429,13 @@ function parseShotGenerationStatus(
     resume_available: value.resume_available,
     resume_kind: value.resume_kind as ShotGenerationStatusResponse["resume_kind"],
     video_version: value.video_version,
+    prompt_version: value.prompt_version ?? null,
     provider_submission_known: value.provider_submission_known,
     generation_intent:
       value.generation_intent === "INITIAL"
       || value.generation_intent === "REGENERATE_CURRENT_PROMPT"
       || value.generation_intent === "REGENERATE_MANUAL_PROMPT"
+      || value.generation_intent === "GENERATE_WITH_PROMPT_VERSION"
         ? value.generation_intent
         : null,
   };
@@ -1898,7 +1944,10 @@ async function get<T>(path: string): Promise<ApiResult<T>> {
   };
 }
 
-type PaidShotTaskOperation = "SHOT_GENERATE" | "SHOT_REGENERATE";
+type PaidShotTaskOperation =
+  | "SHOT_GENERATE"
+  | "SHOT_REGENERATE"
+  | "SHOT_PROMPT_VERSION_GENERATE";
 
 interface AcceptedShotTaskExpectation {
   projectId: string;
@@ -2214,9 +2263,16 @@ export async function getShotGenerationOptions(
   projectId: string,
   shotId: string,
   intent: GenerationIntent = "INITIAL",
+  targetPromptVersion: number | null = null,
 ): Promise<ApiResult<GenerationOptionsResponse>> {
+  const params = new URLSearchParams();
+  if (intent !== "INITIAL") params.set("intent", intent);
+  if (targetPromptVersion !== null) {
+    params.set("target_prompt_version", String(targetPromptVersion));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const result = await get<unknown>(
-    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/options${intent === "INITIAL" ? "" : `?intent=${encodeURIComponent(intent)}`}`,
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/options${query}`,
   );
   return {
     data: parseGenerationOptions(result.data, result.correlationId),
@@ -2322,6 +2378,31 @@ export async function regenerateShotGeneration(
       body: JSON.stringify(payload),
     },
     { projectId, shotId, operation: "SHOT_REGENERATE", submittedAt },
+  );
+}
+
+export async function generateShotWithPromptVersion(
+  projectId: string,
+  shotId: string,
+  payload: GenerationStartRequest,
+): Promise<ApiResult<TaskRecord>> {
+  const submittedAt = Date.now();
+  return submitPaidShotTask(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/prompt-version`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    {
+      projectId,
+      shotId,
+      operation: "SHOT_PROMPT_VERSION_GENERATE",
+      submittedAt,
+    },
   );
 }
 

@@ -68,10 +68,15 @@ class ManualPromptRegenerationNotAllowed(ShotGenerationWorkflowError):
     pass
 
 
+class SelectedPromptVersionGenerationNotAllowed(ShotGenerationWorkflowError):
+    pass
+
+
 class GenerationIntent(StrEnum):
     INITIAL_GENERATION = "INITIAL_GENERATION"
     REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
     REGENERATE_MANUAL_PROMPT = "REGENERATE_MANUAL_PROMPT"
+    GENERATE_WITH_PROMPT_VERSION = "GENERATE_WITH_PROMPT_VERSION"
 
 
 SafetyReview = Callable[[str, str, TaskLogger | None, str], PromptSafetyReview]
@@ -151,6 +156,8 @@ def continue_shot_generation(
     )
     resuming = resume_task is not None
     generation_record = _generation_record(entry, version)
+    if resuming and isinstance(generation_record.get("prompt_snapshot"), Mapping):
+        prompt_payload = dict(generation_record["prompt_snapshot"])
     recorded_prompt_version = generation_record.get("prompt_version")
     expected_prompt_version = int(
         candidate.get("prompt_version")
@@ -171,9 +178,9 @@ def continue_shot_generation(
         else visual_input or checkpoint.shot_visual_input(shot_id)
     )
     if safety is None and candidate_lane:
-        if prompt_payload.get("safety_is_safe") is not None:
+        if isinstance(prompt_payload.get("safety_is_safe"), bool):
             safety = PromptSafetyReview(
-                is_safe=bool(prompt_payload.get("safety_is_safe")),
+                is_safe=prompt_payload["safety_is_safe"],
                 reviewed_video_prompt=str(
                     prompt_payload.get("safety_prompt")
                     or prompt_payload.get("prompt")
@@ -181,7 +188,7 @@ def continue_shot_generation(
                 ),
                 risk_notes=list(prompt_payload.get("safety_risk_notes") or []),
             )
-    if safety is None:
+    if safety is None and not candidate_lane:
         safety = active_prompt_safety(paths, checkpoint, plan, shot_id)
     if safety is None:
         if not str(deepseek_key or "").strip():
@@ -194,7 +201,13 @@ def continue_shot_generation(
             task_logger,
             f"prompt_safety_shot_{shot_id:02d}",
         )
-        save_safety_to_active_prompt(paths, checkpoint, plan, shot_id, safety)
+        if candidate_lane:
+            prompt_payload = dict(prompt_payload)
+            prompt_payload["safety_prompt"] = safety.reviewed_video_prompt
+            prompt_payload["safety_is_safe"] = safety.is_safe
+            prompt_payload["safety_risk_notes"] = list(safety.risk_notes)
+        else:
+            save_safety_to_active_prompt(paths, checkpoint, plan, shot_id, safety)
     if not safety.is_safe:
         error = ShotPromptSafetyRejected("Shot Prompt Safety did not pass.")
         (
@@ -239,6 +252,7 @@ def continue_shot_generation(
                     duration=shot.duration,
                     resolution="768P",
                     visual_input=generation_visual,
+                    prompt_snapshot=dict(prompt_payload),
                 )
                 if candidate_lane
                 else checkpoint.mark_shot_submission_started(
@@ -250,7 +264,11 @@ def continue_shot_generation(
                 )
             ),
             on_submitted=(
-                lambda task: checkpoint.mark_candidate_submitted(shot_id, task)
+                lambda task: checkpoint.mark_candidate_submitted(
+                    shot_id,
+                    task,
+                    prompt_snapshot=dict(prompt_payload),
+                )
                 if candidate_lane
                 else checkpoint.mark_shot_submitted(shot_id, task)
             ),
@@ -379,6 +397,63 @@ def regenerate_shot_with_current_prompt(
         prompt_version_override=None,
         generation_intent=GenerationIntent.REGENERATE_CURRENT_PROMPT,
         candidate_source="same_prompt",
+    )
+
+
+def regenerate_shot_with_prompt_version(
+    *,
+    paths: ProjectPaths,
+    checkpoint: ProjectCheckpoint,
+    plan: VideoPromptPlan,
+    shot: StoryboardShot,
+    shot_id: int,
+    target_prompt_version: int,
+    visual_input: dict[str, Any],
+    deepseek_key: str,
+    provider_credentials: Mapping[str, Any] | str | None,
+    task_logger: TaskLogger,
+    provider_selection: ProviderSelection | None = None,
+    provider_registry: VideoProviderRegistry | None = None,
+    safety_review: SafetyReview = review_prompt_safety,
+    video_generate: VideoGenerate = generate_video,
+) -> Path:
+    """Generate one Video bound to an existing adopted AI Prompt Version."""
+
+    prompt_payload = checkpoint.prompt_version(shot_id, int(target_prompt_version))
+    if (
+        not isinstance(prompt_payload, dict)
+        or str(prompt_payload.get("prompt") or "").strip() == ""
+        or str(prompt_payload.get("source") or "").strip().lower() != "ai_revision"
+    ):
+        raise SelectedPromptVersionGenerationNotAllowed(
+            "The selected adopted AI Prompt Version is unavailable."
+        )
+    entry = checkpoint.shot_checkpoint(shot_id)
+    if (
+        entry.get("approved_video_version") is None
+        and int(entry.get("active_prompt_version") or 0)
+        != int(target_prompt_version)
+    ):
+        raise SelectedPromptVersionGenerationNotAllowed(
+            "An unapproved Shot can only generate from its active adopted Prompt Version."
+        )
+    return _regenerate_shot_with_prompt(
+        paths=paths,
+        checkpoint=checkpoint,
+        plan=plan,
+        shot=shot,
+        shot_id=shot_id,
+        visual_input=visual_input,
+        deepseek_key=deepseek_key,
+        provider_credentials=provider_credentials,
+        task_logger=task_logger,
+        provider_selection=provider_selection,
+        provider_registry=provider_registry,
+        safety_review=safety_review,
+        video_generate=video_generate,
+        prompt_version_override=int(target_prompt_version),
+        generation_intent=GenerationIntent.GENERATE_WITH_PROMPT_VERSION,
+        candidate_source="adopted_ai_revision_prompt",
     )
 
 
@@ -632,6 +707,7 @@ def resume_shot_generation(
         in {
             GenerationIntent.REGENERATE_CURRENT_PROMPT.value,
             GenerationIntent.REGENERATE_MANUAL_PROMPT.value,
+            GenerationIntent.GENERATE_WITH_PROMPT_VERSION.value,
         }
         and checkpoint.candidate_status(shot_id)
         in {CandidateStatus.GENERATING, CandidateStatus.FAILED}

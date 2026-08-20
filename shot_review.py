@@ -410,6 +410,7 @@ def save_safety_to_active_prompt(
     if version is None:
         raise ShotReviewError(f"Shot {shot_id:02d} 尚未初始化 Prompt version。")
     payload = active_prompt_payload(paths, checkpoint, plan, shot_id)
+    payload = dict(payload)
     payload["safety_prompt"] = safety.reviewed_video_prompt
     payload["safety_is_safe"] = safety.is_safe
     payload["safety_risk_notes"] = safety.risk_notes
@@ -425,10 +426,15 @@ def active_prompt_safety(
 ) -> PromptSafetyReview | None:
     payload = active_prompt_payload(paths, checkpoint, plan, shot_id)
     safety_prompt = payload.get("safety_prompt")
-    if not isinstance(safety_prompt, str) or not safety_prompt.strip():
+    safety_is_safe = payload.get("safety_is_safe")
+    if (
+        not isinstance(safety_prompt, str)
+        or not safety_prompt.strip()
+        or not isinstance(safety_is_safe, bool)
+    ):
         return None
     return PromptSafetyReview(
-        is_safe=bool(payload.get("safety_is_safe", True)),
+        is_safe=safety_is_safe,
         risk_notes=list(payload.get("safety_risk_notes") or []),
         reviewed_video_prompt=safety_prompt,
     )

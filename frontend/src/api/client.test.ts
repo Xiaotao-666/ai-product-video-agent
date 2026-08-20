@@ -37,6 +37,7 @@ import {
   getVideoPrompts,
   getVoice,
   getVoiceAudioUrl,
+  generateShotWithPromptVersion,
   regenerateCreative,
   regenerateShotGeneration,
   regenerateStoryboard,
@@ -1934,6 +1935,50 @@ describe("API client", () => {
 
     expect(result.data).toMatchObject({ operation: "SHOT_REGENERATE", target_id: "shot_01" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits the exact adopted Prompt Version through its dedicated paid endpoint", async () => {
+    const task = {
+      task_id: "task_abababababababababababababababab",
+      project_id: "中文项目",
+      operation: "SHOT_PROMPT_VERSION_GENERATE",
+      target_id: "shot_01",
+      status: "QUEUED",
+      created_at: new Date().toISOString(),
+      started_at: null,
+      finished_at: null,
+      correlation_id: "req_selected_prompt",
+      error: null,
+      result: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(
+      task,
+      202,
+      { Location: `/api/tasks/${task.task_id}` },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      intent: "GENERATE_WITH_PROMPT_VERSION" as const,
+      model_selection: "AUTO" as const,
+      requested_model: null,
+      visual_input: { mode: "none" as const, asset_ids: [] },
+      target_prompt_version: 3,
+      preflight_fingerprint: "7".repeat(64),
+      confirm_paid_call: true,
+    };
+
+    const result = await generateShotWithPromptVersion("中文项目", "shot_01", payload);
+
+    expect(result.data).toMatchObject({
+      operation: "SHOT_PROMPT_VERSION_GENERATE",
+      target_id: "shot_01",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/generation/prompt-version");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(payload);
+    expect(String(init.body)).not.toMatch(/provider_task_id|file_id|path|api_key|secret/i);
   });
 
   it("reconciles an unreadable paid 202 body through Location without another POST", async () => {

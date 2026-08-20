@@ -49,6 +49,13 @@ class ShotPromptSummary(ResponseModel):
     final_prompt: str | None = None
 
 
+class ShotPromptVersionSummary(ResponseModel):
+    version: int
+    source: str | None = None
+    parent_version: int | None = None
+    created_at: str | None = None
+
+
 class ShotGenerationSummary(ResponseModel):
     model: str | None = None
     visual_input_mode: ShotVisualInputMode
@@ -73,4 +80,7 @@ class ShotDetail(ResponseModel):
     pending_review_version: int | None = None
     version_count: int
     generation_count: int
+    active_prompt_version: int | None = None
+    approved_prompt_version: int | None = None
+    prompt_versions: list[ShotPromptVersionSummary]
     versions: list[ShotVersion]
