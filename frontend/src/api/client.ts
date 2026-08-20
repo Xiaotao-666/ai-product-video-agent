@@ -1,5 +1,10 @@
 import { API_BASE_URL } from "../config";
-import { TASK_OPERATIONS } from "./types";
+import {
+  ERROR_TASK_STATUSES,
+  TASK_OPERATIONS,
+  TASK_STATUSES,
+  TERMINAL_TASK_STATUSES,
+} from "./types";
 import type {
   ApiResult,
   AssemblyDetail,
@@ -120,14 +125,11 @@ const VOICE_CALIBRATION_STATUSES: ReadonlySet<string> = new Set([
 const TASK_ID_PATTERN = /^task_[0-9a-f]{32}$/;
 const TASK_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const TASK_LOCATION_PATTERN = /^\/api\/tasks\/(task_[0-9a-f]{32})$/;
-const TASK_STATUSES: ReadonlySet<string> = new Set([
-  "QUEUED",
-  "RUNNING",
-  "SUCCEEDED",
-  "FAILED",
-  "INTERRUPTED",
-  "CANCELLED",
-]);
+const TASK_STATUS_SET: ReadonlySet<string> = new Set(TASK_STATUSES);
+const TERMINAL_TASK_STATUS_SET: ReadonlySet<string> = new Set(
+  TERMINAL_TASK_STATUSES,
+);
+const ERROR_TASK_STATUS_SET: ReadonlySet<string> = new Set(ERROR_TASK_STATUSES);
 const TASK_OPERATION_SET: ReadonlySet<string> = new Set(TASK_OPERATIONS);
 const WORKFLOW_PHASES: ReadonlySet<string> = new Set([
   "CREATIVE",
@@ -1744,7 +1746,7 @@ function parseExportDetail(
 }
 
 function isTaskStatus(value: unknown): value is TaskStatus {
-  return typeof value === "string" && TASK_STATUSES.has(value);
+  return typeof value === "string" && TASK_STATUS_SET.has(value);
 }
 
 function isTaskOperation(value: unknown): value is TaskOperation {
@@ -1826,17 +1828,16 @@ function parseTaskRecord(
 
   const error = parseTaskError(value.error, correlationId);
   const result = parseTaskResult(value.result, correlationId);
-  const isTerminal = ["SUCCEEDED", "FAILED", "INTERRUPTED", "CANCELLED"].includes(
-    value.status,
-  );
+  const isTerminal = TERMINAL_TASK_STATUS_SET.has(value.status);
+  const isError = ERROR_TASK_STATUS_SET.has(value.status);
   if (
     (value.status === "QUEUED" &&
       (value.started_at !== null || value.finished_at !== null)) ||
     (value.status === "RUNNING" &&
       (value.started_at === null || value.finished_at !== null)) ||
     (isTerminal && value.finished_at === null) ||
-    (["FAILED", "INTERRUPTED"].includes(value.status) && error === null) ||
-    (!["FAILED", "INTERRUPTED"].includes(value.status) && error !== null) ||
+    (isError && error === null) ||
+    (!isError && error !== null) ||
     (result !== null && value.status !== "SUCCEEDED")
   ) {
     return invalidResponse("Backend 返回了状态不一致的任务记录。", correlationId);

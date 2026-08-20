@@ -26,6 +26,7 @@ import type {
   ShotGenerationStatusResponse,
   TaskRecord,
 } from "../../api/types";
+import { isActiveTaskStatus } from "../../hooks/useProjectTaskPolling";
 import { projectWorkspacePath } from "../../stageDefinitions";
 
 interface Props {
@@ -84,7 +85,6 @@ function generationVersionPresentation(
 function versionLabel(subject: "Prompt" | "Video", version: number | null): string {
   return version === null ? "待计算" : `${subject} v${version}`;
 }
-const ACTIVE_TASK_STATUSES = new Set(["QUEUED", "RUNNING"]);
 const MANUAL_STATUS_SESSIONS = new Set<ManualSessionState>([
   "TASK_ATTACHED",
   "SUCCEEDED",
@@ -147,7 +147,7 @@ function findRecoverableTask(
     && status.generation_intent !== "INITIAL"
   ) return null;
   return tasks.find(
-    (task) => ACTIVE_TASK_STATUSES.has(task.status)
+    (task) => isActiveTaskStatus(task.status)
       && task.target_id === shotId
       && taskOperationMatchesIntent(task, intent),
   ) ?? null;
@@ -317,7 +317,7 @@ export function ShotGenerationPreparation({
   }, [editorOpen, intent, manualRegeneration, projectId, selectedPromptGeneration, shotId, targetPromptVersion]);
 
   useEffect(() => {
-    if (!activeTask || !ACTIVE_TASK_STATUSES.has(activeTask.status)) return;
+    if (!activeTask || !isActiveTaskStatus(activeTask.status)) return;
     let mounted = true;
     const poll = async () => {
       try {
@@ -348,7 +348,7 @@ export function ShotGenerationPreparation({
   const selectedAsset = useMemo(() => assets.find((asset) => asset.asset_id === assetId) ?? null, [assetId, assets]);
   const selectedModel = useMemo(() => options?.models.find((model) => model.model_id === requestedModel) ?? null, [options, requestedModel]);
   const manualCompatible = selectedModel?.supported_visual_input_modes.includes(visualMode) ?? true;
-  const taskRunning = activeTask ? ACTIVE_TASK_STATUSES.has(activeTask.status) : false;
+  const taskRunning = activeTask ? isActiveTaskStatus(activeTask.status) : false;
   const statusIntentMatchesAction = generationStatus?.generation_intent === intent
     || (intent === "INITIAL" && generationStatus?.generation_intent == null);
   const durableRecoveryNeedsAttention = generationStatus?.resume_available

@@ -2,6 +2,8 @@
 
 命令行流程：用户需求 + 用户备注 + 可选 Reference Asset → DeepSeek Creative Brief → 人工审核 → Storyboard → 人工审核 → 每镜头 Video Prompt → 人工审核 → Safety → MiniMax 逐镜头生成 → 逐 Shot 人工审核 → 人工确认 FFmpeg 合片。Reference Asset 只作为后续视频生成可选素材保存，不进行自动图片分析。
 
+Web、Core、Durable Task、Prompt/Video 双版本体系及安全边界见 [Web / Core 架构与版本契约](docs/architecture.md)。
+
 每个审核节点支持：
 
 1. 确认并继续

@@ -20,7 +20,13 @@ from storyboard import Storyboard, VideoPromptPlan
 from task_logger import TaskLogger
 from tests.test_shot_generation_workflow import FakeCoreVideoGenerator
 from visual_input import none_visual_input
-from web_backend.models.tasks import TaskOperation, TaskRecord, TaskStatus
+from web_backend.models.tasks import (
+    ACTIVE_TASK_STATUSES,
+    TERMINAL_TASK_STATUSES,
+    TaskOperation,
+    TaskRecord,
+    TaskStatus,
+)
 from web_backend.models.generation import GenerationIntent as WebGenerationIntent
 from web_backend.services.shot_generation import _resolve_completed_generation_version
 
@@ -230,14 +236,79 @@ class WebBackendPhase3D3BShotRegenerateTests(unittest.TestCase):
         frontend_types = (repo_root / "frontend" / "src" / "api" / "types.ts").read_text(
             encoding="utf-8"
         )
-        match = re.search(
-            r"export const TASK_OPERATIONS = \[(?P<body>.*?)\] as const;",
-            frontend_types,
-            flags=re.DOTALL,
+
+        def values(name: str) -> list[str]:
+            match = re.search(
+                rf"export const {name} = \[(?P<body>.*?)\] as const",
+                frontend_types,
+                flags=re.DOTALL,
+            )
+            self.assertIsNotNone(match, name)
+            return re.findall(r'"([A-Z][A-Z0-9_]*)"', match.group("body"))
+
+        self.assertEqual(values("TASK_OPERATIONS"), [item.value for item in TaskOperation])
+        self.assertEqual(values("TASK_STATUSES"), [item.value for item in TaskStatus])
+        self.assertEqual(
+            set(values("ACTIVE_TASK_STATUSES")),
+            {item.value for item in ACTIVE_TASK_STATUSES},
         )
-        self.assertIsNotNone(match)
-        frontend_operations = re.findall(r'"([A-Z][A-Z0-9_]*)"', match.group("body"))
-        self.assertEqual(frontend_operations, [item.value for item in TaskOperation])
+        self.assertEqual(
+            set(values("TERMINAL_TASK_STATUSES")),
+            {item.value for item in TERMINAL_TASK_STATUSES},
+        )
+        self.assertEqual(
+            set(values("ERROR_TASK_STATUSES")),
+            {TaskStatus.FAILED.value, TaskStatus.INTERRUPTED.value},
+        )
+
+        frontend_client = (
+            repo_root / "frontend" / "src" / "api" / "client.ts"
+        ).read_text(encoding="utf-8")
+        for contract in (
+            "TASK_OPERATIONS",
+            "TASK_STATUSES",
+            "TERMINAL_TASK_STATUSES",
+            "ERROR_TASK_STATUSES",
+        ):
+            self.assertRegex(
+                frontend_client,
+                rf"new Set\(\s*{contract}\s*,?\s*\)",
+            )
+
+        openapi = self.application.openapi()
+        schemas = openapi["components"]["schemas"]
+        self.assertEqual(
+            schemas["TaskOperation"]["enum"],
+            [item.value for item in TaskOperation],
+        )
+        self.assertEqual(
+            schemas["TaskStatus"]["enum"],
+            [item.value for item in TaskStatus],
+        )
+        public_task_fields = set(schemas["TaskRecord"]["properties"])
+        self.assertTrue(
+            {
+                "task_id",
+                "project_id",
+                "operation",
+                "status",
+                "correlation_id",
+                "error",
+                "result",
+            }.issubset(public_task_fields)
+        )
+        self.assertTrue(
+            public_task_fields.isdisjoint(
+                {
+                    "provider_task_id",
+                    "provider_locator",
+                    "file_locator",
+                    "local_path",
+                    "credential",
+                    "api_key",
+                }
+            )
+        )
 
     def test_06_legacy_missing_target_id_is_read_without_rewrite(self) -> None:
         repository = self.application.state.task_repository

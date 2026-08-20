@@ -40,13 +40,29 @@ export interface ApiResult<T> {
   correlationId: string | null;
 }
 
-export type TaskStatus =
-  | "QUEUED"
-  | "RUNNING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "INTERRUPTED"
-  | "CANCELLED";
+export const TASK_STATUSES = [
+  "QUEUED",
+  "RUNNING",
+  "SUCCEEDED",
+  "FAILED",
+  "INTERRUPTED",
+  "CANCELLED",
+] as const;
+
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export const ACTIVE_TASK_STATUSES = ["QUEUED", "RUNNING"] as const satisfies
+  readonly TaskStatus[];
+
+export const TERMINAL_TASK_STATUSES = [
+  "SUCCEEDED",
+  "FAILED",
+  "INTERRUPTED",
+  "CANCELLED",
+] as const satisfies readonly TaskStatus[];
+
+export const ERROR_TASK_STATUSES = ["FAILED", "INTERRUPTED"] as const satisfies
+  readonly TaskStatus[];
 
 export const TASK_OPERATIONS = [
   "CREATIVE_GENERATE",

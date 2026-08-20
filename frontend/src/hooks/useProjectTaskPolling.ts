@@ -5,14 +5,12 @@ import {
   getProjectTasks,
   getTask,
 } from "../api/client";
+import { ACTIVE_TASK_STATUSES } from "../api/types";
 import type { TaskRecord, TaskStatus } from "../api/types";
 
 
 const POLL_INTERVAL_MS = 2_000;
-const ACTIVE_STATUSES: ReadonlySet<TaskStatus> = new Set([
-  "QUEUED",
-  "RUNNING",
-]);
+const ACTIVE_STATUS_SET: ReadonlySet<TaskStatus> = new Set(ACTIVE_TASK_STATUSES);
 
 export interface TaskActionError {
   code: string;
@@ -28,7 +26,7 @@ interface ProjectTaskPollingOptions {
 }
 
 export function isActiveTaskStatus(status: TaskStatus): boolean {
-  return ACTIVE_STATUSES.has(status);
+  return ACTIVE_STATUS_SET.has(status);
 }
 
 export function toTaskActionError(caught: unknown): TaskActionError {

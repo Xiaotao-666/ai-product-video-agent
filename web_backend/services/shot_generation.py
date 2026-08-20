@@ -53,7 +53,6 @@ from web_backend.models.generation import (
     ShotGenerationStatusResponse,
 )
 from web_backend.models.tasks import (
-    TaskError,
     TaskOperation,
     TaskRecord,
     TaskResultReference,
@@ -71,7 +70,7 @@ from web_backend.services.capabilities import CapabilityService
 from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
-from web_backend.services.task_runner import TaskExecutionFailure
+from web_backend.services.task_failures import raise_task_failure as _task_failure
 from web_backend.services.tasks import TaskService
 
 
@@ -89,12 +88,6 @@ class GenerationPreflightStale(ShotGenerationActionError):
 
 class GenerationNotResumable(ShotGenerationActionError):
     pass
-
-
-def _task_failure(code: str, message: str, *, retryable: bool = False) -> None:
-    raise TaskExecutionFailure(
-        TaskError(code=code, message=message, retryable=retryable)
-    )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

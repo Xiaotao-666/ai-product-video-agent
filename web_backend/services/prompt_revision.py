@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -35,7 +35,6 @@ from web_backend.models.prompt_revision import (
     StoredPromptRevisionDraft,
 )
 from web_backend.models.tasks import (
-    TaskError,
     TaskOperation,
     TaskRecord,
     TaskResultReference,
@@ -54,7 +53,7 @@ from web_backend.repositories.reference_asset_repository import (
 from web_backend.repositories.shot_repository import ShotNotFound, normalize_shot_id
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.planning_actions import CapabilityUnavailable
-from web_backend.services.task_runner import TaskExecutionFailure
+from web_backend.services.task_failures import raise_task_failure as _task_failure
 from web_backend.services.tasks import TaskService
 from web_backend.services.projects import ProjectBusy
 
@@ -95,17 +94,6 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
-
-
-def _task_failure(
-    code: str,
-    message: str,
-    *,
-    retryable: bool = False,
-) -> NoReturn:
-    raise TaskExecutionFailure(
-        TaskError(code=code, message=message, retryable=retryable)
-    )
 
 
 class PromptRevisionDraftService:
