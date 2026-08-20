@@ -713,10 +713,23 @@ describe("API client", () => {
       responseOf({
         project_id: "LEE柠檬",
         status: "COMPLETED",
+        aggregation: {
+          total: 1,
+          approved: 0,
+          waiting_review: 1,
+          generating: 0,
+          not_started: 0,
+          failed: 0,
+        },
         shots: [
           {
             shot_id: "shot_01",
-            status: "APPROVED",
+            order: 1,
+            title: "产品清爽亮相",
+            status: "WAITING_REVIEW",
+            prompt_status: "READY",
+            video_status: "READY",
+            review_status: "WAITING_REVIEW",
             official_version: 2,
             pending_review_version: 3,
             version_count: 3,
@@ -734,11 +747,24 @@ describe("API client", () => {
 
     expect(result.data.shots[0]).toEqual({
       shot_id: "shot_01",
-      status: "APPROVED",
+      order: 1,
+      title: "产品清爽亮相",
+      status: "WAITING_REVIEW",
+      prompt_status: "READY",
+      video_status: "READY",
+      review_status: "WAITING_REVIEW",
       official_version: 2,
       pending_review_version: 3,
       version_count: 3,
       generation_count: 3,
+    });
+    expect(result.data.aggregation).toEqual({
+      total: 1,
+      approved: 0,
+      waiting_review: 1,
+      generating: 0,
+      not_started: 0,
+      failed: 0,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots"),

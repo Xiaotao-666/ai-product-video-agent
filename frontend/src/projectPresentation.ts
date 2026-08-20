@@ -32,6 +32,7 @@ const STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: "进行中",
   RUNNING: "进行中",
   GENERATING: "生成中",
+  READY: "已就绪",
   WAITING_REVIEW: "等待审核",
   APPROVED: "已审核",
   COMPLETED: "已完成",
@@ -74,7 +75,7 @@ export function statusPresentation(status: string): {
 } {
   const normalized = status.toUpperCase();
   const label = STATUS_LABELS[normalized] ?? "未知状态";
-  if (["COMPLETED", "FINAL_COMPLETED", "APPROVED"].includes(normalized)) {
+  if (["COMPLETED", "FINAL_COMPLETED", "APPROVED", "READY"].includes(normalized)) {
     return { label, tone: "success" };
   }
   if (["IN_PROGRESS", "RUNNING", "GENERATING"].includes(normalized)) {

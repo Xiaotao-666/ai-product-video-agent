@@ -167,7 +167,19 @@ describe("App", () => {
     mockGenerateCreative.mockReset();
     mockGetTask.mockReset();
     mockGetShots.mockResolvedValue({
-      data: { project_id: "LEE柠檬", status: "NOT_STARTED", shots: [] },
+      data: {
+        project_id: "LEE柠檬",
+        status: "NOT_STARTED",
+        aggregation: {
+          total: 0,
+          approved: 0,
+          waiting_review: 0,
+          generating: 0,
+          not_started: 0,
+          failed: 0,
+        },
+        shots: [],
+      },
       correlationId: "req_shots",
     });
     mockGetShot.mockResolvedValue({

@@ -10,6 +10,34 @@
   gap: 18px;
 }
 
+.shot-collection-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.shot-collection-summary > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #dce2e7;
+  border-radius: 10px;
+  background: #f7f9fa;
+}
+
+.shot-collection-summary dt {
+  color: #7c8996;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.shot-collection-summary dd {
+  margin: 6px 0 0;
+  color: #17212b;
+  font-size: 24px;
+  font-weight: 750;
+}
+
 .shot-summary-card,
 .shot-version-card {
   min-width: 0;
@@ -31,6 +59,13 @@
 .shot-version-heading h3 {
   margin: 5px 0 0;
   color: #17212b;
+}
+
+.shot-summary-title {
+  margin: 8px 0 0;
+  color: #52606d;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .shot-summary-facts,
@@ -650,6 +685,7 @@
 
 @media (max-width: 900px) {
   .shot-summary-list,
+  .shot-collection-summary,
   .shot-prompt-grid,
   .visual-mode-options,
   .reference-grid,

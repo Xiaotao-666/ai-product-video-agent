@@ -16,6 +16,7 @@ from web_backend.models.shots import (
     ShotPromptSummary,
     ShotPromptVersionSummary,
     ShotSummary,
+    ShotStatusAggregation,
     ShotVersion,
     ShotVersionHistoryReason,
     ShotVersionRole,
@@ -165,15 +166,35 @@ class ShotRepository:
     def list_shots(self, project_id: str) -> ShotListResponse:
         workflow, project_dir, project_data = self._project_context(project_id)
         checkpoint_shots = self._checkpoint_shots(project_data)
+        storyboard_shots = self._storyboard_shots(project_dir)
+        prompt_shots = self._canonical_prompt_numbers(project_dir)
         shot_numbers = set(checkpoint_shots)
         shot_numbers.update(self._directory_shot_numbers(project_dir))
-        summaries = [
-            self._shot_summary(project_dir, number, checkpoint_shots.get(number))
-            for number in sorted(shot_numbers)
+        shot_numbers.update(storyboard_shots)
+        shot_numbers.update(prompt_shots)
+        ordered_numbers = [
+            number
+            for number, _metadata in sorted(
+                storyboard_shots.items(), key=lambda item: item[1][0]
+            )
         ]
+        ordered_numbers.extend(sorted(shot_numbers.difference(ordered_numbers)))
+        summaries = [
+            self._shot_summary(
+                project_dir,
+                number,
+                checkpoint_shots.get(number),
+                order=index,
+                title=storyboard_shots.get(number, (index, f"Shot {number:02d}"))[1],
+                has_canonical_prompt=number in prompt_shots,
+            )
+            for index, number in enumerate(ordered_numbers, start=1)
+        ]
+        aggregation = self._aggregate(summaries)
         return ShotListResponse(
             project_id=workflow.project_id,
-            status=workflow.stages.shots.status,
+            status=self._collection_status(aggregation),
+            aggregation=aggregation,
             shots=summaries,
         )
 
@@ -181,11 +202,22 @@ class ShotRepository:
         canonical_id, shot_number = normalize_shot_id(shot_id)
         workflow, project_dir, project_data = self._project_context(project_id)
         checkpoint_shots = self._checkpoint_shots(project_data)
+        planned_shots = self._storyboard_shots(project_dir)
+        prompt_shots = self._canonical_prompt_numbers(project_dir)
         shot_dir, manifest, checkpoint = self._shot_context(
-            project_dir, shot_number, checkpoint_shots.get(shot_number)
+            project_dir,
+            shot_number,
+            checkpoint_shots.get(shot_number),
+            allow_missing=shot_number in planned_shots or shot_number in prompt_shots,
         )
         summary = self._summary_from_data(
-            canonical_id, shot_dir, manifest, checkpoint
+            canonical_id,
+            shot_dir,
+            manifest,
+            checkpoint,
+            order=shot_number,
+            title=f"Shot {shot_number:02d}",
+            collection_projection=False,
         )
         canonical_prompt = self._canonical_prompt(project_dir, shot_number)
         prompt_versions = self._records_by_version(checkpoint.get("prompt_versions"))
@@ -294,17 +326,57 @@ class ShotRepository:
             numbers.add(number)
         return numbers
 
+    def _storyboard_shots(self, project_dir: Path) -> dict[int, tuple[int, str]]:
+        payload = self._read_object(
+            project_dir, ("storyboard", "storyboard.json"), required=False
+        )
+        if payload is None or not isinstance(payload.get("shots"), list):
+            return {}
+        result: dict[int, tuple[int, str]] = {}
+        for order, raw in enumerate(payload["shots"], start=1):
+            shot = _mapping(raw)
+            number = _safe_positive_int(shot.get("shot_id"))
+            if number is None or number in result:
+                raise ShotDataCorrupt("storyboard Shot ordering is invalid")
+            title = _safe_text(shot.get("purpose")) or f"Shot {number:02d}"
+            result[number] = (order, title)
+        return result
+
+    def _canonical_prompt_numbers(self, project_dir: Path) -> set[int]:
+        payload = self._read_object(
+            project_dir, ("storyboard", "video_prompts.json"), required=False
+        )
+        if payload is None or not isinstance(payload.get("shots"), list):
+            return set()
+        return {
+            number
+            for raw in payload["shots"]
+            if (number := _safe_positive_int(_mapping(raw).get("shot_id")))
+            is not None
+        }
+
     def _shot_summary(
         self,
         project_dir: Path,
         shot_number: int,
         checkpoint: Mapping[str, Any] | None,
+        *,
+        order: int,
+        title: str,
+        has_canonical_prompt: bool,
     ) -> ShotSummary:
         shot_dir, manifest, resolved_checkpoint = self._shot_context(
-            project_dir, shot_number, checkpoint
+            project_dir, shot_number, checkpoint, allow_missing=True
         )
         return self._summary_from_data(
-            f"shot_{shot_number:02d}", shot_dir, manifest, resolved_checkpoint
+            f"shot_{shot_number:02d}",
+            shot_dir,
+            manifest,
+            resolved_checkpoint,
+            order=order,
+            title=title,
+            has_canonical_prompt=has_canonical_prompt,
+            collection_projection=True,
         )
 
     def _shot_context(
@@ -312,6 +384,8 @@ class ShotRepository:
         project_dir: Path,
         shot_number: int,
         checkpoint: Mapping[str, Any] | None,
+        *,
+        allow_missing: bool = False,
     ) -> tuple[Path, Mapping[str, Any], Mapping[str, Any]]:
         canonical = f"shot_{shot_number:02d}"
         shots_root = self._shots_root(project_dir)
@@ -327,7 +401,12 @@ class ShotRepository:
                 raise InvalidShotId("shot path escaped project")
             shot_dir = resolved_shot
         manifest = self._read_object(shot_dir, ("shot.json",), required=False)
-        if checkpoint is None and manifest is None and not directory_exists:
+        if (
+            checkpoint is None
+            and manifest is None
+            and not directory_exists
+            and not allow_missing
+        ):
             raise ShotNotFound("shot was not found")
         if manifest is not None:
             manifest_id = _safe_positive_int(manifest.get("shot_id"))
@@ -341,24 +420,49 @@ class ShotRepository:
         shot_dir: Path,
         manifest: Mapping[str, Any],
         checkpoint: Mapping[str, Any],
+        *,
+        order: int,
+        title: str,
+        has_canonical_prompt: bool = False,
+        collection_projection: bool = False,
     ) -> ShotSummary:
-        status = _safe_status(
+        core_status = _safe_status(
             checkpoint.get("status", manifest.get("status")), fallback="NOT_STARTED"
         )
         official = (
             _safe_positive_int(checkpoint.get("approved_video_version"))
             or _safe_positive_int(manifest.get("approved_version"))
         )
-        if official is None and status == "APPROVED":
+        if official is None and core_status == "APPROVED":
             official = (
                 _safe_positive_int(checkpoint.get("active_video_version"))
                 or _safe_positive_int(manifest.get("active_version"))
             )
         pending = self._pending_review_version(manifest, checkpoint)
         versions = self._version_numbers(shot_dir, manifest, checkpoint)
+        prompt_status = (
+            "READY"
+            if has_canonical_prompt
+            or _safe_positive_int(checkpoint.get("active_prompt_version")) is not None
+            or _safe_positive_int(checkpoint.get("approved_prompt_version")) is not None
+            or bool(checkpoint.get("prompt_versions"))
+            else "NOT_STARTED"
+        )
+        video_status = self._video_status(core_status, versions)
+        review_status = self._review_status(core_status, official, pending)
+        status = (
+            self._shot_collection_status(core_status, video_status, review_status)
+            if collection_projection
+            else core_status
+        )
         return ShotSummary(
             shot_id=shot_id,
+            order=order,
+            title=title,
             status=status,
+            prompt_status=prompt_status,
+            video_status=video_status,
+            review_status=review_status,
             official_version=official,
             pending_review_version=pending,
             version_count=len(versions),
@@ -366,6 +470,78 @@ class ShotRepository:
                 checkpoint.get("generation_count", manifest.get("generation_count"))
             ),
         )
+
+    @staticmethod
+    def _video_status(core_status: str, versions: set[int]) -> str:
+        if core_status in {"RUNNING", "GENERATING"}:
+            return "GENERATING"
+        if core_status == "FAILED" and not versions:
+            return "FAILED"
+        return "READY" if versions else "NOT_STARTED"
+
+    @staticmethod
+    def _review_status(
+        core_status: str,
+        official_version: int | None,
+        pending_review_version: int | None,
+    ) -> str:
+        if pending_review_version is not None or core_status == "WAITING_REVIEW":
+            return "WAITING_REVIEW"
+        if official_version is not None or core_status == "APPROVED":
+            return "APPROVED"
+        if core_status == "REJECTED":
+            return "REJECTED"
+        if core_status in {"FAILED", "CANCELLED"}:
+            return "FAILED"
+        return "NOT_STARTED"
+
+    @staticmethod
+    def _shot_collection_status(
+        core_status: str, video_status: str, review_status: str
+    ) -> str:
+        if core_status == "FAILED" or video_status == "FAILED":
+            return "FAILED"
+        if video_status == "GENERATING":
+            return "GENERATING"
+        if review_status == "WAITING_REVIEW":
+            return "WAITING_REVIEW"
+        if review_status == "APPROVED":
+            return "APPROVED"
+        return "NOT_STARTED"
+
+    @staticmethod
+    def _aggregate(shots: list[ShotSummary]) -> ShotStatusAggregation:
+        counts = {
+            "APPROVED": 0,
+            "WAITING_REVIEW": 0,
+            "GENERATING": 0,
+            "NOT_STARTED": 0,
+            "FAILED": 0,
+        }
+        for shot in shots:
+            counts[shot.status if shot.status in counts else "NOT_STARTED"] += 1
+        return ShotStatusAggregation(
+            total=len(shots),
+            approved=counts["APPROVED"],
+            waiting_review=counts["WAITING_REVIEW"],
+            generating=counts["GENERATING"],
+            not_started=counts["NOT_STARTED"],
+            failed=counts["FAILED"],
+        )
+
+    @staticmethod
+    def _collection_status(aggregation: ShotStatusAggregation) -> str:
+        if aggregation.failed:
+            return "FAILED"
+        if aggregation.generating:
+            return "GENERATING"
+        if aggregation.waiting_review:
+            return "WAITING_REVIEW"
+        if aggregation.total and aggregation.approved == aggregation.total:
+            return "COMPLETED"
+        if aggregation.approved:
+            return "IN_PROGRESS"
+        return "NOT_STARTED"
 
     @staticmethod
     def _pending_review_version(

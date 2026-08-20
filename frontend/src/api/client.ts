@@ -871,7 +871,12 @@ function parseShotSummary(
 ): ShotSummary {
   if (
     !isRecord(value) ||
+    !isPositiveInteger(value.order) ||
+    typeof value.title !== "string" ||
     typeof value.status !== "string" ||
+    typeof value.prompt_status !== "string" ||
+    typeof value.video_status !== "string" ||
+    typeof value.review_status !== "string" ||
     !isNullablePositiveInteger(value.official_version) ||
     !isNullablePositiveInteger(value.pending_review_version) ||
     !isNonNegativeInteger(value.version_count) ||
@@ -881,12 +886,56 @@ function parseShotSummary(
   }
   return {
     shot_id: parseShotId(value.shot_id, correlationId),
+    order: value.order,
+    title: parseContentText(value.title, correlationId) ?? "",
     status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
+    prompt_status:
+      parseContentText(value.prompt_status, correlationId) ?? "UNKNOWN",
+    video_status:
+      parseContentText(value.video_status, correlationId) ?? "UNKNOWN",
+    review_status:
+      parseContentText(value.review_status, correlationId) ?? "UNKNOWN",
     official_version: value.official_version,
     pending_review_version: value.pending_review_version,
     version_count: value.version_count,
     generation_count: value.generation_count,
   };
+}
+
+function parseShotAggregation(
+  value: unknown,
+  correlationId: string | null,
+) {
+  if (
+    !isRecord(value) ||
+    !isNonNegativeInteger(value.total) ||
+    !isNonNegativeInteger(value.approved) ||
+    !isNonNegativeInteger(value.waiting_review) ||
+    !isNonNegativeInteger(value.generating) ||
+    !isNonNegativeInteger(value.not_started) ||
+    !isNonNegativeInteger(value.failed)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的镜头汇总。", correlationId);
+  }
+  const aggregation = {
+    total: value.total,
+    approved: value.approved,
+    waiting_review: value.waiting_review,
+    generating: value.generating,
+    not_started: value.not_started,
+    failed: value.failed,
+  };
+  if (
+    aggregation.approved +
+      aggregation.waiting_review +
+      aggregation.generating +
+      aggregation.not_started +
+      aggregation.failed !==
+    aggregation.total
+  ) {
+    return invalidResponse("Backend 返回了不一致的镜头汇总。", correlationId);
+  }
+  return aggregation;
 }
 
 function parseShotListResponse(
@@ -897,14 +946,26 @@ function parseShotListResponse(
     !isRecord(value) ||
     typeof value.project_id !== "string" ||
     typeof value.status !== "string" ||
+    !isRecord(value.aggregation) ||
     !Array.isArray(value.shots)
   ) {
     return invalidResponse("Backend 返回了无法读取的镜头列表。", correlationId);
   }
+  const shots = value.shots.map((shot) => parseShotSummary(shot, correlationId));
+  const aggregation = parseShotAggregation(value.aggregation, correlationId);
+  const orders = shots.map((shot) => shot.order);
+  if (
+    aggregation.total !== shots.length ||
+    new Set(orders).size !== orders.length ||
+    orders.some((order, index) => index > 0 && order <= orders[index - 1]!)
+  ) {
+    return invalidResponse("Backend 返回了顺序不一致的镜头列表。", correlationId);
+  }
   return {
     project_id: parseContentText(value.project_id, correlationId) ?? "",
     status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
-    shots: value.shots.map((shot) => parseShotSummary(shot, correlationId)),
+    aggregation,
+    shots,
   };
 }
 

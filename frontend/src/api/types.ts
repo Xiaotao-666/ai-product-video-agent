@@ -359,16 +359,31 @@ export type ShotVisualInputMode =
 
 export interface ShotSummary {
   shot_id: string;
+  order: number;
+  title: string;
   status: string;
+  prompt_status: string;
+  video_status: string;
+  review_status: string;
   official_version: number | null;
   pending_review_version: number | null;
   version_count: number;
   generation_count: number;
 }
 
+export interface ShotStatusAggregation {
+  total: number;
+  approved: number;
+  waiting_review: number;
+  generating: number;
+  not_started: number;
+  failed: number;
+}
+
 export interface ShotListResponse {
   project_id: string;
   status: string;
+  aggregation: ShotStatusAggregation;
   shots: ShotSummary[];
 }
 

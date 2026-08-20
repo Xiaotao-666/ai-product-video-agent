@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from pydantic import Field
+
 from web_backend.models.projects import ResponseModel
 
 
@@ -29,16 +31,31 @@ class ShotVisualInputMode(StrEnum):
 
 class ShotSummary(ResponseModel):
     shot_id: str
+    order: int = Field(ge=1)
+    title: str
     status: str
+    prompt_status: str
+    video_status: str
+    review_status: str
     official_version: int | None = None
     pending_review_version: int | None = None
     version_count: int
     generation_count: int
 
 
+class ShotStatusAggregation(ResponseModel):
+    total: int = Field(ge=0)
+    approved: int = Field(ge=0)
+    waiting_review: int = Field(ge=0)
+    generating: int = Field(ge=0)
+    not_started: int = Field(ge=0)
+    failed: int = Field(ge=0)
+
+
 class ShotListResponse(ResponseModel):
     project_id: str
     status: str
+    aggregation: ShotStatusAggregation
     shots: list[ShotSummary]
 
 

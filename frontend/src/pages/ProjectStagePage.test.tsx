@@ -375,10 +375,19 @@ describe("ProjectStagePage", () => {
       data: {
         project_id: "LEE柠檬",
         status: "COMPLETED",
+        aggregation: {
+          total: 3, approved: 3, waiting_review: 0,
+          generating: 0, not_started: 0, failed: 0,
+        },
         shots: [
           {
             shot_id: "shot_01",
+            order: 1,
+            title: "Shot 01",
             status: "APPROVED",
+            prompt_status: "READY",
+            video_status: "READY",
+            review_status: "APPROVED",
             official_version: 2,
             pending_review_version: null,
             version_count: 2,
@@ -386,7 +395,12 @@ describe("ProjectStagePage", () => {
           },
           {
             shot_id: "shot_02",
+            order: 2,
+            title: "Shot 02",
             status: "APPROVED",
+            prompt_status: "READY",
+            video_status: "READY",
+            review_status: "APPROVED",
             official_version: 1,
             pending_review_version: null,
             version_count: 1,
@@ -394,7 +408,12 @@ describe("ProjectStagePage", () => {
           },
           {
             shot_id: "shot_03",
+            order: 3,
+            title: "Shot 03",
             status: "APPROVED",
+            prompt_status: "READY",
+            video_status: "READY",
+            review_status: "APPROVED",
             official_version: 1,
             pending_review_version: null,
             version_count: 1,
@@ -997,7 +1016,15 @@ describe("ProjectStagePage", () => {
       correlationId: "req_video_prompt_approve",
     });
     mockGetShots.mockResolvedValue({
-      data: { project_id: "LEE柠檬", status: "NOT_STARTED", shots: [] },
+      data: {
+        project_id: "LEE柠檬",
+        status: "NOT_STARTED",
+        aggregation: {
+          total: 0, approved: 0, waiting_review: 0,
+          generating: 0, not_started: 0, failed: 0,
+        },
+        shots: [],
+      },
       correlationId: "req_empty_shots",
     });
 

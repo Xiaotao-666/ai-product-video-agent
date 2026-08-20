@@ -83,48 +83,61 @@ export function ShotsStageContent({
       )}
 
       {state === "success" && response && response.shots.length > 0 && (
-        <div className="shot-summary-list">
-          {response.shots.map((shot) => {
-            const status = statusPresentation(shot.status);
-            return (
-              <article className="shot-summary-card" key={shot.shot_id}>
-                <div className="shot-summary-heading">
-                  <div>
-                    <p className="page-kicker">SHOT</p>
-                    <h3>{shot.shot_id.replace("shot_", "Shot ")}</h3>
+        <>
+          <dl className="shot-collection-summary" aria-label="镜头状态汇总">
+            <div><dt>镜头总数</dt><dd>{response.aggregation.total}</dd></div>
+            <div><dt>已审核</dt><dd>{response.aggregation.approved}</dd></div>
+            <div><dt>等待审核</dt><dd>{response.aggregation.waiting_review}</dd></div>
+            <div><dt>生成中</dt><dd>{response.aggregation.generating}</dd></div>
+            <div><dt>未开始</dt><dd>{response.aggregation.not_started}</dd></div>
+            <div><dt>失败</dt><dd>{response.aggregation.failed}</dd></div>
+          </dl>
+          <div className="shot-summary-list">
+            {response.shots.map((shot) => {
+              const status = statusPresentation(shot.status);
+              return (
+                <article className="shot-summary-card" key={shot.shot_id}>
+                  <div className="shot-summary-heading">
+                    <div>
+                      <p className="page-kicker">SHOT {shot.order}</p>
+                      <h3>{shot.shot_id.replace("shot_", "Shot ")}</h3>
+                      <p className="shot-summary-title">{shot.title}</p>
+                    </div>
+                    <StatusBadge label={status.label} tone={status.tone} />
                   </div>
-                  <StatusBadge label={status.label} tone={status.tone} />
-                </div>
-                <dl className="shot-summary-facts">
-                  <div>
-                    <dt>当前正式</dt>
-                    <dd>
-                      {shot.official_version
-                        ? `Video v${shot.official_version}`
-                        : "尚无"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>待审核新版本</dt>
-                    <dd>
-                      {shot.pending_review_version
-                        ? `Video v${shot.pending_review_version}`
-                        : "无"}
-                    </dd>
-                  </div>
-                  <div><dt>版本数量</dt><dd>{shot.version_count}</dd></div>
-                  <div><dt>累计生成</dt><dd>{shot.generation_count}</dd></div>
-                </dl>
-                <Link
-                  className="secondary-button shot-detail-link"
-                  to={projectShotPath(projectId, shot.shot_id)}
-                >
-                  查看镜头
-                </Link>
-              </article>
-            );
-          })}
-        </div>
+                  <dl className="shot-summary-facts">
+                    <div><dt>Prompt</dt><dd>{statusPresentation(shot.prompt_status).label}</dd></div>
+                    <div><dt>Video</dt><dd>{statusPresentation(shot.video_status).label}</dd></div>
+                    <div><dt>审核</dt><dd>{statusPresentation(shot.review_status).label}</dd></div>
+                    <div>
+                      <dt>当前正式</dt>
+                      <dd>
+                        {shot.official_version
+                          ? `Video v${shot.official_version}`
+                          : "尚无"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>待审核新版本</dt>
+                      <dd>
+                        {shot.pending_review_version
+                          ? `Video v${shot.pending_review_version}`
+                          : "无"}
+                      </dd>
+                    </div>
+                    <div><dt>累计生成</dt><dd>{shot.generation_count}</dd></div>
+                  </dl>
+                  <Link
+                    className="secondary-button shot-detail-link"
+                    to={projectShotPath(projectId, shot.shot_id)}
+                  >
+                    查看镜头
+                  </Link>
+                </article>
+              );
+            })}
+          </div>
+        </>
       )}
     </section>
   );

@@ -16,11 +16,24 @@ const mockGetShots = vi.mocked(getShots);
 
 const shotList: ShotListResponse = {
   project_id: "LEE柠檬",
-  status: "COMPLETED",
+  status: "WAITING_REVIEW",
+  aggregation: {
+    total: 3,
+    approved: 1,
+    waiting_review: 1,
+    generating: 1,
+    not_started: 0,
+    failed: 0,
+  },
   shots: [
     {
       shot_id: "shot_01",
-      status: "APPROVED",
+      order: 1,
+      title: "建立产品清爽外观",
+      status: "WAITING_REVIEW",
+      prompt_status: "READY",
+      video_status: "READY",
+      review_status: "WAITING_REVIEW",
       official_version: 2,
       pending_review_version: 3,
       version_count: 3,
@@ -28,7 +41,12 @@ const shotList: ShotListResponse = {
     },
     {
       shot_id: "shot_02",
+      order: 2,
+      title: "展示核心卖点",
       status: "APPROVED",
+      prompt_status: "READY",
+      video_status: "READY",
+      review_status: "APPROVED",
       official_version: 1,
       pending_review_version: null,
       version_count: 1,
@@ -36,11 +54,16 @@ const shotList: ShotListResponse = {
     },
     {
       shot_id: "shot_03",
-      status: "APPROVED",
-      official_version: 1,
+      order: 3,
+      title: "完成品牌收束",
+      status: "GENERATING",
+      prompt_status: "READY",
+      video_status: "GENERATING",
+      review_status: "NOT_STARTED",
+      official_version: null,
       pending_review_version: null,
-      version_count: 1,
-      generation_count: 1,
+      version_count: 0,
+      generation_count: 0,
     },
   ],
 };
@@ -67,6 +90,46 @@ describe("ShotsStageContent", () => {
     expect(within(section!).getByRole("heading", { name: "Shot 02" })).toBeInTheDocument();
     expect(within(section!).getByRole("heading", { name: "Shot 03" })).toBeInTheDocument();
     expect(within(section!).getAllByRole("link", { name: "查看镜头" })).toHaveLength(3);
+    expect(within(section!).getByText("建立产品清爽外观")).toBeInTheDocument();
+    expect(within(section!).getByText("展示核心卖点")).toBeInTheDocument();
+  });
+
+  it("preserves the Backend-provided Shot order", async () => {
+    mockGetShots.mockResolvedValue({
+      data: {
+        ...shotList,
+        shots: [
+          { ...shotList.shots[1]!, order: 1 },
+          { ...shotList.shots[0]!, order: 2 },
+          shotList.shots[2]!,
+        ],
+      },
+      correlationId: "req_ordered_shots",
+    });
+    renderContent();
+    await screen.findByRole("heading", { name: "Shot 02" });
+    const cards = document.querySelectorAll(".shot-summary-card");
+    expect(cards[0]).toHaveTextContent("Shot 02");
+    expect(cards[1]).toHaveTextContent("Shot 01");
+    expect(cards[2]).toHaveTextContent("Shot 03");
+  });
+
+  it("shows the Backend aggregation without calculating it in the browser", async () => {
+    renderContent();
+    await screen.findByRole("heading", { name: "Shot 01" });
+    const aggregation = screen.getByLabelText("镜头状态汇总");
+    expect(within(aggregation).getByText("镜头总数").nextSibling).toHaveTextContent("3");
+    expect(within(aggregation).getByText("已审核").nextSibling).toHaveTextContent("1");
+    expect(within(aggregation).getByText("等待审核").nextSibling).toHaveTextContent("1");
+    expect(within(aggregation).getByText("生成中").nextSibling).toHaveTextContent("1");
+  });
+
+  it("shows Prompt, Video, and Review states for every Shot", async () => {
+    renderContent();
+    const shotOne = (await screen.findByRole("heading", { name: "Shot 01" })).closest("article");
+    expect(shotOne).not.toBeNull();
+    expect(within(shotOne!).getAllByText("已就绪")).toHaveLength(2);
+    expect(within(shotOne!).getAllByText("等待审核")).toHaveLength(2);
   });
 
   it("shows the official version", async () => {
