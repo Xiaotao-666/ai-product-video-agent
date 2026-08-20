@@ -1,18 +1,33 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiClientError, getShots } from "../../api/client";
-import type { ShotListResponse } from "../../api/types";
+import {
+  ApiClientError,
+  getMultiShotGenerationOptions,
+  getShots,
+  startMultiShotGeneration,
+} from "../../api/client";
+import type {
+  MultiShotGenerationOptionsResponse,
+  ShotListResponse,
+} from "../../api/types";
 import { ShotsStageContent } from "./ShotsStageContent";
 
 
 vi.mock("../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client")>();
-  return { ...actual, getShots: vi.fn() };
+  return {
+    ...actual,
+    getShots: vi.fn(),
+    getMultiShotGenerationOptions: vi.fn(),
+    startMultiShotGeneration: vi.fn(),
+  };
 });
 
 const mockGetShots = vi.mocked(getShots);
+const mockGenerationOptions = vi.mocked(getMultiShotGenerationOptions);
+const mockStartGeneration = vi.mocked(startMultiShotGeneration);
 
 const shotList: ShotListResponse = {
   project_id: "LEE柠檬",
@@ -68,6 +83,50 @@ const shotList: ShotListResponse = {
   ],
 };
 
+const generationOptions: MultiShotGenerationOptionsResponse = {
+  project_id: "LEE柠檬",
+  status: "READY",
+  max_parallel: 2,
+  aggregation: {
+    total: 3,
+    queued: 0,
+    running: 0,
+    waiting_review: 1,
+    approved: 1,
+    failed: 0,
+    not_started: 1,
+  },
+  shots: [
+    {
+      shot_id: "shot_01",
+      order: 1,
+      title: "建立产品清爽外观",
+      status: "WAITING_REVIEW",
+      prompt_ready: true,
+      video_status: "READY",
+      available: false,
+    },
+    {
+      shot_id: "shot_02",
+      order: 2,
+      title: "展示核心卖点",
+      status: "APPROVED",
+      prompt_ready: true,
+      video_status: "READY",
+      available: false,
+    },
+    {
+      shot_id: "shot_03",
+      order: 3,
+      title: "完成品牌收束",
+      status: "READY",
+      prompt_ready: true,
+      video_status: "NOT_STARTED",
+      available: true,
+    },
+  ],
+};
+
 function renderContent(stageKey: "shots" | "assembly" = "shots") {
   return render(
     <MemoryRouter>
@@ -80,6 +139,33 @@ describe("ShotsStageContent", () => {
   beforeEach(() => {
     mockGetShots.mockReset();
     mockGetShots.mockResolvedValue({ data: shotList, correlationId: "req_shots" });
+    mockGenerationOptions.mockReset();
+    mockGenerationOptions.mockResolvedValue({
+      data: generationOptions,
+      correlationId: "req_generation_options",
+    });
+    mockStartGeneration.mockReset();
+    mockStartGeneration.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        status: "IN_PROGRESS",
+        max_parallel: 2,
+        shots: [
+          {
+            shot_id: "shot_03",
+            task_id: "task_0123456789abcdef0123456789abcdef",
+            operation: "SHOT_GENERATE",
+            status: "QUEUED",
+          },
+        ],
+        aggregation: {
+          ...generationOptions.aggregation,
+          queued: 1,
+          not_started: 0,
+        },
+      },
+      correlationId: "req_generation_start",
+    });
   });
 
   it("shows all persisted Shots and their count", async () => {
@@ -158,6 +244,36 @@ describe("ShotsStageContent", () => {
     );
   });
 
+  it("selects only Backend-available Shots and submits one project plan", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderContent();
+    const panel = (await screen.findByRole("heading", { name: "多镜头生成计划" })).closest("section");
+    expect(panel).not.toBeNull();
+    const choices = await within(panel!).findAllByRole("checkbox");
+    expect(choices[0]).toBeDisabled();
+    expect(choices[1]).toBeDisabled();
+    expect(choices[2]).toBeEnabled();
+    fireEvent.click(choices[2]!);
+    expect(within(panel!).getByText("可生成 1 个 · 已选择 1 个")).toBeInTheDocument();
+    fireEvent.click(within(panel!).getByRole("button", { name: "开始生成所选镜头" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockStartGeneration).toHaveBeenCalledWith("LEE柠檬", {
+        shots: ["shot_03"],
+        confirm_paid_call: true,
+      });
+    });
+    confirm.mockRestore();
+  });
+
+  it("shows Backend project progress and concurrency without browser aggregation", async () => {
+    renderContent();
+    const progress = await screen.findByLabelText("项目镜头生成进度");
+    expect(within(progress).getByText("总数").nextSibling).toHaveTextContent("3");
+    expect(within(progress).getByText("等待审核").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("最多同时生成 2 个镜头")).toBeInTheDocument();
+  });
+
   it("shows content loading independently", () => {
     mockGetShots.mockReturnValue(
       new Promise<Awaited<ReturnType<typeof getShots>>>(() => undefined),
@@ -188,6 +304,7 @@ describe("ShotsStageContent", () => {
   it("does not load or render on another Stage", () => {
     renderContent("assembly");
     expect(mockGetShots).not.toHaveBeenCalled();
+    expect(mockGenerationOptions).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "镜头列表" })).not.toBeInTheDocument();
   });
 });

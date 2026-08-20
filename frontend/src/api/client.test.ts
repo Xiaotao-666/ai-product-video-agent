@@ -20,6 +20,7 @@ import {
   getExportVideoUrl,
   getMusic,
   getMusicAudioUrl,
+  getMultiShotGenerationOptions,
   getProject,
   getProjectTasks,
   getProjects,
@@ -45,6 +46,7 @@ import {
   preflightShotGeneration,
   resumeShotGeneration,
   startShotGeneration,
+  startMultiShotGeneration,
   retryCreative,
   reviseCreative,
   reviseStoryboard,
@@ -770,6 +772,109 @@ describe("API client", () => {
       expect.stringContaining("/api/projects/LEE%E6%9F%A0%E6%AA%AC/shots"),
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("parses Backend-owned multi-Shot options and ordering", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf({
+        project_id: "LEE柠檬",
+        status: "READY",
+        max_parallel: 2,
+        aggregation: {
+          total: 2,
+          queued: 0,
+          running: 0,
+          waiting_review: 0,
+          approved: 1,
+          failed: 0,
+          not_started: 1,
+        },
+        shots: [
+          {
+            shot_id: "shot_01",
+            order: 1,
+            title: "First",
+            status: "APPROVED",
+            prompt_ready: true,
+            video_status: "READY",
+            available: false,
+          },
+          {
+            shot_id: "shot_02",
+            order: 2,
+            title: "Second",
+            status: "READY",
+            prompt_ready: true,
+            video_status: "NOT_STARTED",
+            available: true,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getMultiShotGenerationOptions("LEE柠檬");
+
+    expect(result.data.max_parallel).toBe(2);
+    expect(result.data.shots.map((shot) => shot.shot_id)).toEqual([
+      "shot_01",
+      "shot_02",
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/shots/generation/options"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("submits one multi-Shot plan without inventing a project task", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseOf(
+        {
+          project_id: "LEE柠檬",
+          status: "IN_PROGRESS",
+          max_parallel: 2,
+          shots: [
+            {
+              shot_id: "shot_01",
+              task_id: "task_0123456789abcdef0123456789abcdef",
+              operation: "SHOT_GENERATE",
+              status: "QUEUED",
+            },
+            {
+              shot_id: "shot_03",
+              task_id: "task_abcdef0123456789abcdef0123456789",
+              operation: "SHOT_GENERATE",
+              status: "QUEUED",
+            },
+          ],
+          aggregation: {
+            total: 3,
+            queued: 2,
+            running: 0,
+            waiting_review: 0,
+            approved: 0,
+            failed: 0,
+            not_started: 1,
+          },
+        },
+        202,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await startMultiShotGeneration("LEE柠檬", {
+      shots: ["shot_01", "shot_03"],
+      confirm_paid_call: true,
+    });
+
+    expect(result.data.shots).toHaveLength(2);
+    expect(result.data.shots.every((shot) => shot.operation === "SHOT_GENERATE")).toBe(true);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      shots: ["shot_01", "shot_03"],
+      confirm_paid_call: true,
+    });
   });
 
   it("gets Shot Detail with explicit roles and bound Prompt versions", async () => {

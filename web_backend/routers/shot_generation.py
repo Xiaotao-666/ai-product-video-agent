@@ -13,6 +13,7 @@ from web_backend.dependencies import (
     get_shot_approval_service,
     get_shot_generation_action_service,
     get_shot_generation_preflight_service,
+    get_multishot_generation_service,
     get_shot_version_service,
 )
 from web_backend.errors import registered_api_error
@@ -27,6 +28,11 @@ from web_backend.models.generation import (
     ShotGenerationStatusResponse,
 )
 from web_backend.models.tasks import TaskOperation, TaskRecord
+from web_backend.models.multishot_generation import (
+    MultiShotGenerationOptionsResponse,
+    MultiShotGenerationPlanResponse,
+    MultiShotGenerationStartRequest,
+)
 from web_backend.models.shots import ShotDetail
 from web_backend.repositories.project_repository import (
     InvalidProjectId,
@@ -66,6 +72,10 @@ from web_backend.services.shot_generation import (
     ShotGenerationActionService,
 )
 from web_backend.services.projects import ProjectBusy
+from web_backend.services.multishot_generation import (
+    MultiShotGenerationNotAllowed,
+    MultiShotGenerationService,
+)
 from web_backend.services.task_runner import TaskRunnerClosed
 from web_backend.services.reference_assets import (
     InvalidReferenceFile,
@@ -133,6 +143,60 @@ def _accepted_task_response(operation: TaskOperation) -> dict[int, dict[str, obj
             },
         }
     }
+
+
+@router.get(
+    "/projects/{project_id}/shots/generation/options",
+    response_model=MultiShotGenerationOptionsResponse,
+)
+def multishot_generation_options(
+    project_id: str,
+    service: Annotated[
+        MultiShotGenerationService,
+        Depends(get_multishot_generation_service),
+    ],
+) -> MultiShotGenerationOptionsResponse:
+    try:
+        return service.options(project_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+
+
+@router.post(
+    "/projects/{project_id}/shots/generation/start",
+    response_model=MultiShotGenerationPlanResponse,
+    status_code=202,
+)
+def start_multishot_generation(
+    project_id: str,
+    payload: MultiShotGenerationStartRequest,
+    request: Request,
+    response: Response,
+    service: Annotated[
+        MultiShotGenerationService,
+        Depends(get_multishot_generation_service),
+    ],
+) -> MultiShotGenerationPlanResponse:
+    try:
+        plan = service.start(
+            project_id,
+            payload,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    except PaidCallConfirmationRequired as error:
+        raise registered_api_error("PAID_CALL_CONFIRMATION_REQUIRED") from error
+    except (MultiShotGenerationNotAllowed, GenerationPreflightStale) as error:
+        raise registered_api_error("ACTION_NOT_ALLOWED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    response.headers["Location"] = (
+        f"/api/projects/{plan.project_id}/shots/generation/options"
+    )
+    return plan
 
 
 @router.get(

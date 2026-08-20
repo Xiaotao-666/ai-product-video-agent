@@ -36,6 +36,11 @@ import type {
   HealthResponse,
   MusicDetail,
   MusicMixDetail,
+  MultiShotGenerationAggregation,
+  MultiShotGenerationOptionsResponse,
+  MultiShotGenerationPlanResponse,
+  MultiShotGenerationStartRequest,
+  MultiShotPlanStatus,
   PostProductionState,
   PromptRevisionDraftRequest,
   PromptRevisionDraftAdoptResponse,
@@ -966,6 +971,151 @@ function parseShotListResponse(
     status: parseContentText(value.status, correlationId) ?? "UNKNOWN",
     aggregation,
     shots,
+  };
+}
+
+const MULTI_SHOT_PLAN_STATUSES: ReadonlySet<string> = new Set([
+  "READY",
+  "IN_PROGRESS",
+  "PARTIAL_PROGRESS",
+  "WAITING_REVIEW",
+  "COMPLETED",
+  "NOT_STARTED",
+]);
+
+function parseMultiShotAggregation(
+  value: unknown,
+  correlationId: string | null,
+): MultiShotGenerationAggregation {
+  if (
+    !isRecord(value) ||
+    !isNonNegativeInteger(value.total) ||
+    !isNonNegativeInteger(value.queued) ||
+    !isNonNegativeInteger(value.running) ||
+    !isNonNegativeInteger(value.waiting_review) ||
+    !isNonNegativeInteger(value.approved) ||
+    !isNonNegativeInteger(value.failed) ||
+    !isNonNegativeInteger(value.not_started)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的多镜头进度。", correlationId);
+  }
+  const aggregation = {
+    total: value.total,
+    queued: value.queued,
+    running: value.running,
+    waiting_review: value.waiting_review,
+    approved: value.approved,
+    failed: value.failed,
+    not_started: value.not_started,
+  };
+  if (
+    aggregation.queued +
+      aggregation.running +
+      aggregation.waiting_review +
+      aggregation.approved +
+      aggregation.failed +
+      aggregation.not_started !==
+    aggregation.total
+  ) {
+    return invalidResponse("Backend 返回了不一致的多镜头进度。", correlationId);
+  }
+  return aggregation;
+}
+
+function parseMultiShotPlanStatus(
+  value: unknown,
+  correlationId: string | null,
+): MultiShotPlanStatus {
+  if (typeof value !== "string" || !MULTI_SHOT_PLAN_STATUSES.has(value)) {
+    return invalidResponse("Backend 返回了无法读取的生成计划状态。", correlationId);
+  }
+  return value as MultiShotPlanStatus;
+}
+
+function parseMultiShotOptions(
+  value: unknown,
+  correlationId: string | null,
+): MultiShotGenerationOptionsResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    !isPositiveInteger(value.max_parallel) ||
+    !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的多镜头生成选项。", correlationId);
+  }
+  const shots = value.shots.map((shot) => {
+    if (
+      !isRecord(shot) ||
+      !isPositiveInteger(shot.order) ||
+      typeof shot.title !== "string" ||
+      typeof shot.status !== "string" ||
+      typeof shot.prompt_ready !== "boolean" ||
+      typeof shot.video_status !== "string" ||
+      typeof shot.available !== "boolean"
+    ) {
+      return invalidResponse("Backend 返回了无法读取的多镜头生成选项。", correlationId);
+    }
+    return {
+      shot_id: parseShotId(shot.shot_id, correlationId),
+      order: shot.order,
+      title: parseContentText(shot.title, correlationId) ?? "",
+      status: parseContentText(shot.status, correlationId) ?? "UNKNOWN",
+      prompt_ready: shot.prompt_ready,
+      video_status: parseContentText(shot.video_status, correlationId) ?? "UNKNOWN",
+      available: shot.available,
+    };
+  });
+  const aggregation = parseMultiShotAggregation(value.aggregation, correlationId);
+  if (
+    aggregation.total !== shots.length ||
+    new Set(shots.map((shot) => shot.shot_id)).size !== shots.length
+  ) {
+    return invalidResponse("Backend 返回了不一致的多镜头生成选项。", correlationId);
+  }
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseMultiShotPlanStatus(value.status, correlationId),
+    max_parallel: value.max_parallel,
+    aggregation,
+    shots,
+  };
+}
+
+function parseMultiShotPlan(
+  value: unknown,
+  correlationId: string | null,
+): MultiShotGenerationPlanResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.project_id !== "string" ||
+    !isPositiveInteger(value.max_parallel) ||
+    !Array.isArray(value.shots)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的多镜头生成计划。", correlationId);
+  }
+  const shots = value.shots.map((shot) => {
+    if (
+      !isRecord(shot) ||
+      typeof shot.task_id !== "string" ||
+      shot.operation !== "SHOT_GENERATE" ||
+      !isTaskStatus(shot.status)
+    ) {
+      return invalidResponse("Backend 返回了无法读取的多镜头生成计划。", correlationId);
+    }
+    return {
+      shot_id: parseShotId(shot.shot_id, correlationId),
+      task_id: parseContentText(shot.task_id, correlationId) ?? "",
+      operation: "SHOT_GENERATE" as const,
+      status: shot.status,
+    };
+  });
+  return {
+    project_id: parseContentText(value.project_id, correlationId) ?? "",
+    status: parseMultiShotPlanStatus(value.status, correlationId),
+    max_parallel: value.max_parallel,
+    shots,
+    aggregation: parseMultiShotAggregation(value.aggregation, correlationId),
   };
 }
 
@@ -2217,6 +2367,39 @@ export async function getShots(
   );
   return {
     data: parseShotListResponse(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getMultiShotGenerationOptions(
+  projectId: string,
+): Promise<ApiResult<MultiShotGenerationOptionsResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/generation/options`,
+  );
+  return {
+    data: parseMultiShotOptions(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function startMultiShotGeneration(
+  projectId: string,
+  payload: MultiShotGenerationStartRequest,
+): Promise<ApiResult<MultiShotGenerationPlanResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/generation/start`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseMultiShotPlan(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
 }

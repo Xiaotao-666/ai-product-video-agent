@@ -6,6 +6,7 @@ import type { ShotListResponse } from "../../api/types";
 import { statusPresentation } from "../../projectPresentation";
 import { projectShotPath, type StageKey } from "../../stageDefinitions";
 import { StatusBadge } from "../StatusBadge";
+import { MultiShotGenerationPanel } from "./MultiShotGenerationPanel";
 
 
 type ContentState = "loading" | "success" | "error";
@@ -84,6 +85,10 @@ export function ShotsStageContent({
 
       {state === "success" && response && response.shots.length > 0 && (
         <>
+          <MultiShotGenerationPanel
+            projectId={projectId}
+            onShotsChanged={loadShots}
+          />
           <dl className="shot-collection-summary" aria-label="镜头状态汇总">
             <div><dt>镜头总数</dt><dd>{response.aggregation.total}</dd></div>
             <div><dt>已审核</dt><dd>{response.aggregation.approved}</dd></div>

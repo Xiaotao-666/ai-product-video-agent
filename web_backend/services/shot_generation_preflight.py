@@ -43,7 +43,6 @@ from web_backend.models.generation import (
     ModelSelectionMode,
     ResolvedGeneration,
 )
-from web_backend.models.projects import AvailableAction
 from web_backend.repositories.project_repository import (
     ProjectDataCorrupt,
     ProjectRepository,
@@ -481,7 +480,7 @@ class ShotGenerationPreflightService:
         target_prompt_version: int | None = None,
     ) -> _ShotContext:
         canonical_id, shot_number = normalize_shot_id(shot_id)
-        workflow = self.project_repository.get_workflow(project_id)
+        self.project_repository.get_workflow(project_id)
         project_dir = self.project_repository.resolve_project_dir(project_id).resolve()
         project = self._read_object(project_dir, ("project.json",))
         storyboard = self._read_object(
@@ -595,10 +594,9 @@ class ShotGenerationPreflightService:
         if intent is GenerationIntent.INITIAL:
             if generated:
                 issues.append(_issue(GenerationIssueCode.SHOT_ALREADY_GENERATED))
-            if (
-                shot_status != "NOT_STARTED"
-                or AvailableAction.GENERATE_SHOTS not in workflow.available_actions
-            ) and not generated:
+            # Eligibility is Shot-scoped. One sibling entering review must not
+            # invalidate another NOT_STARTED Shot in the same approved plan.
+            if shot_status != "NOT_STARTED" and not generated:
                 issues.append(_issue(GenerationIssueCode.SHOT_NOT_READY))
         else:
             unapproved_review = (

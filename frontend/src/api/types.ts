@@ -387,6 +387,62 @@ export interface ShotListResponse {
   shots: ShotSummary[];
 }
 
+export type MultiShotPlanStatus =
+  | "READY"
+  | "IN_PROGRESS"
+  | "PARTIAL_PROGRESS"
+  | "WAITING_REVIEW"
+  | "COMPLETED"
+  | "NOT_STARTED";
+
+export interface MultiShotGenerationOption {
+  shot_id: string;
+  order: number;
+  title: string;
+  status: string;
+  prompt_ready: boolean;
+  video_status: string;
+  available: boolean;
+}
+
+export interface MultiShotGenerationAggregation {
+  total: number;
+  queued: number;
+  running: number;
+  waiting_review: number;
+  approved: number;
+  failed: number;
+  not_started: number;
+}
+
+export interface MultiShotGenerationOptionsResponse {
+  project_id: string;
+  status: MultiShotPlanStatus;
+  max_parallel: number;
+  aggregation: MultiShotGenerationAggregation;
+  shots: MultiShotGenerationOption[];
+}
+
+export interface MultiShotGenerationStartRequest {
+  shots: string[];
+  confirm_paid_call: boolean;
+}
+
+export interface MultiShotGenerationPlanItem {
+  shot_id: string;
+  task_id: string;
+  operation: "SHOT_GENERATE";
+  status: TaskStatus;
+}
+
+export interface MultiShotGenerationPlanResponse {
+  project_id: string;
+  status: MultiShotPlanStatus;
+  max_parallel: number;
+  shots: MultiShotGenerationPlanItem[];
+  aggregation: MultiShotGenerationAggregation;
+}
+
 export interface ShotPromptSummary {
   version: number | null;
   source: string | null;

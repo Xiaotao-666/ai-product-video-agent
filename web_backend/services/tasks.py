@@ -116,6 +116,79 @@ class TaskService:
                 raise
             return task
 
+    def submit_parallel_targets(
+        self,
+        *,
+        project_id: str,
+        operation: TaskOperation,
+        submissions: list[tuple[str, TaskCallable]],
+        correlation_id: str | None,
+    ) -> list[TaskRecord]:
+        """Durably create a same-operation Shot plan before any callable starts."""
+
+        if operation != TaskOperation.SHOT_GENERATE or not submissions:
+            raise ValueError("parallel target plans are reserved for initial Shot generation")
+        targets = [target_id for target_id, _callable in submissions]
+        if any(not target_id for target_id in targets) or len(set(targets)) != len(targets):
+            raise ValueError("parallel target plan contains invalid targets")
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        with self._submission_guard:
+            if self._runner.is_shutdown:
+                raise TaskRunnerClosed("task runner is shut down")
+            active_tasks = self._repository.list_active_for_project(
+                canonical_project_id
+            )
+            if active_tasks:
+                raise ProjectBusy("project already has an active Web task")
+
+            created = [
+                TaskRecord(
+                    task_id=self._id_factory(),
+                    project_id=canonical_project_id,
+                    operation=operation,
+                    target_id=target_id,
+                    status=TaskStatus.QUEUED,
+                    created_at=self._clock(),
+                    correlation_id=select_correlation_id(correlation_id),
+                )
+                for target_id, _callable in submissions
+            ]
+            for task in created:
+                self._repository.create(task)
+            try:
+                for task, (_target_id, callable_) in zip(
+                    created,
+                    submissions,
+                    strict=True,
+                ):
+                    self._runner.submit(
+                        task.task_id,
+                        callable_,
+                        acquire_project_lock=False,
+                    )
+            except TaskRunnerClosed:
+                for task in created:
+                    current = self._repository.get(task.task_id)
+                    if current.status is not TaskStatus.QUEUED:
+                        continue
+                    interrupted_payload = current.model_dump()
+                    interrupted_payload.update(
+                        status=TaskStatus.INTERRUPTED,
+                        finished_at=self._clock(),
+                        error=TaskError(
+                            code="TASK_RUNNER_UNAVAILABLE",
+                            message="任务执行器当前不可用。",
+                            retryable=False,
+                        ),
+                    )
+                    self._repository.update(
+                        TaskRecord.model_validate(interrupted_payload)
+                    )
+                raise
+            return created
+
     def get(self, task_id: str) -> TaskRecord:
         return self._repository.get(task_id)
 
@@ -135,6 +208,30 @@ class TaskService:
             project_id
         ).project_id
         return self._repository.find_active_for_project(canonical_project_id)
+
+    def active_for_target(
+        self,
+        project_id: str,
+        target_id: str,
+        *,
+        operations: set[TaskOperation] | None = None,
+    ) -> TaskRecord | None:
+        """Return the newest active task for one target without writing storage."""
+
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        return next(
+            (
+                task
+                for task in self._repository.list_active_for_project(
+                    canonical_project_id
+                )
+                if task.target_id == target_id
+                and (operations is None or task.operation in operations)
+            ),
+            None,
+        )
 
     @contextmanager
     def prevent_task_submission(self) -> Iterator[None]:

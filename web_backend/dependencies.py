@@ -29,6 +29,7 @@ from web_backend.services.shot_generation_preflight import (
     ShotGenerationPreflightService,
 )
 from web_backend.services.shot_generation import ShotGenerationActionService
+from web_backend.services.multishot_generation import MultiShotGenerationService
 from web_backend.services.shot_approval import ShotApprovalService
 from web_backend.services.shot_versions import ShotVersionService
 from web_backend.services.task_runner import TaskRunner
@@ -114,6 +115,12 @@ def get_shot_generation_action_service(
     request: Request,
 ) -> ShotGenerationActionService:
     return request.app.state.shot_generation_action_service
+
+
+def get_multishot_generation_service(
+    request: Request,
+) -> MultiShotGenerationService:
+    return request.app.state.multishot_generation_service
 
 
 def get_shot_approval_service(request: Request) -> ShotApprovalService:

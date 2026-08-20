@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,7 @@ from web_backend.models.tasks import (
     TaskResultReference,
     TaskStatus,
 )
+from web_backend.locking import ProjectLockManager
 from web_backend.repositories.project_repository import (
     ProjectDataCorrupt,
     ProjectRepository,
@@ -88,6 +90,83 @@ class GenerationPreflightStale(ShotGenerationActionError):
 
 class GenerationNotResumable(ShotGenerationActionError):
     pass
+
+
+class _ShotScopedProjectPaths:
+    """Merge only one Shot when parallel tasks persist shared project.json."""
+
+    def __init__(
+        self,
+        base: ProjectPaths,
+        project_id: str,
+        shot_id: int,
+        lock_manager: ProjectLockManager,
+    ) -> None:
+        self._base = base
+        self._project_id = project_id
+        self._shot_key = str(int(shot_id))
+        self._lock_manager = lock_manager
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
+
+    def save_json(self, path: str | Path, data: Any) -> Path:
+        target = self._base.ensure_within_project(path)
+        if target.resolve(strict=False) != self._base.project_state_path().resolve(
+            strict=False
+        ):
+            return self._base.save_json(target, data)
+        if not isinstance(data, Mapping):
+            raise ProjectStateError("project.json payload is invalid")
+        incoming_video = _mapping(data.get("video_generation"))
+        incoming_shots = _mapping(incoming_video.get("shots"))
+        incoming_shot = incoming_shots.get(self._shot_key)
+        if not isinstance(incoming_shot, Mapping):
+            raise ProjectStateError("Shot checkpoint is missing")
+        with self._lock_manager.project_write(
+            self._project_id,
+            timeout_seconds=5.0,
+        ):
+            try:
+                latest = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ProjectStateError("project.json cannot be merged") from exc
+            if not isinstance(latest, dict):
+                raise ProjectStateError("project.json payload is invalid")
+            latest_video = latest.setdefault("video_generation", {})
+            if not isinstance(latest_video, dict):
+                raise ProjectStateError("video generation state is invalid")
+            latest_shots = latest_video.setdefault("shots", {})
+            if not isinstance(latest_shots, dict):
+                raise ProjectStateError("Shot collection state is invalid")
+            latest_shots[self._shot_key] = deepcopy(dict(incoming_shot))
+            if "shot_review_schema_version" in incoming_video:
+                latest_video["shot_review_schema_version"] = incoming_video[
+                    "shot_review_schema_version"
+                ]
+
+            completed = latest_video.setdefault("completed_shots", [])
+            if not isinstance(completed, list):
+                raise ProjectStateError("completed Shot state is invalid")
+            shot_number = int(self._shot_key)
+            incoming_completed = {
+                int(value)
+                for value in incoming_video.get("completed_shots", [])
+                if isinstance(value, int) or str(value).isdigit()
+            }
+            completed_numbers = {
+                int(value)
+                for value in completed
+                if isinstance(value, int) or str(value).isdigit()
+            }
+            if shot_number in incoming_completed:
+                completed_numbers.add(shot_number)
+            else:
+                completed_numbers.discard(shot_number)
+            latest_video["completed_shots"] = sorted(completed_numbers)
+            if data.get("updated_at") is not None:
+                latest["updated_at"] = data["updated_at"]
+            return self._base.save_json(target, latest)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -199,12 +278,14 @@ class ShotGenerationActionService:
         preflight_service: ShotGenerationPreflightService,
         task_service: TaskService,
         capability_service: CapabilityService,
+        lock_manager: ProjectLockManager,
     ) -> None:
         self._project_repository = project_repository
         self._reference_repository = reference_repository
         self._preflight_service = preflight_service
         self._task_service = task_service
         self._capability_service = capability_service
+        self._lock_manager = lock_manager
 
     def submit_start(
         self,
@@ -247,6 +328,66 @@ class ShotGenerationActionService:
                 preflight_payload,
                 payload.preflight_fingerprint,
             ),
+        )
+
+    def submit_batch_starts(
+        self,
+        project_id: str,
+        prepared: list[tuple[str, GenerationStartRequest]],
+        *,
+        correlation_id: str | None,
+    ) -> list[TaskRecord]:
+        """Validate a full plan, then durably create all independent Shot tasks."""
+
+        if not prepared:
+            raise GenerationPreflightStale("generation plan is empty")
+        canonical_project_id = self._project_repository.get_project(
+            project_id
+        ).project_id
+        submissions: list[tuple[str, Any]] = []
+        canonical_targets: set[str] = set()
+        for shot_id, payload in prepared:
+            if not payload.confirm_paid_call:
+                raise PaidCallConfirmationRequired("paid call was not confirmed")
+            if payload.intent is not GenerationIntent.INITIAL:
+                raise GenerationPreflightStale("initial generation intent is invalid")
+            canonical_shot_id, _shot_number = normalize_shot_id(shot_id)
+            if canonical_shot_id in canonical_targets:
+                raise GenerationPreflightStale("generation plan has duplicate Shots")
+            canonical_targets.add(canonical_shot_id)
+            preflight_payload = GenerationPreflightRequest.model_validate(
+                payload.model_dump(
+                    include={"intent", "model_selection", "requested_model", "visual_input"}
+                )
+            )
+            current = self._preflight_service.preflight(
+                canonical_project_id, canonical_shot_id, preflight_payload
+            )
+            if (
+                not current.ready
+                or current.preflight_fingerprint is None
+                or current.preflight_fingerprint != payload.preflight_fingerprint
+            ):
+                raise GenerationPreflightStale("generation preflight changed")
+            submissions.append(
+                (
+                    canonical_shot_id,
+                    lambda current_shot_id=canonical_shot_id,
+                    current_payload=preflight_payload,
+                    current_fingerprint=payload.preflight_fingerprint: self._run_start(
+                        canonical_project_id,
+                        current_shot_id,
+                        current_payload,
+                        current_fingerprint,
+                        parallel_checkpoint=True,
+                    ),
+                )
+            )
+        return self._task_service.submit_parallel_targets(
+            project_id=canonical_project_id,
+            operation=TaskOperation.SHOT_GENERATE,
+            submissions=submissions,
+            correlation_id=correlation_id,
         )
 
     def submit_resume(
@@ -449,7 +590,16 @@ class ShotGenerationActionService:
             elif provider_task_id:
                 resume_kind = ShotGenerationResumeKind.POLL_EXISTING_TASK
 
-        active = self._task_service.active_for_project(canonical_project_id)
+        active = self._task_service.active_for_target(
+            canonical_project_id,
+            canonical_shot_id,
+            operations={
+                TaskOperation.SHOT_GENERATE,
+                TaskOperation.SHOT_REGENERATE,
+                TaskOperation.SHOT_PROMPT_VERSION_GENERATE,
+                TaskOperation.SHOT_RESUME,
+            },
+        )
         active_for_shot = (
             active is not None
             and active.operation
@@ -520,6 +670,7 @@ class ShotGenerationActionService:
         payload: GenerationPreflightRequest,
         fingerprint: str,
         regenerate: bool = False,
+        parallel_checkpoint: bool = False,
     ) -> TaskResultReference:
         current = self._preflight_service.preflight(project_id, shot_id, payload)
         if (
@@ -549,6 +700,7 @@ class ShotGenerationActionService:
             provider_selection=provider_selection,
             regenerate=regenerate,
             preflight_payload=payload,
+            parallel_checkpoint=parallel_checkpoint,
         )
 
     def _run_resume(self, project_id: str, shot_id: str) -> TaskResultReference:
@@ -577,13 +729,27 @@ class ShotGenerationActionService:
         provider_selection: ProviderSelection | None,
         regenerate: bool,
         preflight_payload: GenerationPreflightRequest | None,
+        parallel_checkpoint: bool = False,
     ) -> TaskResultReference:
         _canonical, shot_number = normalize_shot_id(shot_id)
         try:
             paths = create_project_paths(
                 self._project_repository.resolve_project_dir(project_id)
             )
-            checkpoint = ProjectCheckpoint.load(paths)
+            if parallel_checkpoint:
+                with self._lock_manager.project_write(
+                    project_id,
+                    timeout_seconds=5.0,
+                ):
+                    checkpoint = ProjectCheckpoint.load(paths)
+                checkpoint.project = _ShotScopedProjectPaths(
+                    paths,
+                    project_id,
+                    shot_number,
+                    self._lock_manager,
+                )
+            else:
+                checkpoint = ProjectCheckpoint.load(paths)
             board = Storyboard.model_validate_json(
                 paths.storyboard_file_path().read_text(encoding="utf-8")
             )
