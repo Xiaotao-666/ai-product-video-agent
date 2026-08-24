@@ -81,6 +81,12 @@ import type {
   StoryboardShotContent,
   SubtitleCue,
   SubtitleDetail,
+  SubtitleGenerateRequest,
+  SubtitleHistoryResponse,
+  SubtitleIssue,
+  SubtitleOptionsResponse,
+  SubtitleSourceSummary,
+  SubtitleVersionSummary,
   ProjectTaskListResponse,
   TaskError,
   TaskOperation,
@@ -2003,6 +2009,10 @@ function parseVoiceDetail(
   };
 }
 
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function parseVoiceTimingAcceptance(
   value: unknown,
   correlationId: string | null,
@@ -2264,6 +2274,20 @@ function parseSubtitleDetail(
   value: unknown,
   correlationId: string | null,
 ): SubtitleDetail {
+  const sourceVoiceVersion = isRecord(value) && value.source_voice_version === undefined
+    ? null
+    : isRecord(value) ? value.source_voice_version : null;
+  const provider = isRecord(value) && value.provider === undefined ? null : isRecord(value) ? value.provider : null;
+  const model = isRecord(value) && value.model === undefined ? null : isRecord(value) ? value.model : null;
+  const language = isRecord(value) && value.language === undefined ? null : isRecord(value) ? value.language : null;
+  const durationSeconds = isRecord(value) && value.duration_seconds === undefined
+    ? null
+    : isRecord(value) ? value.duration_seconds : null;
+  const semanticType = isRecord(value) && value.semantic_type === undefined ? null : isRecord(value) ? value.semantic_type : null;
+  const actualAudioDuration = isRecord(value) && value.actual_audio_duration === undefined ? null : isRecord(value) ? value.actual_audio_duration : null;
+  const voiceTrackStart = isRecord(value) && value.voice_track_start === undefined ? null : isRecord(value) ? value.voice_track_start : null;
+  const actualVoiceEnd = isRecord(value) && value.actual_voice_end === undefined ? null : isRecord(value) ? value.actual_voice_end : null;
+  const cueLevelAlignment = isRecord(value) && value.cue_level_alignment === undefined ? null : isRecord(value) ? value.cue_level_alignment : null;
   if (
     !isRecord(value) ||
     typeof value.project_id !== "string" ||
@@ -2271,6 +2295,16 @@ function parseSubtitleDetail(
     !isNullablePositiveInteger(value.version) ||
     !isNullableString(value.source) ||
     !isNullableString(value.timing_source) ||
+    !isNullableString(semanticType) ||
+    !isNullablePositiveInteger(sourceVoiceVersion) ||
+    !isNullableNonNegativeNumber(actualAudioDuration) ||
+    !isNullableNonNegativeNumber(voiceTrackStart) ||
+    !isNullableNonNegativeNumber(actualVoiceEnd) ||
+    !isNullableBoolean(cueLevelAlignment) ||
+    !isNullableString(provider) ||
+    !isNullableString(model) ||
+    !isNullableString(language) ||
+    !isNullableNonNegativeNumber(durationSeconds) ||
     !isNullableString(value.created_at) ||
     !isNonNegativeInteger(value.cue_count) ||
     typeof value.content_available !== "boolean" ||
@@ -2288,10 +2322,153 @@ function parseSubtitleDetail(
     version: value.version,
     source: parseContentText(value.source, correlationId),
     timing_source: parseContentText(value.timing_source, correlationId),
+    semantic_type: parseContentText(semanticType, correlationId),
+    source_voice_version: sourceVoiceVersion,
+    actual_audio_duration: actualAudioDuration,
+    voice_track_start: voiceTrackStart,
+    actual_voice_end: actualVoiceEnd,
+    cue_level_alignment: cueLevelAlignment,
+    provider: parseContentText(provider, correlationId),
+    model: parseContentText(model, correlationId),
+    language: parseContentText(language, correlationId),
+    duration_seconds: durationSeconds,
     created_at: parseContentText(value.created_at, correlationId),
     cue_count: value.cue_count,
     content_available: value.content_available,
     cues,
+  };
+}
+
+function parseSubtitleIssue(value: unknown, correlationId: string | null): SubtitleIssue {
+  if (!isRecord(value) || typeof value.code !== "string" || typeof value.message !== "string") {
+    return invalidResponse("Backend 返回了无法读取的字幕就绪问题。", correlationId);
+  }
+  return {
+    code: parseRequiredSafeText(value.code, "字幕问题代码无效。", correlationId),
+    message: parseRequiredSafeText(value.message, "字幕问题信息无效。", correlationId),
+  };
+}
+
+function parseSubtitleSource(value: unknown, correlationId: string | null): SubtitleSourceSummary {
+  if (
+    !isRecord(value)
+    || value.type !== "active_voice"
+    || typeof value.label !== "string"
+    || !isNonNegativeInteger(value.cue_count)
+    || typeof value.timing_source !== "string"
+    || !isNullablePositiveInteger(value.voice_version)
+    || typeof value.semantic_type !== "string"
+    || typeof value.script !== "string"
+    || !isNonNegativeNumber(value.actual_audio_duration)
+    || !isNonNegativeNumber(value.voice_track_start)
+    || !isNonNegativeNumber(value.actual_voice_end)
+    || typeof value.cue_level_alignment !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕来源。", correlationId);
+  }
+  return {
+    type: value.type,
+    label: parseRequiredSafeText(value.label, "字幕来源无效。", correlationId),
+    cue_count: value.cue_count,
+    timing_source: parseRequiredSafeText(value.timing_source, "字幕 Timing 来源无效。", correlationId),
+    voice_version: value.voice_version,
+    semantic_type: parseRequiredSafeText(value.semantic_type, "字幕语义无效。", correlationId),
+    script: parseRequiredSafeText(value.script, "Voice Script 无效。", correlationId),
+    actual_audio_duration: value.actual_audio_duration,
+    voice_track_start: value.voice_track_start,
+    actual_voice_end: value.actual_voice_end,
+    cue_level_alignment: value.cue_level_alignment,
+  };
+}
+
+function parseSubtitleOptions(value: unknown, correlationId: string | null): SubtitleOptionsResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || typeof value.applicable !== "boolean"
+    || typeof value.ready !== "boolean"
+    || typeof value.stale !== "boolean"
+    || !isNullableString(value.stale_reason)
+    || !isNullablePositiveInteger(value.active_version)
+    || !isPositiveInteger(value.next_version)
+    || (value.source !== null && !isRecord(value.source))
+    || !Array.isArray(value.issues)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕选项。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    applicable: value.applicable,
+    ready: value.ready,
+    stale: value.stale,
+    stale_reason: parseContentText(value.stale_reason, correlationId),
+    active_version: value.active_version,
+    next_version: value.next_version,
+    source: value.source === null ? null : parseSubtitleSource(value.source, correlationId),
+    issues: value.issues.map((item) => parseSubtitleIssue(item, correlationId)),
+  };
+}
+
+function parseSubtitleVersionSummary(value: unknown, correlationId: string | null): SubtitleVersionSummary {
+  const semanticType = isRecord(value) && value.semantic_type === undefined ? null : isRecord(value) ? value.semantic_type : null;
+  const actualAudioDuration = isRecord(value) && value.actual_audio_duration === undefined ? null : isRecord(value) ? value.actual_audio_duration : null;
+  const voiceTrackStart = isRecord(value) && value.voice_track_start === undefined ? null : isRecord(value) ? value.voice_track_start : null;
+  const actualVoiceEnd = isRecord(value) && value.actual_voice_end === undefined ? null : isRecord(value) ? value.actual_voice_end : null;
+  const cueLevelAlignment = isRecord(value) && value.cue_level_alignment === undefined ? null : isRecord(value) ? value.cue_level_alignment : null;
+  if (
+    !isRecord(value)
+    || !isPositiveInteger(value.version)
+    || !isNullableString(value.created_at)
+    || !isNullableString(value.provider)
+    || !isNullableString(value.model)
+    || !isNullableString(value.language)
+    || !isNullableNonNegativeNumber(value.duration_seconds)
+    || !isNonNegativeInteger(value.cue_count)
+    || !isNullableString(value.source)
+    || !isNullableString(value.timing_source)
+    || !isNullableString(semanticType)
+    || !isNullablePositiveInteger(value.source_voice_version)
+    || !isNullableNonNegativeNumber(actualAudioDuration)
+    || !isNullableNonNegativeNumber(voiceTrackStart)
+    || !isNullableNonNegativeNumber(actualVoiceEnd)
+    || !isNullableBoolean(cueLevelAlignment)
+    || typeof value.is_active !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕历史。", correlationId);
+  }
+  return {
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    provider: parseContentText(value.provider, correlationId),
+    model: parseContentText(value.model, correlationId),
+    language: parseContentText(value.language, correlationId),
+    duration_seconds: value.duration_seconds,
+    cue_count: value.cue_count,
+    source: parseContentText(value.source, correlationId),
+    timing_source: parseContentText(value.timing_source, correlationId),
+    semantic_type: parseContentText(semanticType, correlationId),
+    source_voice_version: value.source_voice_version,
+    actual_audio_duration: actualAudioDuration,
+    voice_track_start: voiceTrackStart,
+    actual_voice_end: actualVoiceEnd,
+    cue_level_alignment: cueLevelAlignment,
+    is_active: value.is_active,
+  };
+}
+
+function parseSubtitleHistory(value: unknown, correlationId: string | null): SubtitleHistoryResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || !isNullablePositiveInteger(value.active_version)
+    || !Array.isArray(value.versions)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕历史。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    active_version: value.active_version,
+    versions: value.versions.map((item) => parseSubtitleVersionSummary(item, correlationId)),
   };
 }
 
@@ -3505,6 +3682,79 @@ export async function getSubtitle(
 ): Promise<ApiResult<SubtitleDetail>> {
   const result = await get<unknown>(
     `/api/projects/${encodeURIComponent(projectId)}/post-production/subtitle`,
+  );
+  return {
+    data: parseSubtitleDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getSubtitleOptions(
+  projectId: string,
+): Promise<ApiResult<SubtitleOptionsResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/subtitle/options`,
+  );
+  return {
+    data: parseSubtitleOptions(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+async function submitSubtitle(
+  projectId: string,
+  payload: SubtitleGenerateRequest,
+  action: "generate" | "regenerate",
+): Promise<ApiResult<SubtitleDetail>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/subtitle/${action}`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseSubtitleDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function generateSubtitle(
+  projectId: string,
+  payload: SubtitleGenerateRequest,
+): Promise<ApiResult<SubtitleDetail>> {
+  return submitSubtitle(projectId, payload, "generate");
+}
+
+export function regenerateSubtitle(
+  projectId: string,
+  payload: SubtitleGenerateRequest,
+): Promise<ApiResult<SubtitleDetail>> {
+  return submitSubtitle(projectId, payload, "regenerate");
+}
+
+export async function getSubtitleHistory(
+  projectId: string,
+): Promise<ApiResult<SubtitleHistoryResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/subtitle/history`,
+  );
+  return {
+    data: parseSubtitleHistory(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getSubtitleVersion(
+  projectId: string,
+  version: number,
+): Promise<ApiResult<SubtitleDetail>> {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({ message: "Subtitle 版本无效。", code: "INVALID_SUBTITLE_VERSION" });
+  }
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/subtitle/versions/${version}`,
   );
   return {
     data: parseSubtitleDetail(result.data, result.correlationId),

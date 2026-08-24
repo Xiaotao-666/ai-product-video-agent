@@ -277,6 +277,48 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "SUBTITLE_DATA_CORRUPT": ErrorDefinition(
         422, "POST_PRODUCTION_ERROR", "SUBTITLE_DATA_CORRUPT", "字幕数据无法读取。"
     ),
+    "SUBTITLE_VERSION_NOT_FOUND": ErrorDefinition(
+        404, "SUBTITLE_ERROR", "SUBTITLE_VERSION_NOT_FOUND", "字幕版本不存在。"
+    ),
+    "SUBTITLE_SOURCE_UNAVAILABLE": ErrorDefinition(
+        409,
+        "SUBTITLE_ERROR",
+        "SUBTITLE_SOURCE_UNAVAILABLE",
+        "当前项目没有可用的字幕来源。",
+    ),
+    "SUBTITLE_SOURCE_INVALID": ErrorDefinition(
+        422,
+        "SUBTITLE_ERROR",
+        "SUBTITLE_SOURCE_INVALID",
+        "当前字幕来源无法安全读取。",
+    ),
+    "ACTIVE_VOICE_REQUIRED": ErrorDefinition(
+        409,
+        "SUBTITLE_ERROR",
+        "ACTIVE_VOICE_REQUIRED",
+        "请先完成并激活一个 Voice 版本。",
+    ),
+    "SUBTITLE_NOT_APPLICABLE": ErrorDefinition(
+        409,
+        "SUBTITLE_ERROR",
+        "SUBTITLE_NOT_APPLICABLE",
+        "当前项目未启用旁白，不适用旁白字幕。",
+    ),
+    "SUBTITLE_SOURCE_CHANGED": ErrorDefinition(
+        409,
+        "SUBTITLE_ERROR",
+        "SUBTITLE_SOURCE_CHANGED",
+        "active Voice 已变更，请刷新后重试。",
+    ),
+    "SUBTITLE_GENERATION_FAILED": ErrorDefinition(
+        500,
+        "SUBTITLE_ERROR",
+        "SUBTITLE_GENERATION_FAILED",
+        "字幕未能安全生成或保存。",
+    ),
+    "PROJECT_NOT_READY": ErrorDefinition(
+        409, "ACTION_ERROR", "PROJECT_NOT_READY", "当前项目状态尚未就绪。"
+    ),
     "MUSIC_DATA_CORRUPT": ErrorDefinition(
         422, "POST_PRODUCTION_ERROR", "MUSIC_DATA_CORRUPT", "音乐数据无法读取。"
     ),

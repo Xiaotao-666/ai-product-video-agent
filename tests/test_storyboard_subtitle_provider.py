@@ -17,6 +17,7 @@ from providers.storyboard_subtitle_provider import StoryboardSubtitleProvider
 from subtitle_assets import SubtitleAssetManager
 from subtitle_generation import (
     generate_subtitle_for_project,
+    load_active_voice_subtitle_source,
     load_storyboard_subtitle_source,
     subtitle_source_label,
 )
@@ -136,7 +137,18 @@ class StoryboardSubtitleProviderTests(unittest.TestCase):
         )
         self.paths.save_json(
             self.paths.creative_brief_path(),
-            {"av_timeline_constraints": {"forbidden_windows": []}},
+            {
+                "narration_plan": {"enabled": True},
+                "av_timeline_constraints": {"forbidden_windows": []},
+            },
+        )
+        VoiceAssetManager(self.paths).generate_and_save(
+            VoiceGenerationRequest(
+                script="正式旁白脚本。",
+                voice="local",
+                language="zh-CN",
+            ),
+            LocalVoiceProvider(),
         )
         self.manager = SubtitleAssetManager(self.paths)
         self.registry = build_subtitle_provider_registry()
@@ -154,28 +166,21 @@ class StoryboardSubtitleProviderTests(unittest.TestCase):
         self.assertIsInstance(provider, StoryboardSubtitleProvider)
         self.assertFalse(provider.get_metadata()["external_api"])
 
-    def test_02_compiled_storyboard_has_routing_priority(self) -> None:
+    def test_02_active_voice_has_formal_routing_priority(self) -> None:
         entry = generate_subtitle_for_project(self.manager, self.registry)
-        self.assertEqual(entry["provider"], "storyboard_subtitle")
-        self.assertEqual(entry["source"], "compiled_storyboard")
-        self.assertEqual(subtitle_source_label(self.paths), "Storyboard Planned")
+        self.assertEqual(entry["provider"], "script_subtitle")
+        self.assertEqual(entry["source"], "active_voice")
+        self.assertEqual(entry["semantic_type"], "NARRATION_CAPTION")
+        self.assertEqual(subtitle_source_label(self.paths), "Active Voice")
 
     def test_03_no_subtitle_cues_falls_back_to_script_provider(self) -> None:
         self.paths.save_json(
             self.paths.storyboard_file_path(), compiled_storyboard(include_cues=False)
         )
-        VoiceAssetManager(self.paths).generate_and_save(
-            VoiceGenerationRequest(
-                script="旧项目字幕脚本。",
-                voice="local",
-                language="zh-CN",
-            ),
-            LocalVoiceProvider(),
-        )
         entry = generate_subtitle_for_project(self.manager, self.registry)
         self.assertEqual(entry["provider"], "script_subtitle")
         self.assertEqual(entry["source_voice_version"], 1)
-        self.assertEqual(subtitle_source_label(self.paths), "Script Fallback")
+        self.assertEqual(subtitle_source_label(self.paths), "Active Voice")
 
     def test_04_shot_local_offsets_use_existing_global_timeline(self) -> None:
         result = self.registry.generate_subtitle(self._request())
@@ -247,11 +252,10 @@ class StoryboardSubtitleProviderTests(unittest.TestCase):
         config = json.loads(
             self.paths.subtitle_version_config_path(1).read_text(encoding="utf-8")
         )
-        self.assertEqual(config["provider"], "storyboard_subtitle")
-        self.assertEqual(config["source"], "compiled_storyboard")
-        self.assertEqual(
-            config["timing_source"], "compiled_storyboard_global_timeline"
-        )
+        self.assertEqual(config["provider"], "script_subtitle")
+        self.assertEqual(config["source"], "active_voice")
+        self.assertEqual(config["semantic_type"], "NARRATION_CAPTION")
+        self.assertEqual(config["timing_source"], "voice_audio_duration")
 
     def test_09_manual_regeneration_creates_v002_without_overwrite(self) -> None:
         first = generate_subtitle_for_project(self.manager, self.registry)
@@ -315,8 +319,6 @@ class StoryboardSubtitleProviderTests(unittest.TestCase):
         self.assertEqual(entry["provider"], "script_subtitle")
 
     def _voice_request(self):
-        from subtitle_generation import load_active_voice_subtitle_source
-
         return load_active_voice_subtitle_source(self.paths).request
 
     def test_12_voice_assets_are_not_modified(self) -> None:
@@ -346,10 +348,10 @@ class StoryboardSubtitleProviderTests(unittest.TestCase):
         generate_subtitle_for_project(self.manager, self.registry)
         self.assertEqual(self.paths.export_manifest_path().read_bytes(), before)
 
-    def test_15_storyboard_subtitle_generation_never_uses_network(self) -> None:
+    def test_15_active_voice_subtitle_generation_never_uses_network(self) -> None:
         with patch("socket.socket", side_effect=AssertionError("network used")):
             entry = generate_subtitle_for_project(self.manager, self.registry)
-        self.assertEqual(entry["provider"], "storyboard_subtitle")
+        self.assertEqual(entry["provider"], "script_subtitle")
 
 
 if __name__ == "__main__":

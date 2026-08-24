@@ -21,6 +21,8 @@ from web_backend.models.postproduction import (
     MusicMixDetail,
     SubtitleCue,
     SubtitleDetail,
+    SubtitleHistoryResponse,
+    SubtitleVersionSummary,
     VoiceCalibrationStatus,
     VoiceDetail,
     VoiceHistoryResponse,
@@ -83,6 +85,10 @@ class VoiceDataCorrupt(PostProductionRepositoryError):
 
 
 class SubtitleDataCorrupt(PostProductionRepositoryError):
+    pass
+
+
+class SubtitleVersionNotFound(PostProductionRepositoryError):
     pass
 
 
@@ -625,6 +631,104 @@ class PostProductionRepository:
         version, entry = self._active_entry(manifest, SubtitleDataCorrupt)
         recorded = self._component_recorded(project_data, "subtitle")
         version = version or _safe_positive_int(recorded.get("active_version"))
+        return self._subtitle_detail(
+            api_id,
+            project_dir,
+            recorded,
+            version,
+            entry,
+            is_active=True,
+        )
+
+    def get_subtitle_version(
+        self, project_id: str, version: int
+    ) -> SubtitleDetail:
+        api_id, project_dir, project_data = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("subtitles", "subtitle_manifest.json"),
+            error_type=SubtitleDataCorrupt,
+            schema_key="subtitle_schema_version",
+        )
+        active, _active_entry = self._active_entry(manifest, SubtitleDataCorrupt)
+        entry = self._subtitle_entry(manifest, version)
+        return self._subtitle_detail(
+            api_id,
+            project_dir,
+            self._component_recorded(project_data, "subtitle"),
+            version,
+            entry,
+            is_active=version == active,
+        )
+
+    def get_subtitle_history(self, project_id: str) -> SubtitleHistoryResponse:
+        api_id, project_dir, project_data = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("subtitles", "subtitle_manifest.json"),
+            error_type=SubtitleDataCorrupt,
+            schema_key="subtitle_schema_version",
+        )
+        active, _active_entry = self._active_entry(manifest, SubtitleDataCorrupt)
+        if manifest is None:
+            return SubtitleHistoryResponse(project_id=api_id, active_version=None)
+        versions = manifest.get("versions")
+        if not isinstance(versions, list):
+            raise SubtitleDataCorrupt("subtitle versions are invalid")
+        summaries: list[SubtitleVersionSummary] = []
+        seen: set[int] = set()
+        recorded = self._component_recorded(project_data, "subtitle")
+        for raw in versions:
+            entry = _mapping(raw)
+            version = _safe_positive_int(entry.get("version"))
+            if version is None or version in seen:
+                raise SubtitleDataCorrupt("subtitle version history is invalid")
+            seen.add(version)
+            detail = self._subtitle_detail(
+                api_id,
+                project_dir,
+                recorded,
+                version,
+                entry,
+                is_active=version == active,
+            )
+            summaries.append(
+                SubtitleVersionSummary(
+                    version=version,
+                    created_at=detail.created_at,
+                    provider=detail.provider,
+                    model=detail.model,
+                    language=detail.language,
+                    duration_seconds=detail.duration_seconds,
+                    cue_count=detail.cue_count,
+                    source=detail.source,
+                    timing_source=detail.timing_source,
+                    semantic_type=detail.semantic_type,
+                    source_voice_version=detail.source_voice_version,
+                    actual_audio_duration=detail.actual_audio_duration,
+                    voice_track_start=detail.voice_track_start,
+                    actual_voice_end=detail.actual_voice_end,
+                    cue_level_alignment=detail.cue_level_alignment,
+                    is_active=version == active,
+                )
+            )
+        summaries.sort(key=lambda item: item.version, reverse=True)
+        return SubtitleHistoryResponse(
+            project_id=api_id,
+            active_version=active,
+            versions=summaries,
+        )
+
+    def _subtitle_detail(
+        self,
+        api_id: str,
+        project_dir: Path,
+        recorded: Mapping[str, Any],
+        version: int | None,
+        entry: Mapping[str, Any],
+        *,
+        is_active: bool,
+    ) -> SubtitleDetail:
         config = (
             self._read_json(
                 project_dir,
@@ -642,6 +746,16 @@ class PostProductionRepository:
         )
         metadata = dict(_mapping(config))
         metadata.update(entry)
+        source = _safe_text(metadata.get("source"))
+        source_voice_version = _safe_positive_int(
+            metadata.get("source_voice_version")
+        )
+        semantic_type = _safe_text(metadata.get("semantic_type"))
+        if semantic_type is None:
+            if source_voice_version is not None:
+                semantic_type = "NARRATION_CAPTION"
+            elif source == "compiled_storyboard":
+                semantic_type = "LEGACY_SCREEN_TEXT"
         srt = (
             self._read_text(
                 project_dir,
@@ -654,10 +768,34 @@ class PostProductionRepository:
         cues = self._parse_srt(srt) if srt is not None else []
         return SubtitleDetail(
             project_id=api_id,
-            status=self._component_status(recorded, bool(entry), version),
+            status=(
+                self._component_status(recorded, bool(entry), version)
+                if is_active
+                else "COMPLETED"
+            ),
             version=version,
-            source=_safe_text(metadata.get("source")),
+            source=source,
             timing_source=_safe_text(metadata.get("timing_source")),
+            semantic_type=semantic_type,
+            source_voice_version=source_voice_version,
+            actual_audio_duration=_safe_nonnegative_number(
+                metadata.get("actual_audio_duration")
+            ),
+            voice_track_start=_safe_nonnegative_number(
+                metadata.get("voice_track_start")
+            ),
+            actual_voice_end=_safe_nonnegative_number(
+                metadata.get("actual_voice_end")
+            ),
+            cue_level_alignment=_optional_bool(
+                metadata.get("cue_level_alignment")
+            ),
+            provider=_safe_text(metadata.get("provider")),
+            model=_safe_text(metadata.get("model")),
+            language=_safe_text(metadata.get("language")),
+            duration_seconds=_safe_nonnegative_number(
+                metadata.get("duration_seconds", metadata.get("duration"))
+            ),
             created_at=_safe_text(metadata.get("created_at")),
             cue_count=(
                 len(cues)
@@ -667,6 +805,23 @@ class PostProductionRepository:
             content_available=srt is not None,
             cues=cues,
         )
+
+    @staticmethod
+    def _subtitle_entry(
+        manifest: Mapping[str, Any] | None, version: int
+    ) -> Mapping[str, Any]:
+        if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+            raise SubtitleVersionNotFound("subtitle version was not found")
+        if manifest is None or not isinstance(manifest.get("versions"), list):
+            raise SubtitleVersionNotFound("subtitle version was not found")
+        matches = [
+            _mapping(raw)
+            for raw in manifest["versions"]
+            if _safe_positive_int(_mapping(raw).get("version")) == version
+        ]
+        if len(matches) != 1:
+            raise SubtitleVersionNotFound("subtitle version was not found")
+        return matches[0]
 
     def get_music(self, project_id: str) -> MusicDetail:
         api_id, project_dir, project_data = self._project_context(project_id)

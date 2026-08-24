@@ -24,6 +24,11 @@ import {
   getShots,
   getStoryboardContent,
   getSubtitle,
+  getSubtitleHistory,
+  getSubtitleOptions,
+  getSubtitleVersion,
+  generateSubtitle,
+  regenerateSubtitle,
   getVideoPrompts,
   getVoice,
   getVoiceHistory,
@@ -58,6 +63,11 @@ vi.mock("../api/client", async (importOriginal) => {
     getShots: vi.fn(),
     getStoryboardContent: vi.fn(),
     getSubtitle: vi.fn(),
+    getSubtitleHistory: vi.fn(),
+    getSubtitleOptions: vi.fn(),
+    getSubtitleVersion: vi.fn(),
+    generateSubtitle: vi.fn(),
+    regenerateSubtitle: vi.fn(),
     getVideoPrompts: vi.fn(),
     getVoice: vi.fn(),
     getVoiceHistory: vi.fn(),
@@ -85,6 +95,11 @@ const mockGetShots = vi.mocked(getShots);
 const mockGetCreativeContent = vi.mocked(getCreativeContent);
 const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
 const mockGetSubtitle = vi.mocked(getSubtitle);
+const mockGetSubtitleHistory = vi.mocked(getSubtitleHistory);
+const mockGetSubtitleOptions = vi.mocked(getSubtitleOptions);
+const mockGetSubtitleVersion = vi.mocked(getSubtitleVersion);
+const mockGenerateSubtitle = vi.mocked(generateSubtitle);
+const mockRegenerateSubtitle = vi.mocked(regenerateSubtitle);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockGetVoice = vi.mocked(getVoice);
 const mockGetVoiceHistory = vi.mocked(getVoiceHistory);
@@ -296,6 +311,11 @@ describe("ProjectStagePage", () => {
     mockGetCreativeContent.mockReset();
     mockGetStoryboardContent.mockReset();
     mockGetSubtitle.mockReset();
+    mockGetSubtitleHistory.mockReset();
+    mockGetSubtitleOptions.mockReset();
+    mockGetSubtitleVersion.mockReset();
+    mockGenerateSubtitle.mockReset();
+    mockRegenerateSubtitle.mockReset();
     mockGetVideoPrompts.mockReset();
     mockGetVoice.mockReset();
     mockGetVoiceHistory.mockReset();
@@ -389,11 +409,43 @@ describe("ProjectStagePage", () => {
     mockGetSubtitle.mockResolvedValue({
       data: {
         project_id: "LEE柠檬", status: "NOT_STARTED", version: null,
-        source: null, timing_source: null, created_at: null, cue_count: 0,
+        source: null, timing_source: null, semantic_type: null,
+        source_voice_version: null, actual_audio_duration: null,
+        voice_track_start: null, actual_voice_end: null,
+        cue_level_alignment: null,
+        provider: null, model: null, language: null, duration_seconds: null,
+        created_at: null, cue_count: 0,
         content_available: false, cues: [],
       },
       correlationId: "req_subtitle",
     });
+    mockGetSubtitleOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", applicable: true, ready: false,
+        stale: false, stale_reason: null, active_version: null, next_version: 1,
+        source: null,
+        issues: [{ code: "ACTIVE_VOICE_REQUIRED", message: "请先完成 Voice。" }],
+      },
+      correlationId: "req_subtitle_options",
+    });
+    mockGetSubtitleHistory.mockResolvedValue({
+      data: { project_id: "LEE柠檬", active_version: null, versions: [] },
+      correlationId: "req_subtitle_history",
+    });
+    mockGetSubtitleVersion.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬", status: "NOT_STARTED", version: null,
+        source: null, timing_source: null, semantic_type: null,
+        source_voice_version: null, actual_audio_duration: null,
+        voice_track_start: null, actual_voice_end: null,
+        cue_level_alignment: null,
+        provider: null, model: null, language: null, duration_seconds: null,
+        created_at: null, cue_count: 0, content_available: false, cues: [],
+      },
+      correlationId: "req_subtitle_version",
+    });
+    mockGenerateSubtitle.mockImplementation(() => mockGetSubtitle("LEE柠檬"));
+    mockRegenerateSubtitle.mockImplementation(() => mockGetSubtitle("LEE柠檬"));
     mockGetMusic.mockResolvedValue({
       data: {
         project_id: "LEE柠檬", status: "NOT_STARTED", version: null,

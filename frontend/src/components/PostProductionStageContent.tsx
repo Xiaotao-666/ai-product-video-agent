@@ -36,6 +36,7 @@ import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import type { StageKey } from "../stageDefinitions";
 import { StatusBadge } from "./StatusBadge";
 import { VoiceGenerationAction } from "./VoiceGenerationAction";
+import { SubtitleGenerationAction } from "./SubtitleGenerationAction";
 
 
 type DetailStageKey = "assembly" | "voice" | "subtitle" | "music" | "export";
@@ -156,7 +157,7 @@ function DetailHeading({
     <div className="stage-section-heading postproduction-heading">
       <div>
         <p className="page-kicker">
-          {interactive ? "ASSEMBLY WORKFLOW" : "PERSISTED READ-ONLY DETAIL"}
+          {interactive ? "POST-PRODUCTION WORKFLOW" : "PERSISTED READ-ONLY DETAIL"}
         </p>
         <h2 id="postproduction-detail-title">{title}</h2>
       </div>
@@ -614,40 +615,17 @@ function VoiceContent({ projectId, detail }: { projectId: string; detail: VoiceD
   );
 }
 
-function SubtitleContent({ detail }: { detail: SubtitleDetail }) {
-  const status = statusPresentation(detail.status);
+function SubtitleContent({ projectId, detail }: { projectId: string; detail: SubtitleDetail }) {
+  const [current, setCurrent] = useState(detail);
+  useEffect(() => setCurrent(detail), [detail]);
   return (
     <>
-      <DetailHeading title="字幕详情" />
-      <div className="postproduction-title-row">
-        <h3>当前正式字幕</h3>
-        <StatusBadge label={status.label} tone={status.tone} />
-      </div>
-      {detail.version === null ? (
-        <p className="postproduction-empty-copy">尚未生成字幕。</p>
-      ) : (
-        <>
-          <dl className="postproduction-facts">
-            <StateFact label="正式版本" value={versionLabel(detail.version)} />
-            <StateFact label="来源" value={sourceLabel(detail.source)} />
-            <StateFact label="Timing 来源" value={sourceLabel(detail.timing_source)} />
-            <StateFact label="Cue 数量" value={String(detail.cue_count)} />
-            <StateFact label="创建时间" value={dateLabel(detail.created_at)} />
-          </dl>
-          {detail.content_available ? (
-            <ol className="subtitle-cue-list">
-              {detail.cues.map((cue) => (
-                <li key={`${cue.index}-${cue.start}`}>
-                  <span>{cue.start} → {cue.end}</span>
-                  <p>{cue.text}</p>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="media-unavailable">字幕文件不可用</p>
-          )}
-        </>
-      )}
+      <DetailHeading title="字幕详情" interactive />
+      <SubtitleGenerationAction
+        projectId={projectId}
+        detail={current}
+        onDetailChange={setCurrent}
+      />
     </>
   );
 }
@@ -835,7 +813,7 @@ export function PostProductionStageContent({
         />
       )}
       {loaded.kind === "voice" && <VoiceContent projectId={projectId} detail={loaded.data} />}
-      {loaded.kind === "subtitle" && <SubtitleContent detail={loaded.data} />}
+      {loaded.kind === "subtitle" && <SubtitleContent projectId={projectId} detail={loaded.data} />}
       {loaded.kind === "music" && <MusicContent projectId={projectId} detail={loaded.data} />}
       {loaded.kind === "export" && <ExportContent projectId={projectId} detail={loaded.data} />}
       <p className="stage-readonly-note">
@@ -843,6 +821,8 @@ export function PostProductionStageContent({
           ? "Assembly 执行只使用已确认的计划快照；不会修改 Shot 或 Prompt 版本。"
           : loaded.kind === "voice"
             ? "Voice 生成复用既有 Core；外部 TTS 只会在本地预检与明确确认后提交。"
+          : loaded.kind === "subtitle"
+            ? "Subtitle 生成是本地确定性同步操作；不使用 Task、AI 或外部 Provider。"
           : "本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。"}
       </p>
     </section>

@@ -890,10 +890,84 @@ export interface SubtitleDetail {
   version: number | null;
   source: string | null;
   timing_source: string | null;
+  semantic_type: string | null;
+  source_voice_version: number | null;
+  actual_audio_duration: number | null;
+  voice_track_start: number | null;
+  actual_voice_end: number | null;
+  cue_level_alignment: boolean | null;
+  provider: string | null;
+  model: string | null;
+  language: string | null;
+  duration_seconds: number | null;
   created_at: string | null;
   cue_count: number;
   content_available: boolean;
   cues: SubtitleCue[];
+}
+
+export type SubtitleSourceType = "active_voice";
+
+export interface SubtitleIssue {
+  code: string;
+  message: string;
+}
+
+export interface SubtitleSourceSummary {
+  type: SubtitleSourceType;
+  label: string;
+  cue_count: number;
+  timing_source: string;
+  voice_version: number | null;
+  semantic_type: string;
+  script: string;
+  actual_audio_duration: number;
+  voice_track_start: number;
+  actual_voice_end: number;
+  cue_level_alignment: boolean;
+}
+
+export interface SubtitleOptionsResponse {
+  project_id: string;
+  applicable: boolean;
+  ready: boolean;
+  stale: boolean;
+  stale_reason: string | null;
+  active_version: number | null;
+  next_version: number;
+  source: SubtitleSourceSummary | null;
+  issues: SubtitleIssue[];
+}
+
+export interface SubtitleGenerateRequest {
+  expected_active_version: number | null;
+  expected_next_version: number;
+  expected_voice_version: number;
+}
+
+export interface SubtitleVersionSummary {
+  version: number;
+  created_at: string | null;
+  provider: string | null;
+  model: string | null;
+  language: string | null;
+  duration_seconds: number | null;
+  cue_count: number;
+  source: string | null;
+  timing_source: string | null;
+  semantic_type: string | null;
+  source_voice_version: number | null;
+  actual_audio_duration: number | null;
+  voice_track_start: number | null;
+  actual_voice_end: number | null;
+  cue_level_alignment: boolean | null;
+  is_active: boolean;
+}
+
+export interface SubtitleHistoryResponse {
+  project_id: string;
+  active_version: number | null;
+  versions: SubtitleVersionSummary[];
 }
 
 export interface MusicMixDetail {

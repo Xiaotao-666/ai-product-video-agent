@@ -147,7 +147,9 @@ class SubtitlePipelineTests(unittest.TestCase):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual(config["provider"], "script_subtitle")
         self.assertEqual(config["source_voice_version"], 1)
-        self.assertEqual(config["timing_source"], "audio.wav")
+        self.assertEqual(config["timing_source"], "voice_audio_duration")
+        self.assertEqual(config["semantic_type"], "NARRATION_CAPTION")
+        self.assertFalse(config["cue_level_alignment"])
 
     def test_C_timeline_is_ordered_and_never_exceeds_audio_duration(self):
         entry = generate_subtitle_from_active_voice(
@@ -225,6 +227,32 @@ class SubtitlePipelineTests(unittest.TestCase):
         )
         self.assertGreater(len(result.cues), 1)
         self.assertEqual(result.cues[-1].end_seconds, 3.0)
+
+    def test_H_active_voice_timing_uses_absolute_srt_and_exact_metadata(self):
+        actual_duration = 2.34567
+        voice_start = 1.305
+        result = ScriptSubtitleProvider().generate_subtitle(
+            SubtitleGenerationRequest(
+                script="旁白第一句。\n旁白第二句。",
+                audio_duration_seconds=actual_duration,
+                settings={
+                    "source": "active_voice",
+                    "semantic_type": "NARRATION_CAPTION",
+                    "actual_audio_duration": actual_duration,
+                    "voice_track_start": voice_start,
+                    "actual_voice_end": voice_start + actual_duration,
+                },
+            )
+        )
+        self.assertEqual(result.cues[0].start_seconds, 1.305)
+        self.assertEqual(result.cues[-1].end_seconds, 3.651)
+        self.assertEqual(result.metadata["actual_audio_duration"], actual_duration)
+        self.assertEqual(result.metadata["voice_track_start"], voice_start)
+        self.assertEqual(
+            result.metadata["actual_voice_end"],
+            voice_start + actual_duration,
+        )
+        self.assertFalse(result.metadata["cue_level_alignment"])
 
 
 if __name__ == "__main__":

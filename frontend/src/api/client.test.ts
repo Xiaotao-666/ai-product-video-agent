@@ -36,6 +36,9 @@ import {
   getShotVideoUrl,
   getStoryboardContent,
   getSubtitle,
+  getSubtitleHistory,
+  getSubtitleOptions,
+  getSubtitleVersion,
   getTask,
   getVideoPrompts,
   getVoice,
@@ -46,8 +49,10 @@ import {
   getVoiceVersionAudioUrl,
   acceptVoiceTiming,
   generateVoice,
+  generateSubtitle,
   preflightVoice,
   regenerateVoice,
+  regenerateSubtitle,
   generateShotWithPromptVersion,
   regenerateCreative,
   regenerateShotGeneration,
@@ -1304,6 +1309,80 @@ describe("API client", () => {
     const payload = (await getSubtitle("LEE柠檬")).data;
     expect(payload.cues[0]).toMatchObject({ start: "00:00:02,000", text: "新鲜看得见" });
     expect(payload).not.toHaveProperty("subtitle_path");
+  });
+
+  it("gets safe local Subtitle options and source lineage", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", applicable: true, ready: true, stale: false,
+      stale_reason: null, active_version: null, next_version: 1,
+      source: { type: "active_voice", label: "Voice v001",
+        cue_count: 2, timing_source: "voice_audio_duration",
+        voice_version: 1, semantic_type: "NARRATION_CAPTION",
+        script: "真实 Voice Script。", actual_audio_duration: 6.389,
+        voice_track_start: 1.305, actual_voice_end: 7.694,
+        cue_level_alignment: false },
+      issues: [], source_storyboard_path: "D:\\private\\storyboard.json",
+    })));
+    const payload = (await getSubtitleOptions("LEE柠檬")).data;
+    expect(payload.source?.type).toBe("active_voice");
+    expect(payload.source?.script).toBe("真实 Voice Script。");
+    expect(payload.next_version).toBe(1);
+    expect(payload).not.toHaveProperty("source_storyboard_path");
+  });
+
+  it("submits synchronous Subtitle Generate and Regenerate without Task parsing", async () => {
+    const subtitle = {
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      source: "compiled_storyboard", timing_source: "compiled_storyboard_global_timeline",
+      source_voice_version: null, provider: "storyboard_subtitle",
+      model: "compiled-storyboard-v1", language: "zh-CN", duration_seconds: 12,
+      created_at: null, cue_count: 1, content_available: true,
+      cues: [{ index: 1, start: "00:00:01,000", end: "00:00:02,000", text: "字幕" }],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(subtitle, 200))
+      .mockResolvedValueOnce(responseOf({ ...subtitle, version: 2 }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      expected_active_version: null,
+      expected_next_version: 1,
+      expected_voice_version: 1,
+    };
+    expect((await generateSubtitle("LEE柠檬", payload)).data.version).toBe(1);
+    expect((await regenerateSubtitle("LEE柠檬", {
+      expected_active_version: 1, expected_next_version: 2,
+      expected_voice_version: 1,
+    })).data.version).toBe(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/subtitle/generate");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/subtitle/regenerate");
+    expect(fetchMock.mock.calls.every((call) => (call[1] as RequestInit).method === "POST")).toBe(true);
+  });
+
+  it("gets safe Subtitle history and historical Cue detail", async () => {
+    const summary = {
+      version: 1, created_at: null, provider: "storyboard_subtitle",
+      model: "compiled-storyboard-v1", language: "zh-CN", duration_seconds: 12,
+      cue_count: 1, source: "compiled_storyboard",
+      timing_source: "compiled_storyboard_global_timeline",
+      source_voice_version: null, is_active: true,
+    };
+    const detail = {
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      source: summary.source, timing_source: summary.timing_source,
+      source_voice_version: null, provider: summary.provider, model: summary.model,
+      language: "zh-CN", duration_seconds: 12, created_at: null,
+      cue_count: 1, content_available: true,
+      cues: [{ index: 1, start: "00:00:01,000", end: "00:00:02,000", text: "字幕" }],
+      subtitle_path: "D:\\private\\subtitle.srt", sha256: "hidden",
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(responseOf({ project_id: "LEE柠檬", active_version: 1, versions: [summary] }))
+      .mockResolvedValueOnce(responseOf(detail)));
+    expect((await getSubtitleHistory("LEE柠檬")).data.versions[0].is_active).toBe(true);
+    const parsed = (await getSubtitleVersion("LEE柠檬", 1)).data;
+    expect(parsed.cues[0].text).toBe("字幕");
+    expect(parsed).not.toHaveProperty("subtitle_path");
+    expect(parsed).not.toHaveProperty("sha256");
   });
 
   it("gets Music detail with explicit Mix projection", async () => {

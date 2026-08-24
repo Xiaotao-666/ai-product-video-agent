@@ -11,6 +11,11 @@ import {
   getMusic,
   getProjectTasks,
   getSubtitle,
+  getSubtitleHistory,
+  getSubtitleOptions,
+  getSubtitleVersion,
+  generateSubtitle,
+  regenerateSubtitle,
   getTask,
   getVoice,
   getVoiceHistory,
@@ -43,6 +48,11 @@ vi.mock("../api/client", async (importOriginal) => {
     getVoiceHistory: vi.fn(),
     getVoiceOptions: vi.fn(),
     getSubtitle: vi.fn(),
+    getSubtitleHistory: vi.fn(),
+    getSubtitleOptions: vi.fn(),
+    getSubtitleVersion: vi.fn(),
+    generateSubtitle: vi.fn(),
+    regenerateSubtitle: vi.fn(),
     getMusic: vi.fn(),
     getExport: vi.fn(),
     getProjectTasks: vi.fn(),
@@ -62,6 +72,11 @@ const mockGetVoice = vi.mocked(getVoice);
 const mockGetVoiceHistory = vi.mocked(getVoiceHistory);
 const mockGetVoiceOptions = vi.mocked(getVoiceOptions);
 const mockGetSubtitle = vi.mocked(getSubtitle);
+const mockGetSubtitleHistory = vi.mocked(getSubtitleHistory);
+const mockGetSubtitleOptions = vi.mocked(getSubtitleOptions);
+const mockGetSubtitleVersion = vi.mocked(getSubtitleVersion);
+const mockGenerateSubtitle = vi.mocked(generateSubtitle);
+const mockRegenerateSubtitle = vi.mocked(regenerateSubtitle);
 const mockGetMusic = vi.mocked(getMusic);
 const mockGetExport = vi.mocked(getExport);
 
@@ -194,6 +209,16 @@ const subtitle: SubtitleDetail = {
   version: 1,
   source: "compiled_storyboard",
   timing_source: "compiled_storyboard_global_timeline",
+  semantic_type: "LEGACY_SCREEN_TEXT",
+  source_voice_version: null,
+  actual_audio_duration: null,
+  voice_track_start: null,
+  actual_voice_end: null,
+  cue_level_alignment: null,
+  provider: "storyboard_subtitle",
+  model: "compiled-storyboard-v1",
+  language: "zh-CN",
+  duration_seconds: 12,
   created_at: "2026-08-18T10:20:00+08:00",
   cue_count: 2,
   content_available: true,
@@ -269,6 +294,11 @@ describe("PostProductionStageContent", () => {
     mockGetVoiceHistory.mockReset();
     mockGetVoiceOptions.mockReset();
     mockGetSubtitle.mockReset();
+    mockGetSubtitleHistory.mockReset();
+    mockGetSubtitleOptions.mockReset();
+    mockGetSubtitleVersion.mockReset();
+    mockGenerateSubtitle.mockReset();
+    mockRegenerateSubtitle.mockReset();
     mockGetMusic.mockReset();
     mockGetExport.mockReset();
     mockGetAssembly.mockResolvedValue({ data: assembly, correlationId: "req_a" });
@@ -340,6 +370,60 @@ describe("PostProductionStageContent", () => {
       correlationId: "req_vo",
     });
     mockGetSubtitle.mockResolvedValue({ data: subtitle, correlationId: "req_s" });
+    mockGetSubtitleOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        applicable: true,
+        ready: true,
+        stale: true,
+        stale_reason: "LEGACY_SCREEN_TEXT",
+        active_version: 1,
+        next_version: 2,
+        source: {
+          type: "active_voice",
+          label: "Voice v001",
+          cue_count: 2,
+          timing_source: "voice_audio_duration",
+          voice_version: 1,
+          semantic_type: "NARRATION_CAPTION",
+          script: voice.script ?? "",
+          actual_audio_duration: 10.5,
+          voice_track_start: 2,
+          actual_voice_end: 12.5,
+          cue_level_alignment: false,
+        },
+        issues: [],
+      },
+      correlationId: "req_so",
+    });
+    mockGetSubtitleHistory.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        active_version: 1,
+        versions: [{
+          version: 1,
+          created_at: subtitle.created_at,
+          provider: subtitle.provider,
+          model: subtitle.model,
+          language: subtitle.language,
+          duration_seconds: subtitle.duration_seconds,
+          cue_count: subtitle.cue_count,
+          source: subtitle.source,
+          timing_source: subtitle.timing_source,
+          semantic_type: subtitle.semantic_type,
+          source_voice_version: null,
+          actual_audio_duration: null,
+          voice_track_start: null,
+          actual_voice_end: null,
+          cue_level_alignment: null,
+          is_active: true,
+        }],
+      },
+      correlationId: "req_sh",
+    });
+    mockGetSubtitleVersion.mockResolvedValue({ data: subtitle, correlationId: "req_sv" });
+    mockGenerateSubtitle.mockResolvedValue({ data: subtitle, correlationId: "req_sg" });
+    mockRegenerateSubtitle.mockResolvedValue({ data: { ...subtitle, version: 2 }, correlationId: "req_sr" });
     mockGetMusic.mockResolvedValue({ data: music, correlationId: "req_m" });
     mockGetExport.mockResolvedValue({ data: finalExport, correlationId: "req_e" });
   });
@@ -431,13 +515,20 @@ describe("PostProductionStageContent", () => {
 
   it("16 renders Subtitle source", async () => {
     renderStage("subtitle");
-    expect(await screen.findByText("Storyboard Planned")).toBeInTheDocument();
+    expect((await screen.findAllByText(/Legacy Storyboard 屏幕文案/)).length).toBeGreaterThan(0);
+  });
+
+  it("16b marks Subtitle as an executable workflow instead of read-only detail", async () => {
+    renderStage("subtitle");
+    expect(await screen.findByText("POST-PRODUCTION WORKFLOW")).toBeInTheDocument();
+    expect(screen.getByText("可执行")).toBeInTheDocument();
+    expect(screen.queryByText("PERSISTED READ-ONLY DETAIL")).not.toBeInTheDocument();
   });
 
   it("17 renders Subtitle NOT_STARTED", async () => {
     mockGetSubtitle.mockResolvedValue({ data: { ...subtitle, status: "NOT_STARTED", version: null, cue_count: 0, content_available: false, cues: [] }, correlationId: null });
     renderStage("subtitle");
-    expect(await screen.findByText("尚未生成字幕。")).toBeInTheDocument();
+    expect(await screen.findByText("字幕未生成。")).toBeInTheDocument();
   });
 
   it("18 renders Music version and format", async () => {

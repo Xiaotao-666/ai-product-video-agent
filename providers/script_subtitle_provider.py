@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Mapping
 
@@ -78,12 +79,44 @@ class ScriptSubtitleProvider(SubtitleProvider):
         chunks = self._split_script(request.script)
         weights = [self._text_weight(chunk) for chunk in chunks]
         total_weight = sum(weights)
-        timing_source = "audio.wav"
+        source = str(request.settings.get("source") or "voice_script")
+        timing_source = (
+            "voice_audio_duration" if source == "active_voice" else "audio.wav"
+        )
         duration = request.audio_duration_seconds
         if duration is None:
             timing_source = "text-estimate"
             duration = max(1.0, total_weight / self.estimated_chars_per_second)
         total_ms = max(1, int(round(float(duration) * 1000)))
+        voice_track_start = request.settings.get("voice_track_start", 0.0)
+        if isinstance(voice_track_start, bool) or not isinstance(
+            voice_track_start, (int, float)
+        ):
+            raise SubtitleProviderError("voice_track_start 必须是非负数字。")
+        voice_track_start = float(voice_track_start)
+        if not math.isfinite(voice_track_start) or voice_track_start < 0:
+            raise SubtitleProviderError("voice_track_start 必须是非负数字。")
+        actual_audio_duration = request.settings.get(
+            "actual_audio_duration", duration
+        )
+        if isinstance(actual_audio_duration, bool) or not isinstance(
+            actual_audio_duration, (int, float)
+        ):
+            raise SubtitleProviderError("actual_audio_duration 必须是非负数字。")
+        actual_audio_duration = float(actual_audio_duration)
+        if not math.isfinite(actual_audio_duration) or actual_audio_duration < 0:
+            raise SubtitleProviderError("actual_audio_duration 必须是非负数字。")
+        actual_voice_end = request.settings.get(
+            "actual_voice_end", voice_track_start + actual_audio_duration
+        )
+        if isinstance(actual_voice_end, bool) or not isinstance(
+            actual_voice_end, (int, float)
+        ):
+            raise SubtitleProviderError("actual_voice_end 必须是非负数字。")
+        actual_voice_end = float(actual_voice_end)
+        if not math.isfinite(actual_voice_end) or actual_voice_end < voice_track_start:
+            raise SubtitleProviderError("actual_voice_end 必须不早于 voice_track_start。")
+        start_offset_ms = int(round(voice_track_start * 1000))
         if len(chunks) > total_ms:
             chunks = [" ".join(chunks)]
             weights = [sum(weights)]
@@ -106,8 +139,8 @@ class ScriptSubtitleProvider(SubtitleProvider):
             cues.append(
                 SubtitleCue(
                     index=offset + 1,
-                    start_seconds=start_ms / 1000,
-                    end_seconds=end_ms / 1000,
+                    start_seconds=(start_offset_ms + start_ms) / 1000,
+                    end_seconds=(start_offset_ms + end_ms) / 1000,
                     text=chunk,
                 )
             )
@@ -116,10 +149,16 @@ class ScriptSubtitleProvider(SubtitleProvider):
         return SubtitleGenerationResult(
             subtitle_text=subtitle_text,
             cues=tuple(cues),
-            duration_seconds=total_ms / 1000,
+            duration_seconds=(start_offset_ms + total_ms) / 1000,
             metadata={
+                "source": source,
+                "semantic_type": request.settings.get("semantic_type"),
                 "timing_source": timing_source,
                 "cue_count": len(cues),
+                "actual_audio_duration": actual_audio_duration,
+                "voice_track_start": voice_track_start,
+                "actual_voice_end": actual_voice_end,
+                "cue_level_alignment": False,
             },
         )
 

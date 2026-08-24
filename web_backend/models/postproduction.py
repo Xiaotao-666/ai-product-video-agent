@@ -122,10 +122,45 @@ class SubtitleDetail(BaseModel):
     version: int | None = Field(default=None, ge=1)
     source: str | None = None
     timing_source: str | None = None
+    semantic_type: str | None = None
+    source_voice_version: int | None = Field(default=None, ge=1)
+    actual_audio_duration: float | None = Field(default=None, ge=0)
+    voice_track_start: float | None = Field(default=None, ge=0)
+    actual_voice_end: float | None = Field(default=None, ge=0)
+    cue_level_alignment: bool | None = None
+    provider: str | None = None
+    model: str | None = None
+    language: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
     created_at: str | None = None
     cue_count: int = Field(ge=0)
     content_available: bool
     cues: list[SubtitleCue] = Field(default_factory=list)
+
+
+class SubtitleVersionSummary(BaseModel):
+    version: int = Field(ge=1)
+    created_at: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    language: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    cue_count: int = Field(ge=0)
+    source: str | None = None
+    timing_source: str | None = None
+    semantic_type: str | None = None
+    source_voice_version: int | None = Field(default=None, ge=1)
+    actual_audio_duration: float | None = Field(default=None, ge=0)
+    voice_track_start: float | None = Field(default=None, ge=0)
+    actual_voice_end: float | None = Field(default=None, ge=0)
+    cue_level_alignment: bool | None = None
+    is_active: bool
+
+
+class SubtitleHistoryResponse(BaseModel):
+    project_id: str
+    active_version: int | None = Field(default=None, ge=1)
+    versions: list[SubtitleVersionSummary] = Field(default_factory=list)
 
 
 class MusicMixDetail(BaseModel):

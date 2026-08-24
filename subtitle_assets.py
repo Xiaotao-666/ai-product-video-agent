@@ -21,6 +21,8 @@ from subtitle_provider import (
 
 
 SUBTITLE_SCHEMA_VERSION = 1
+NARRATION_CAPTION = "NARRATION_CAPTION"
+LEGACY_SCREEN_TEXT = "LEGACY_SCREEN_TEXT"
 TIMELINE_PATTERN = re.compile(
     r"^(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> "
     r"(\d{2}):(\d{2}):(\d{2}),(\d{3})$"
@@ -112,6 +114,22 @@ class SubtitleAssetManager:
         if request.output_format != "srt":
             raise SubtitleAssetError("Subtitle Asset v1 当前只保存 SRT。")
         self._validate_srt(result.subtitle_text, result.duration_seconds)
+        source = result.metadata.get("source") or "voice_script"
+        semantic_type = result.metadata.get("semantic_type")
+        if not semantic_type:
+            semantic_type = (
+                NARRATION_CAPTION
+                if source_voice_version is not None
+                else LEGACY_SCREEN_TEXT
+                if source == "compiled_storyboard"
+                else None
+            )
+        timing_metadata = {
+            "actual_audio_duration": result.metadata.get("actual_audio_duration"),
+            "voice_track_start": result.metadata.get("voice_track_start"),
+            "actual_voice_end": result.metadata.get("actual_voice_end"),
+            "cue_level_alignment": result.metadata.get("cue_level_alignment"),
+        }
         manifest = self.load_manifest()
         version = max(
             (int(item["version"]) for item in manifest["versions"]),
@@ -147,8 +165,10 @@ class SubtitleAssetManager:
                 "source_storyboard_path": self._relative_optional(
                     source_storyboard_path
                 ),
-                "source": result.metadata.get("source") or "voice_script",
+                "source": source,
+                "semantic_type": semantic_type,
                 "timing_source": result.metadata.get("timing_source"),
+                **timing_metadata,
                 "settings": {
                     key: value
                     for key, value in request.settings.items()
@@ -174,8 +194,10 @@ class SubtitleAssetManager:
                 "duration_seconds": result.duration_seconds,
                 "cue_count": len(result.cues),
                 "source_voice_version": source_voice_version,
-                "source": result.metadata.get("source") or "voice_script",
+                "source": source,
+                "semantic_type": semantic_type,
                 "timing_source": result.metadata.get("timing_source"),
+                **timing_metadata,
                 "source_storyboard_path": self._relative_optional(
                     source_storyboard_path
                 ),
