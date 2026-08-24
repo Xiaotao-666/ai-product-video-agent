@@ -359,6 +359,21 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "MUSIC_MIX_INVALID": ErrorDefinition(
         422, "MUSIC_ERROR", "MUSIC_MIX_INVALID", "音乐混音设置无效。"
     ),
+    "EXPORT_CONFIRMATION_REQUIRED": ErrorDefinition(
+        400, "EXPORT_ERROR", "EXPORT_CONFIRMATION_REQUIRED", "必须明确确认本地最终导出。"
+    ),
+    "EXPORT_PREFLIGHT_STALE": ErrorDefinition(
+        409, "EXPORT_ERROR", "EXPORT_PREFLIGHT_STALE", "最终导出输入已变化，请重新检查。"
+    ),
+    "EXPORT_NOT_READY": ErrorDefinition(
+        409, "EXPORT_ERROR", "EXPORT_NOT_READY", "当前项目尚不能执行最终导出。"
+    ),
+    "EXPORT_ALREADY_CURRENT": ErrorDefinition(
+        409, "EXPORT_ERROR", "EXPORT_ALREADY_CURRENT", "当前最终视频已是最新版本。"
+    ),
+    "EXPORT_VERSION_NOT_FOUND": ErrorDefinition(
+        404, "EXPORT_ERROR", "EXPORT_VERSION_NOT_FOUND", "最终导出版本不存在。"
+    ),
     "EXPORT_DATA_CORRUPT": ErrorDefinition(
         422, "EXPORT_ERROR", "EXPORT_DATA_CORRUPT", "最终导出数据无法读取。"
     ),

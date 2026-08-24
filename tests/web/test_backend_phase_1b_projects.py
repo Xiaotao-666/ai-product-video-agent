@@ -140,6 +140,9 @@ def export_manifest(*, assembly_version: int = 1) -> dict:
             {
                 "version": 1,
                 "assembly_version": assembly_version,
+                "voice_version": None,
+                "subtitle_version": None,
+                "music_version": None,
                 "created_at": "2026-08-18T11:00:00+08:00",
                 "final_video_path": r"exports\v001\final_video.mp4",
                 "credential_env_name": "MUST_NOT_ESCAPE",

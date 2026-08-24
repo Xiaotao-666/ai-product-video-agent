@@ -457,7 +457,7 @@ describe("ProjectStagePage", () => {
     mockGetExport.mockResolvedValue({
       data: {
         project_id: "LEE柠檬", status: "COMPLETED", version: 3,
-        created_at: "2026-08-18T14:20:00+08:00", stale: false,
+        created_at: "2026-08-18T14:20:00+08:00", stale: false, stale_reasons: [],
         video_available: true, assembly_version: 2, voice_version: 1,
         subtitle_version: null, music_version: 2, voice_timing: null,
         music_mix: null,

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from music_mix import MusicMixError, normalize_music_mix_settings
+
 from web_backend.models.projects import (
     AvailableAction,
     AssemblyState,
@@ -272,18 +274,63 @@ def _export_state(
     post_production: Mapping[str, Any],
     manifest: Mapping[str, Any] | None,
     assembly: AssemblyState,
+    voice: ComponentState,
+    subtitle: ComponentState,
+    music: ComponentState,
+    music_manifest: Mapping[str, Any] | None,
 ) -> FinalExportState:
     components = _mapping(post_production.get("components"))
     recorded = _mapping(components.get("final_export"))
     active_entry = _active_manifest_entry(manifest)
     active_version = _optional_int(_mapping(manifest).get("active_version"))
-    exported_assembly = _optional_int(active_entry.get("assembly_version"))
-    version_mismatch = (
-        assembly.version is not None
-        and exported_assembly is not None
-        and assembly.version != exported_assembly
+    mismatched = assembly.needs_update
+    comparisons = (
+        ("assembly_version", assembly.version),
+        ("voice_version", voice.version),
+        ("subtitle_version", subtitle.version),
+        ("music_version", music.version),
     )
-    stale = bool(active_entry) and (assembly.needs_update or version_mismatch)
+    if active_entry:
+        mismatched = mismatched or any(
+            field not in active_entry or _optional_int(active_entry.get(field)) != current
+            for field, current in comparisons
+        )
+        if music.version is not None:
+            if "music_mix" not in active_entry:
+                mismatched = True
+            else:
+                current_music = _active_manifest_entry(music_manifest)
+                raw_export_mix = _mapping(active_entry.get("music_mix"))
+                if isinstance(raw_export_mix.get("settings"), Mapping):
+                    raw_export_mix = _mapping(raw_export_mix.get("settings"))
+                raw_current_mix = _mapping(post_production.get("music_mix"))
+                try:
+                    legacy_volume = float(current_music.get("music_volume", 0.25))
+                    current_mix = normalize_music_mix_settings(
+                        dict(raw_current_mix),
+                        legacy_base_volume=legacy_volume,
+                    )
+                    export_mix = normalize_music_mix_settings(
+                        {
+                            key: raw_export_mix.get(key)
+                            for key in (
+                                "base_volume",
+                                "ducking_enabled",
+                                "ducking_ratio",
+                                "duck_attack_seconds",
+                                "duck_release_seconds",
+                                "fade_in_seconds",
+                                "fade_out_seconds",
+                                "loop_music",
+                            )
+                            if raw_export_mix.get(key) is not None
+                        },
+                        legacy_base_volume=legacy_volume,
+                    )
+                    mismatched = mismatched or current_mix != export_mix
+                except (MusicMixError, TypeError, ValueError):
+                    mismatched = True
+    stale = bool(active_entry) and mismatched
     if active_entry:
         status = "STALE" if stale else "COMPLETED"
     else:
@@ -317,7 +364,15 @@ def derive_workflow(
     voice = _component_state(post_production, "voice", manifests.voice)
     subtitle = _component_state(post_production, "subtitle", manifests.subtitle)
     music = _component_state(post_production, "music", manifests.music)
-    export = _export_state(post_production, manifests.export, assembly)
+    export = _export_state(
+        post_production,
+        manifests.export,
+        assembly,
+        voice,
+        subtitle,
+        music,
+        manifests.music,
+    )
     stages = WorkflowStages(
         creative=creative,
         storyboard=storyboard,

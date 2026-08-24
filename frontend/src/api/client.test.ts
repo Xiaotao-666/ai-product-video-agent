@@ -9,6 +9,7 @@ import {
   approveVideoPrompts,
   createProject,
   executeAssembly,
+  executeFinalExport,
   generateCreative,
   generateStoryboard,
   generateVideoPrompts,
@@ -19,7 +20,10 @@ import {
   getCreativeContent,
   getHealth,
   getExport,
+  getExportHistory,
+  getExportVersion,
   getExportVideoUrl,
+  getExportVersionVideoUrl,
   getMusic,
   getMusicAudioUrl,
   getMusicHistory,
@@ -55,6 +59,7 @@ import {
   generateVoice,
   generateSubtitle,
   preflightVoice,
+  preflightFinalExport,
   regenerateVoice,
   regenerateSubtitle,
   generateShotWithPromptVersion,
@@ -1501,7 +1506,7 @@ describe("API client", () => {
   it("gets Export detail without fingerprint or render internals", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
       project_id: "LEE柠檬", status: "COMPLETED", version: 1,
-      created_at: null, stale: false, video_available: true,
+      created_at: null, stale: false, stale_reasons: [], video_available: true,
       assembly_version: 2, voice_version: 1, subtitle_version: 1, music_version: 1,
       voice_timing: { timing_mode: "whole_track", voice_track_start: 2,
         actual_audio_duration: 10.5, actual_voice_end: 12.5,
@@ -1514,6 +1519,142 @@ describe("API client", () => {
     expect(payload).not.toHaveProperty("input_fingerprint_sha256");
   });
 
+  it("preflights Final Export without sending a confirmation body", async () => {
+    const token = `exp_${"a".repeat(64)}`;
+    const fetchMock = vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬",
+      ready: true,
+      execution_required: true,
+      next_export_version: 2,
+      active_export_version: 1,
+      inputs: { assembly_version: 2, voice_version: 1, subtitle_version: 1, music_version: 1 },
+      voice_timing: {
+        status: "PASS", accepted: false, track_start: 2,
+        actual_audio_duration: 10.5, actual_end: 12.5,
+      },
+      subtitle: {
+        semantic_type: "NARRATION_CAPTION", source_voice_version: 1, voice_aligned: true,
+      },
+      music_mix: null,
+      existing_export_version: null,
+      stale: true,
+      stale_reasons: ["ASSEMBLY_CHANGED"],
+      issues: [],
+      confirmation_token: token,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const payload = (await preflightFinalExport("LEE柠檬")).data;
+    expect(payload.confirmation_token).toBe(token);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/export/preflight");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("submits Final Export exactly once when the accepted Task is readable", async () => {
+    const exportTask = {
+      ...taskPayload,
+      project_id: "LEE柠檬",
+      operation: "FINAL_EXPORT",
+      target_id: "export_v002",
+      correlation_id: "req_export",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(exportTask, 202, {
+      "X-Correlation-ID": "req_export",
+      Location: `/api/tasks/${exportTask.task_id}`,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeFinalExport("LEE柠檬", {
+      confirmation_token: `exp_${"b".repeat(64)}`,
+      confirm_local_export: true,
+    }, 2);
+    expect(result.data.operation).toBe("FINAL_EXPORT");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+  });
+
+  it("reconciles an unreadable accepted Final Export through Location GET only", async () => {
+    const exportTask = {
+      ...taskPayload,
+      project_id: "LEE柠檬",
+      operation: "FINAL_EXPORT",
+      target_id: "export_v002",
+      correlation_id: "req_export",
+    };
+    const accepted = responseOf({}, 202, {
+      "X-Correlation-ID": "req_export",
+      Location: `/api/tasks/${exportTask.task_id}`,
+    });
+    vi.mocked(accepted.json).mockRejectedValue(new Error("truncated"));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(accepted)
+      .mockResolvedValueOnce(responseOf(exportTask));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeFinalExport("LEE柠檬", {
+      confirmation_token: `exp_${"c".repeat(64)}`,
+      confirm_local_export: true,
+    }, 2);
+    expect(result.data.target_id).toBe("export_v002");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.filter((call) => (call[1] as RequestInit).method === "POST")).toHaveLength(1);
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("GET");
+  });
+
+  it("falls back from Location to the project Task list without a second POST", async () => {
+    const exportTask = {
+      ...taskPayload,
+      project_id: "LEE柠檬",
+      operation: "FINAL_EXPORT",
+      target_id: "export_v002",
+      correlation_id: "req_export",
+    };
+    const accepted = responseOf({}, 202, {
+      "X-Correlation-ID": "req_export",
+      Location: `/api/tasks/${exportTask.task_id}`,
+    });
+    vi.mocked(accepted.json).mockRejectedValue(new Error("truncated"));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(accepted)
+      .mockRejectedValueOnce(new Error("location unavailable"))
+      .mockResolvedValueOnce(responseOf({ project_id: "LEE柠檬", tasks: [exportTask] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeFinalExport("LEE柠檬", {
+      confirmation_token: `exp_${"d".repeat(64)}`,
+      confirm_local_export: true,
+    }, 2);
+    expect(result.data.task_id).toBe(exportTask.task_id);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter((call) => (call[1] as RequestInit).method === "POST")).toHaveLength(1);
+  });
+
+  it("gets safe Final Export history and historical detail", async () => {
+    const version = {
+      version: 1,
+      created_at: null,
+      assembly_version: 2,
+      voice_version: 1,
+      subtitle_version: 1,
+      music_version: 1,
+      audio_muxed: true,
+      subtitle_burned: true,
+      duration_seconds: 18.5,
+      video_available: true,
+      is_active: true,
+      stale: false,
+      stale_reasons: [],
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(responseOf({ project_id: "LEE柠檬", active_version: 1, versions: [version] }))
+      .mockResolvedValueOnce(responseOf({ ...version, voice_timing: null, music_mix: null })));
+
+    expect((await getExportHistory("LEE柠檬")).data.versions[0].version).toBe(1);
+    expect((await getExportVersion("LEE柠檬", 1)).data.audio_muxed).toBe(true);
+  });
+
   it("constructs all encoded media URLs without fetch", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -1522,6 +1663,7 @@ describe("API client", () => {
     expect(getVoiceAudioUrl("LEE柠檬")).toContain("/post-production/voice/audio");
     expect(getMusicAudioUrl("LEE柠檬")).toContain("/post-production/music/audio");
     expect(getExportVideoUrl("LEE柠檬")).toContain("/LEE%E6%9F%A0%E6%AA%AC/export/video");
+    expect(getExportVersionVideoUrl("LEE柠檬", 2)).toContain("/export/versions/2/video");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

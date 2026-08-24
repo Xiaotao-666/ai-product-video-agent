@@ -39,6 +39,7 @@ from web_backend.services.tasks import TaskService
 from web_backend.services.voice import VoiceWebService
 from web_backend.services.subtitle import SubtitleWebService
 from web_backend.services.music import MusicWebService
+from web_backend.services.final_export import FinalExportWebService
 from web_backend.settings import BackendSettings
 
 
@@ -118,6 +119,10 @@ def get_subtitle_web_service(request: Request) -> SubtitleWebService:
 
 def get_music_web_service(request: Request) -> MusicWebService:
     return request.app.state.music_web_service
+
+
+def get_final_export_web_service(request: Request) -> FinalExportWebService:
+    return request.app.state.final_export_web_service
 
 
 def get_prompt_revision_draft_service(

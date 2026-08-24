@@ -39,6 +39,7 @@ from web_backend.routers.tasks import router as tasks_router
 from web_backend.routers.voice import router as voice_router
 from web_backend.routers.subtitle import router as subtitle_router
 from web_backend.routers.music import router as music_router
+from web_backend.routers.final_export import router as final_export_router
 from web_backend.routers.assembly_execution import router as assembly_execution_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.assembly_planning import AssemblyPlanningService
@@ -59,6 +60,7 @@ from web_backend.services.tasks import TaskService
 from web_backend.services.voice import VoiceWebService
 from web_backend.services.subtitle import SubtitleWebService
 from web_backend.services.music import MusicWebService
+from web_backend.services.final_export import FinalExportWebService
 from web_backend.settings import BackendSettings
 
 
@@ -153,6 +155,11 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.task_service,
         lock_manager,
         settings.web_runtime_root,
+    )
+    application.state.final_export_web_service = FinalExportWebService(
+        application.state.project_repository,
+        application.state.task_service,
+        lock_manager,
     )
     application.state.prompt_revision_draft_service = PromptRevisionDraftService(
         application.state.project_repository,
@@ -270,6 +277,7 @@ def create_app(
     application.include_router(voice_router, prefix="/api")
     application.include_router(subtitle_router, prefix="/api")
     application.include_router(music_router, prefix="/api")
+    application.include_router(final_export_router, prefix="/api")
     return application
 
 

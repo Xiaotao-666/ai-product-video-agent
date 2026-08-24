@@ -8,10 +8,12 @@ import {
   getAssembly,
   getAssemblyReadiness,
   getExport,
+  getExportHistory,
   getMusic,
   getMusicHistory,
   getMusicOptions,
   getProjectTasks,
+  getProjectWorkflow,
   getSubtitle,
   getSubtitleHistory,
   getSubtitleOptions,
@@ -23,6 +25,7 @@ import {
   getVoiceHistory,
   getVoiceOptions,
   resumeAssembly,
+  preflightFinalExport,
   resetMusicMix,
   updateMusicMix,
   uploadMusic,
@@ -32,6 +35,8 @@ import type {
   AssemblyPlan,
   AssemblyReadiness,
   ExportDetail,
+  ExportHistoryResponse,
+  FinalExportPreflightResponse,
   MusicDetail,
   SubtitleDetail,
   TaskRecord,
@@ -62,9 +67,12 @@ vi.mock("../api/client", async (importOriginal) => {
     getMusicHistory: vi.fn(),
     getMusicOptions: vi.fn(),
     getExport: vi.fn(),
+    getExportHistory: vi.fn(),
     getProjectTasks: vi.fn(),
+    getProjectWorkflow: vi.fn(),
     getTask: vi.fn(),
     resumeAssembly: vi.fn(),
+    preflightFinalExport: vi.fn(),
     resetMusicMix: vi.fn(),
     updateMusicMix: vi.fn(),
     uploadMusic: vi.fn(),
@@ -94,6 +102,9 @@ const mockResetMusicMix = vi.mocked(resetMusicMix);
 const mockUpdateMusicMix = vi.mocked(updateMusicMix);
 const mockUploadMusic = vi.mocked(uploadMusic);
 const mockGetExport = vi.mocked(getExport);
+const mockGetExportHistory = vi.mocked(getExportHistory);
+const mockGetProjectWorkflow = vi.mocked(getProjectWorkflow);
+const mockPreflightFinalExport = vi.mocked(preflightFinalExport);
 
 const assembly: AssemblyDetail = {
   project_id: "LEE柠檬",
@@ -270,6 +281,7 @@ const finalExport: ExportDetail = {
   version: 1,
   created_at: "2026-08-18T10:40:00+08:00",
   stale: false,
+  stale_reasons: [],
   video_available: true,
   assembly_version: 2,
   voice_version: 1,
@@ -284,6 +296,58 @@ const finalExport: ExportDetail = {
     cue_level_alignment: false,
   },
   music_mix: music.music_mix,
+};
+
+const exportPreflight: FinalExportPreflightResponse = {
+  project_id: "LEE柠檬",
+  ready: true,
+  execution_required: false,
+  next_export_version: 2,
+  active_export_version: 1,
+  inputs: {
+    assembly_version: 2,
+    voice_version: 1,
+    subtitle_version: 1,
+    music_version: 1,
+  },
+  voice_timing: {
+    status: "OUT_OF_TOLERANCE",
+    accepted: true,
+    track_start: 2,
+    actual_audio_duration: 10.5,
+    actual_end: 12.5,
+  },
+  subtitle: {
+    semantic_type: "NARRATION_CAPTION",
+    source_voice_version: 1,
+    voice_aligned: true,
+  },
+  music_mix: music.music_mix,
+  existing_export_version: 1,
+  stale: false,
+  stale_reasons: [],
+  issues: [],
+  confirmation_token: null,
+};
+
+const exportHistory: ExportHistoryResponse = {
+  project_id: "LEE柠檬",
+  active_version: 1,
+  versions: [{
+    version: 1,
+    created_at: finalExport.created_at,
+    assembly_version: 2,
+    voice_version: 1,
+    subtitle_version: 1,
+    music_version: 1,
+    audio_muxed: true,
+    subtitle_burned: true,
+    duration_seconds: 18.5,
+    video_available: true,
+    is_active: true,
+    stale: false,
+    stale_reasons: [],
+  }],
 };
 
 function result<T>(data: T) {
@@ -321,6 +385,9 @@ describe("PostProductionStageContent", () => {
     mockUpdateMusicMix.mockReset();
     mockUploadMusic.mockReset();
     mockGetExport.mockReset();
+    mockGetExportHistory.mockReset();
+    mockGetProjectWorkflow.mockReset();
+    mockPreflightFinalExport.mockReset();
     mockGetAssembly.mockResolvedValue({ data: assembly, correlationId: "req_a" });
     mockGetAssemblyReadiness.mockResolvedValue({ data: assemblyReadiness, correlationId: "req_ar" });
     mockCreateAssemblyPlan.mockResolvedValue({ data: assemblyPlan, correlationId: "req_ap" });
@@ -477,6 +544,9 @@ describe("PostProductionStageContent", () => {
     mockUpdateMusicMix.mockResolvedValue({ data: music, correlationId: "req_mu" });
     mockUploadMusic.mockResolvedValue({ data: music, correlationId: "req_up" });
     mockGetExport.mockResolvedValue({ data: finalExport, correlationId: "req_e" });
+    mockGetExportHistory.mockResolvedValue({ data: exportHistory, correlationId: "req_eh" });
+    mockGetProjectWorkflow.mockResolvedValue({ data: {} as never, correlationId: "req_w" });
+    mockPreflightFinalExport.mockResolvedValue({ data: exportPreflight, correlationId: "req_ep" });
   });
 
   it("01 renders Assembly persisted detail", async () => {
@@ -631,39 +701,50 @@ describe("PostProductionStageContent", () => {
 
   it("23 renders Export version", async () => {
     renderStage("export");
-    expect(await screen.findByRole("heading", { name: "最终导出详情" })).toBeInTheDocument();
-    expect(screen.getAllByText("v001").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("heading", { name: "最终导出", level: 2 })).toBeInTheDocument();
+    expect((await screen.findAllByText("v001")).length).toBeGreaterThan(0);
   });
 
   it("24 renders Export video controls", async () => {
     const { container } = renderStage("export");
-    await screen.findByRole("heading", { name: "最终成片" });
+    await screen.findByRole("heading", { name: "当前最终视频" });
     expect(container.querySelector("video")?.getAttribute("src")).toContain("/export/video");
   });
 
   it("25 renders Export related component versions", async () => {
     renderStage("export");
-    await screen.findByRole("heading", { name: "使用的正式组件版本" });
-    expect(screen.getByText("v002")).toBeInTheDocument();
-    expect(screen.getAllByText("v001")).toHaveLength(4);
+    await screen.findByRole("heading", { name: "当前输入" });
+    expect(screen.getAllByText("v002").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("v001").length).toBeGreaterThanOrEqual(4);
   });
 
   it("26 renders Export stale warning", async () => {
-    mockGetExport.mockResolvedValue({ data: { ...finalExport, status: "STALE", stale: true }, correlationId: null });
+    mockGetExport.mockResolvedValue({ data: { ...finalExport, status: "STALE", stale: true, stale_reasons: ["ASSEMBLY_CHANGED"] }, correlationId: null });
+    mockPreflightFinalExport.mockResolvedValue({
+      data: {
+        ...exportPreflight,
+        execution_required: true,
+        existing_export_version: null,
+        stale: true,
+        stale_reasons: ["ASSEMBLY_CHANGED"],
+        confirmation_token: `exp_${"a".repeat(64)}`,
+      },
+      correlationId: null,
+    });
     renderStage("export");
-    expect(await screen.findByText("当前导出版本已过期")).toBeInTheDocument();
+    expect(await screen.findByText("合片版本已更新")).toBeInTheDocument();
   });
 
   it("27 handles missing Export video", async () => {
     mockGetExport.mockResolvedValue({ data: { ...finalExport, video_available: false }, correlationId: null });
     renderStage("export");
-    expect(await screen.findByText("视频文件不可用")).toBeInTheDocument();
+    expect(await screen.findByText("最终视频不可用")).toBeInTheDocument();
   });
 
   it("28 renders Export NOT_STARTED", async () => {
     mockGetExport.mockResolvedValue({ data: { ...finalExport, status: "NOT_STARTED", version: null, video_available: false }, correlationId: null });
     renderStage("export");
-    expect(await screen.findByText("尚未导出最终成片。")).toBeInTheDocument();
+    expect(await screen.findByText("尚未导出")).toBeInTheDocument();
   });
 
   it("29 renders an explicit loading state", () => {
@@ -690,7 +771,7 @@ describe("PostProductionStageContent", () => {
 
   it("32 never renders an absolute path", async () => {
     const { container } = renderStage("export");
-    await screen.findByRole("heading", { name: "最终导出详情" });
+    await screen.findByRole("heading", { name: "最终导出", level: 2 });
     expect(container.textContent).not.toMatch(/[A-Z]:[\\/]|file:\/\//i);
   });
 
@@ -712,10 +793,11 @@ describe("PostProductionStageContent", () => {
     expect(mockGetVoice).not.toHaveBeenCalled();
   });
 
-  it("36 exposes no generate, edit, delete, approve, or export action", async () => {
+  it("36 marks Final Export executable without unrelated stage actions", async () => {
     renderStage("export");
-    await screen.findByRole("heading", { name: "最终导出详情" });
-    expect(screen.queryByRole("button", { name: /生成|编辑|删除|批准|拒绝|导出|切换/ })).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "最终导出", level: 2 });
+    expect(screen.getByText("可执行")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /生成配音|生成字幕|上传音乐|删除|批准|拒绝|切换/ })).not.toBeInTheDocument();
   });
 
   it("37 safely encodes a Chinese project ID in media URLs", async () => {

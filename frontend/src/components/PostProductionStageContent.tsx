@@ -9,7 +9,6 @@ import {
   getAssemblyVideoUrl,
   getAssemblyVersionVideoUrl,
   getExport,
-  getExportVideoUrl,
   getMusic,
   getSubtitle,
   getVoice,
@@ -21,7 +20,6 @@ import type {
   AssemblyReadiness,
   ExportDetail,
   MusicDetail,
-  MusicMixDetail,
   SubtitleDetail,
   TaskRecord,
   VoiceCalibrationStatus,
@@ -37,6 +35,7 @@ import { StatusBadge } from "./StatusBadge";
 import { VoiceGenerationAction } from "./VoiceGenerationAction";
 import { SubtitleGenerationAction } from "./SubtitleGenerationAction";
 import { MusicManagementAction } from "./MusicManagementAction";
+import { FinalExportAction } from "./FinalExportAction";
 
 
 type DetailStageKey = "assembly" | "voice" | "subtitle" | "music" | "export";
@@ -100,10 +99,6 @@ function versionLabel(version: number | null): string {
 
 function secondsLabel(value: number | null): string {
   return value === null ? "未记录" : `${value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}s`;
-}
-
-function percentLabel(value: number | null): string {
-  return value === null ? "未设置" : `${Math.round(value * 100)}%`;
 }
 
 function booleanLabel(value: boolean | null): string {
@@ -177,27 +172,6 @@ function StateFact({ label, value }: { label: string; value: string }) {
 
 function MediaUnavailable({ kind }: { kind: "视频" | "音频" }) {
   return <p className="media-unavailable">{kind}文件不可用</p>;
-}
-
-function MusicMix({ mix }: { mix: MusicMixDetail | null }) {
-  if (!mix) {
-    return <p className="postproduction-empty-copy">尚未保存 Music Mix 配置。</p>;
-  }
-  return (
-    <dl className="postproduction-facts postproduction-mix-grid">
-      <StateFact label="基础音量" value={percentLabel(mix.base_volume)} />
-      <StateFact label="Ducking" value={booleanLabel(mix.ducking_enabled)} />
-      <StateFact label="Ducking 比例" value={percentLabel(mix.ducking_ratio)} />
-      <StateFact label="Attack" value={secondsLabel(mix.duck_attack_seconds)} />
-      <StateFact label="Release" value={secondsLabel(mix.duck_release_seconds)} />
-      <StateFact label="Fade In" value={secondsLabel(mix.fade_in_seconds)} />
-      <StateFact label="Fade Out" value={secondsLabel(mix.fade_out_seconds)} />
-      <StateFact label="Loop" value={booleanLabel(mix.loop_music)} />
-      {mix.ducking_status && (
-        <StateFact label="Ducking 状态" value={mix.ducking_status} />
-      )}
-    </dl>
-  );
 }
 
 function AssemblyContent({
@@ -646,65 +620,16 @@ function MusicContent({ projectId, detail }: { projectId: string; detail: MusicD
 }
 
 function ExportContent({ projectId, detail }: { projectId: string; detail: ExportDetail }) {
-  const status = statusPresentation(detail.stale ? "STALE" : detail.status);
+  const [current, setCurrent] = useState(detail);
+  useEffect(() => setCurrent(detail), [detail]);
   return (
     <>
-      <DetailHeading title="最终导出详情" />
-      <div className="postproduction-title-row">
-        <h3>当前最终成片</h3>
-        <StatusBadge label={status.label} tone={status.tone} />
-      </div>
-      {detail.stale && (
-        <div className="stale-warning" role="status">
-          <strong>当前导出版本已过期</strong>
-          <span>旧成片仍可只读播放，本页面不会重新执行导出。</span>
-        </div>
-      )}
-      {detail.version === null ? (
-        <p className="postproduction-empty-copy">尚未导出最终成片。</p>
-      ) : (
-        <>
-          <dl className="postproduction-facts">
-            <StateFact label="正式版本" value={versionLabel(detail.version)} />
-            <StateFact label="状态" value={status.label} />
-            <StateFact label="创建时间" value={dateLabel(detail.created_at)} />
-          </dl>
-          <div className="postproduction-media-card">
-            <h3>最终成片</h3>
-            {detail.video_available ? (
-              <video controls preload="metadata" src={getExportVideoUrl(projectId)} />
-            ) : (
-              <MediaUnavailable kind="视频" />
-            )}
-          </div>
-          <div className="postproduction-subsection">
-            <h3>使用的正式组件版本</h3>
-            <ul className="component-version-list component-version-grid">
-              <li><span>Assembly</span><strong>{versionLabel(detail.assembly_version)}</strong></li>
-              <li><span>Voice</span><strong>{versionLabel(detail.voice_version)}</strong></li>
-              <li><span>Subtitle</span><strong>{versionLabel(detail.subtitle_version)}</strong></li>
-              <li><span>Music</span><strong>{versionLabel(detail.music_version)}</strong></li>
-            </ul>
-          </div>
-          {detail.voice_timing && (
-            <div className="postproduction-subsection">
-              <h3>Voice Timing 摘要</h3>
-              <dl className="postproduction-facts">
-                <StateFact label="Timing Mode" value={detail.voice_timing.timing_mode ?? "未记录"} />
-                <StateFact label="轨道开始" value={secondsLabel(detail.voice_timing.voice_track_start)} />
-                <StateFact label="音频时长" value={secondsLabel(detail.voice_timing.actual_audio_duration)} />
-                <StateFact label="实际结束" value={secondsLabel(detail.voice_timing.actual_voice_end)} />
-                <StateFact label="校准状态" value={CALIBRATION_LABELS[detail.voice_timing.calibration_status]} />
-                <StateFact label="Cue 对齐" value={booleanLabel(detail.voice_timing.cue_level_alignment)} />
-              </dl>
-            </div>
-          )}
-          <div className="postproduction-subsection">
-            <h3>最终导出 Music Mix</h3>
-            <MusicMix mix={detail.music_mix} />
-          </div>
-        </>
-      )}
+      <DetailHeading title="最终导出" interactive />
+      <FinalExportAction
+        projectId={projectId}
+        detail={current}
+        onDetailChange={setCurrent}
+      />
     </>
   );
 }
@@ -803,6 +728,8 @@ export function PostProductionStageContent({
             ? "Subtitle 生成是本地确定性同步操作；不使用 Task、AI 或外部 Provider。"
           : loaded.kind === "music"
             ? "Music 上传与 Mix 是纯本地同步操作；不使用 Task、AI、外部 Provider 或 FFmpeg。"
+          : loaded.kind === "export"
+            ? "Final Export 复用既有 Core，通过本地持久任务执行 FFmpeg；不会调用外部 Provider。"
           : "本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。"}
       </p>
     </section>

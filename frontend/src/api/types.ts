@@ -1056,6 +1056,7 @@ export interface ExportDetail {
   version: number | null;
   created_at: string | null;
   stale: boolean;
+  stale_reasons: string[];
   video_available: boolean;
   assembly_version: number | null;
   voice_version: number | null;
@@ -1063,6 +1064,81 @@ export interface ExportDetail {
   music_version: number | null;
   voice_timing: ExportVoiceTimingSummary | null;
   music_mix: MusicMixDetail | null;
+}
+
+export interface FinalExportIssue {
+  code: string;
+  message: string;
+}
+
+export interface FinalExportInputs {
+  assembly_version: number | null;
+  voice_version: number | null;
+  subtitle_version: number | null;
+  music_version: number | null;
+}
+
+export interface FinalExportVoiceTiming {
+  status: string;
+  accepted: boolean;
+  track_start: number | null;
+  actual_audio_duration: number | null;
+  actual_end: number | null;
+}
+
+export interface FinalExportSubtitle {
+  semantic_type: string | null;
+  source_voice_version: number | null;
+  voice_aligned: boolean | null;
+}
+
+export interface FinalExportPreflightResponse {
+  project_id: string;
+  ready: boolean;
+  execution_required: boolean;
+  next_export_version: number;
+  active_export_version: number | null;
+  inputs: FinalExportInputs;
+  voice_timing: FinalExportVoiceTiming;
+  subtitle: FinalExportSubtitle;
+  music_mix: MusicMixDetail | null;
+  existing_export_version: number | null;
+  stale: boolean;
+  stale_reasons: string[];
+  issues: FinalExportIssue[];
+  confirmation_token: string | null;
+}
+
+export interface FinalExportExecuteRequest {
+  confirmation_token: string;
+  confirm_local_export: true;
+}
+
+export interface ExportVersionSummary {
+  version: number;
+  created_at: string | null;
+  assembly_version: number | null;
+  voice_version: number | null;
+  subtitle_version: number | null;
+  music_version: number | null;
+  audio_muxed: boolean;
+  subtitle_burned: boolean;
+  duration_seconds: number | null;
+  video_available: boolean;
+  is_active: boolean;
+  stale: boolean;
+  stale_reasons: string[];
+}
+
+export interface ExportVersionDetail extends ExportVersionSummary {
+  voice_timing: FinalExportVoiceTiming | null;
+  music_mix: MusicMixDetail | null;
+}
+
+export interface ExportHistoryResponse {
+  project_id: string;
+  active_version: number | null;
+  versions: ExportVersionSummary[];
 }
 
 export interface CreateProjectRequest {

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from music_mix import MusicMixError, normalize_music_mix_settings
+
 from web_backend.models.postproduction import (
     AssemblyDetail,
     AssemblyFinalVideoVersion,
@@ -1047,12 +1049,82 @@ class PostProductionRepository:
         version = version or _safe_positive_int(recorded.get("active_version"))
         assembly = self.get_assembly(project_id)
         exported_assembly = _safe_positive_int(entry.get("assembly_version"))
-        version_mismatch = bool(
-            assembly.current_version is not None
-            and exported_assembly is not None
-            and assembly.current_version != exported_assembly
+        current_versions: dict[str, int | None] = {}
+        for name, parts, error_type in (
+            ("voice", ("voice", "voice_manifest.json"), VoiceDataCorrupt),
+            ("subtitle", ("subtitles", "subtitle_manifest.json"), SubtitleDataCorrupt),
+            ("music", ("music", "music_manifest.json"), MusicDataCorrupt),
+        ):
+            component_manifest = self._read_manifest(
+                project_dir,
+                parts,
+                error_type=error_type,
+                schema_key=f"{name}_schema_version",
+            )
+            current_versions[name], component_entry = self._active_entry(
+                component_manifest,
+                error_type,
+            )
+            if name == "music":
+                current_music_entry = component_entry
+
+        stale_reasons: list[str] = []
+        unknown_lineage = False
+        comparisons = (
+            ("assembly_version", assembly.current_version, "ASSEMBLY_CHANGED"),
+            ("voice_version", current_versions["voice"], "VOICE_CHANGED"),
+            ("subtitle_version", current_versions["subtitle"], "SUBTITLE_CHANGED"),
+            ("music_version", current_versions["music"], "MUSIC_CHANGED"),
         )
-        stale = bool(version is not None and (assembly.needs_update or version_mismatch))
+        if version is not None:
+            for field, current_value, code in comparisons:
+                if field not in entry:
+                    unknown_lineage = True
+                elif _safe_positive_int(entry.get(field)) != current_value:
+                    stale_reasons.append(code)
+            if assembly.needs_update and "ASSEMBLY_CHANGED" not in stale_reasons:
+                stale_reasons.append("ASSEMBLY_CHANGED")
+            if current_versions["music"] is not None:
+                if "music_mix" not in entry:
+                    unknown_lineage = True
+                else:
+                    raw_current_mix = _mapping(
+                        _mapping(project_data.get("post_production")).get("music_mix")
+                    )
+                    raw_export_mix = _mapping(entry.get("music_mix"))
+                    if isinstance(raw_export_mix.get("settings"), Mapping):
+                        raw_export_mix = _mapping(raw_export_mix.get("settings"))
+                    try:
+                        legacy_volume = float(current_music_entry.get("music_volume", 0.25))
+                        current_mix = normalize_music_mix_settings(
+                            dict(raw_current_mix),
+                            legacy_base_volume=legacy_volume,
+                        )
+                        exported_mix = normalize_music_mix_settings(
+                            {
+                                field: raw_export_mix.get(field)
+                                for field in (
+                                    "base_volume",
+                                    "ducking_enabled",
+                                    "ducking_ratio",
+                                    "duck_attack_seconds",
+                                    "duck_release_seconds",
+                                    "fade_in_seconds",
+                                    "fade_out_seconds",
+                                    "loop_music",
+                                )
+                                if raw_export_mix.get(field) is not None
+                            },
+                            legacy_base_volume=legacy_volume,
+                        )
+                        if current_mix != exported_mix:
+                            stale_reasons.append("MUSIC_MIX_CHANGED")
+                    except (MusicMixError, TypeError, ValueError):
+                        unknown_lineage = True
+            if unknown_lineage:
+                stale_reasons.append("EXPORT_INPUT_UNKNOWN")
+        stale_reasons = list(dict.fromkeys(stale_reasons))
+        stale = bool(version is not None and stale_reasons)
         status = self._component_status(recorded, bool(entry), version)
         if version is not None and stale:
             status = "STALE"
@@ -1085,6 +1157,7 @@ class PostProductionRepository:
             version=version,
             created_at=_safe_text(entry.get("created_at")),
             stale=stale,
+            stale_reasons=stale_reasons,
             video_available=(
                 self._export_media(project_dir, version, required=False) is not None
             ),

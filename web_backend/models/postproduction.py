@@ -201,6 +201,7 @@ class ExportDetail(BaseModel):
     version: int | None = Field(default=None, ge=1)
     created_at: str | None = None
     stale: bool
+    stale_reasons: list[str] = Field(default_factory=list)
     video_available: bool
     assembly_version: int | None = Field(default=None, ge=1)
     voice_version: int | None = Field(default=None, ge=1)

@@ -27,7 +27,16 @@ import type {
   CreateProjectRequest,
   CreateProjectResponse,
   ExportDetail,
+  ExportHistoryResponse,
+  ExportVersionDetail,
+  ExportVersionSummary,
   ExportVoiceTimingSummary,
+  FinalExportExecuteRequest,
+  FinalExportInputs,
+  FinalExportIssue,
+  FinalExportPreflightResponse,
+  FinalExportSubtitle,
+  FinalExportVoiceTiming,
   FinalExportState,
   GenerationIssue,
   GenerationIntent,
@@ -2582,6 +2591,8 @@ function parseExportDetail(
     !isNullablePositiveInteger(value.version) ||
     !isNullableString(value.created_at) ||
     typeof value.stale !== "boolean" ||
+    !Array.isArray(value.stale_reasons) ||
+    !value.stale_reasons.every((item) => typeof item === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(item)) ||
     typeof value.video_available !== "boolean" ||
     !isNullablePositiveInteger(value.assembly_version) ||
     !isNullablePositiveInteger(value.voice_version) ||
@@ -2596,6 +2607,7 @@ function parseExportDetail(
     version: value.version,
     created_at: parseContentText(value.created_at, correlationId),
     stale: value.stale,
+    stale_reasons: [...value.stale_reasons],
     video_available: value.video_available,
     assembly_version: value.assembly_version,
     voice_version: value.voice_version,
@@ -3033,6 +3045,109 @@ async function submitPaidVoiceTask(
   } catch (error) {
     if (result.status !== 202) throw error;
     return reconcileAcceptedVoiceTask(acceptedExpectation);
+  }
+}
+
+interface AcceptedFinalExportTaskExpectation {
+  projectId: string;
+  targetId: string;
+  submittedAt: number;
+  correlationId: string | null;
+  location: string | null;
+}
+
+function acceptedFinalExportTaskMatches(
+  task: TaskRecord,
+  expectation: AcceptedFinalExportTaskExpectation,
+): boolean {
+  return task.project_id === expectation.projectId
+    && task.operation === "FINAL_EXPORT"
+    && task.target_id === expectation.targetId
+    && (
+      expectation.correlationId === null
+      || task.correlation_id === expectation.correlationId
+    );
+}
+
+async function reconcileAcceptedFinalExportTask(
+  expectation: AcceptedFinalExportTaskExpectation,
+): Promise<ApiResult<TaskRecord>> {
+  const locationTaskId = taskIdFromLocation(expectation.location);
+  if (locationTaskId !== null) {
+    try {
+      const located = await getTask(locationTaskId);
+      if (acceptedFinalExportTaskMatches(located.data, expectation)) return located;
+    } catch {
+      // An accepted export is reconciled through read-only requests only.
+    }
+  }
+  try {
+    const listed = await getProjectTasks(expectation.projectId);
+    const exact = listed.data.tasks.filter((task) =>
+      acceptedFinalExportTaskMatches(task, expectation));
+    if (exact.length === 1) {
+      return { data: exact[0], correlationId: expectation.correlationId };
+    }
+    if (expectation.correlationId === null) {
+      const recent = listed.data.tasks.filter((task) => {
+        const createdAt = Date.parse(task.created_at);
+        return task.project_id === expectation.projectId
+          && task.operation === "FINAL_EXPORT"
+          && task.target_id === expectation.targetId
+          && Number.isFinite(createdAt)
+          && createdAt >= expectation.submittedAt - 60_000;
+      });
+      if (recent.length === 1) {
+        return { data: recent[0], correlationId: recent[0].correlation_id };
+      }
+    }
+  } catch {
+    // Keep the execute action locked until the accepted task is readable.
+  }
+  throw new ApiClientError({
+    message: "最终导出请求已被 Backend 接受，但当前无法读取任务状态。请勿重复提交。",
+    status: 202,
+    code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+    correlationId: expectation.correlationId,
+    requestAccepted: true,
+    taskLocation: expectation.location,
+  });
+}
+
+async function submitFinalExportTask(
+  path: string,
+  payload: FinalExportExecuteRequest,
+  expectation: Omit<AcceptedFinalExportTaskExpectation, "correlationId" | "location">,
+): Promise<ApiResult<TaskRecord>> {
+  let result: Awaited<ReturnType<typeof request>>;
+  try {
+    result = await request(path, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    if (!(error instanceof ApiClientError) || !error.requestAccepted) throw error;
+    return reconcileAcceptedFinalExportTask({
+      ...expectation,
+      correlationId: error.correlationId,
+      location: error.taskLocation,
+    });
+  }
+  const acceptedExpectation: AcceptedFinalExportTaskExpectation = {
+    ...expectation,
+    correlationId: result.correlationId,
+    location: result.location,
+  };
+  try {
+    const task = parseTaskRecord(result.data, result.correlationId);
+    if (!acceptedFinalExportTaskMatches(task, acceptedExpectation)) {
+      return reconcileAcceptedFinalExportTask(acceptedExpectation);
+    }
+    return { data: task, correlationId: result.correlationId };
+  } catch (error) {
+    if (result.status !== 202) throw error;
+    return reconcileAcceptedFinalExportTask(acceptedExpectation);
   }
 }
 
@@ -3571,6 +3686,202 @@ export async function getVoiceOptions(
   };
 }
 
+function parseFinalExportIssue(
+  value: unknown,
+  correlationId: string | null,
+): FinalExportIssue {
+  if (
+    !isRecord(value)
+    || typeof value.code !== "string"
+    || !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.code)
+    || typeof value.message !== "string"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的导出问题。", correlationId);
+  }
+  return {
+    code: value.code,
+    message: parseRequiredSafeText(value.message, "导出问题无效。", correlationId),
+  };
+}
+
+function parseFinalExportInputs(
+  value: unknown,
+  correlationId: string | null,
+): FinalExportInputs {
+  if (
+    !isRecord(value)
+    || !isNullablePositiveInteger(value.assembly_version)
+    || !isNullablePositiveInteger(value.voice_version)
+    || !isNullablePositiveInteger(value.subtitle_version)
+    || !isNullablePositiveInteger(value.music_version)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的导出输入。", correlationId);
+  }
+  return {
+    assembly_version: value.assembly_version,
+    voice_version: value.voice_version,
+    subtitle_version: value.subtitle_version,
+    music_version: value.music_version,
+  };
+}
+
+function parseFinalExportVoiceTiming(
+  value: unknown,
+  correlationId: string | null,
+): FinalExportVoiceTiming {
+  if (
+    !isRecord(value)
+    || typeof value.status !== "string"
+    || typeof value.accepted !== "boolean"
+    || !isNullableNonNegativeNumber(value.track_start)
+    || !isNullableNonNegativeNumber(value.actual_audio_duration)
+    || !isNullableNonNegativeNumber(value.actual_end)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 Voice Timing。", correlationId);
+  }
+  return {
+    status: parseRequiredSafeText(value.status, "Voice Timing 状态无效。", correlationId),
+    accepted: value.accepted,
+    track_start: value.track_start,
+    actual_audio_duration: value.actual_audio_duration,
+    actual_end: value.actual_end,
+  };
+}
+
+function parseFinalExportSubtitle(
+  value: unknown,
+  correlationId: string | null,
+): FinalExportSubtitle {
+  if (
+    !isRecord(value)
+    || !isNullableString(value.semantic_type)
+    || !isNullablePositiveInteger(value.source_voice_version)
+    || !isNullableBoolean(value.voice_aligned)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的字幕 Lineage。", correlationId);
+  }
+  return {
+    semantic_type: parseContentText(value.semantic_type, correlationId),
+    source_voice_version: value.source_voice_version,
+    voice_aligned: value.voice_aligned,
+  };
+}
+
+function parseFinalExportPreflight(
+  value: unknown,
+  correlationId: string | null,
+): FinalExportPreflightResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || typeof value.ready !== "boolean"
+    || typeof value.execution_required !== "boolean"
+    || !isPositiveInteger(value.next_export_version)
+    || !isNullablePositiveInteger(value.active_export_version)
+    || !isNullablePositiveInteger(value.existing_export_version)
+    || typeof value.stale !== "boolean"
+    || !Array.isArray(value.stale_reasons)
+    || !value.stale_reasons.every((item) => typeof item === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(item))
+    || !Array.isArray(value.issues)
+    || !isNullableString(value.confirmation_token)
+    || (value.confirmation_token !== null && !/^exp_[0-9a-f]{64}$/.test(value.confirmation_token))
+  ) {
+    return invalidResponse("Backend 返回了无法读取的最终导出预检。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    ready: value.ready,
+    execution_required: value.execution_required,
+    next_export_version: value.next_export_version,
+    active_export_version: value.active_export_version,
+    inputs: parseFinalExportInputs(value.inputs, correlationId),
+    voice_timing: parseFinalExportVoiceTiming(value.voice_timing, correlationId),
+    subtitle: parseFinalExportSubtitle(value.subtitle, correlationId),
+    music_mix: parseMusicMix(value.music_mix, correlationId),
+    existing_export_version: value.existing_export_version,
+    stale: value.stale,
+    stale_reasons: [...value.stale_reasons],
+    issues: value.issues.map((item) => parseFinalExportIssue(item, correlationId)),
+    confirmation_token: parseContentText(value.confirmation_token, correlationId),
+  };
+}
+
+function parseExportVersionSummary(
+  value: unknown,
+  correlationId: string | null,
+): ExportVersionSummary {
+  if (
+    !isRecord(value)
+    || !isPositiveInteger(value.version)
+    || !isNullableString(value.created_at)
+    || !isNullablePositiveInteger(value.assembly_version)
+    || !isNullablePositiveInteger(value.voice_version)
+    || !isNullablePositiveInteger(value.subtitle_version)
+    || !isNullablePositiveInteger(value.music_version)
+    || typeof value.audio_muxed !== "boolean"
+    || typeof value.subtitle_burned !== "boolean"
+    || !isNullableNonNegativeNumber(value.duration_seconds)
+    || typeof value.video_available !== "boolean"
+    || typeof value.is_active !== "boolean"
+    || typeof value.stale !== "boolean"
+    || !Array.isArray(value.stale_reasons)
+    || !value.stale_reasons.every((item) => typeof item === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(item))
+  ) {
+    return invalidResponse("Backend 返回了无法读取的导出历史。", correlationId);
+  }
+  return {
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    assembly_version: value.assembly_version,
+    voice_version: value.voice_version,
+    subtitle_version: value.subtitle_version,
+    music_version: value.music_version,
+    audio_muxed: value.audio_muxed,
+    subtitle_burned: value.subtitle_burned,
+    duration_seconds: value.duration_seconds,
+    video_available: value.video_available,
+    is_active: value.is_active,
+    stale: value.stale,
+    stale_reasons: [...value.stale_reasons],
+  };
+}
+
+function parseExportVersionDetail(
+  value: unknown,
+  correlationId: string | null,
+): ExportVersionDetail {
+  const summary = parseExportVersionSummary(value, correlationId);
+  if (!isRecord(value)) {
+    return invalidResponse("Backend 返回了无法读取的导出详情。", correlationId);
+  }
+  return {
+    ...summary,
+    voice_timing: value.voice_timing === null
+      ? null
+      : parseFinalExportVoiceTiming(value.voice_timing, correlationId),
+    music_mix: parseMusicMix(value.music_mix, correlationId),
+  };
+}
+
+function parseExportHistory(
+  value: unknown,
+  correlationId: string | null,
+): ExportHistoryResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || !isNullablePositiveInteger(value.active_version)
+    || !Array.isArray(value.versions)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的导出历史。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    active_version: value.active_version,
+    versions: value.versions.map((item) => parseExportVersionSummary(item, correlationId)),
+  };
+}
+
 function parseMusicOptions(
   value: unknown,
   correlationId: string | null,
@@ -3983,6 +4294,77 @@ export async function getExport(
     data: parseExportDetail(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
+}
+
+export async function preflightFinalExport(
+  projectId: string,
+): Promise<ApiResult<FinalExportPreflightResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/export/preflight`,
+    { method: "POST", headers: { Accept: "application/json" } },
+  );
+  return {
+    data: parseFinalExportPreflight(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function executeFinalExport(
+  projectId: string,
+  payload: FinalExportExecuteRequest,
+  expectedNextVersion: number,
+): Promise<ApiResult<TaskRecord>> {
+  if (!isPositiveInteger(expectedNextVersion)) {
+    throw new ApiClientError({
+      message: "Final Export 版本无效。",
+      code: "INVALID_EXPORT_VERSION",
+    });
+  }
+  return submitFinalExportTask(
+    `/api/projects/${encodeURIComponent(projectId)}/export/execute`,
+    payload,
+    {
+      projectId,
+      targetId: `export_v${String(expectedNextVersion).padStart(3, "0")}`,
+      submittedAt: Date.now(),
+    },
+  );
+}
+
+export async function getExportHistory(
+  projectId: string,
+): Promise<ApiResult<ExportHistoryResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/export/history`,
+  );
+  return {
+    data: parseExportHistory(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getExportVersion(
+  projectId: string,
+  version: number,
+): Promise<ApiResult<ExportVersionDetail>> {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({
+      message: "Final Export 版本无效。",
+      code: "INVALID_EXPORT_VERSION",
+    });
+  }
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/export/versions/${version}`,
+  );
+  return {
+    data: parseExportVersionDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getExportVersionVideoUrl(projectId: string, version: number): string {
+  if (!isPositiveInteger(version)) return "";
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/export/versions/${version}/video`;
 }
 
 export function getExportVideoUrl(projectId: string): string {
