@@ -13,6 +13,8 @@ import {
   getSubtitle,
   getTask,
   getVoice,
+  getVoiceHistory,
+  getVoiceOptions,
   resumeAssembly,
 } from "../api/client";
 import type {
@@ -38,6 +40,8 @@ vi.mock("../api/client", async (importOriginal) => {
     getAssembly: vi.fn(),
     getAssemblyReadiness: vi.fn(),
     getVoice: vi.fn(),
+    getVoiceHistory: vi.fn(),
+    getVoiceOptions: vi.fn(),
     getSubtitle: vi.fn(),
     getMusic: vi.fn(),
     getExport: vi.fn(),
@@ -55,6 +59,8 @@ const mockResumeAssembly = vi.mocked(resumeAssembly);
 const mockGetProjectTasks = vi.mocked(getProjectTasks);
 const mockGetTask = vi.mocked(getTask);
 const mockGetVoice = vi.mocked(getVoice);
+const mockGetVoiceHistory = vi.mocked(getVoiceHistory);
+const mockGetVoiceOptions = vi.mocked(getVoiceOptions);
 const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetMusic = vi.mocked(getMusic);
 const mockGetExport = vi.mocked(getExport);
@@ -160,6 +166,7 @@ const voice: VoiceDetail = {
   created_at: "2026-08-18T10:10:00+08:00",
   script: "新鲜看得见，LEE柠檬点亮每一天。",
   script_source: "compiled_storyboard",
+  provider: "xfyun_tts",
   model: "online-tts-v2",
   voice: "xiaoyan",
   language: "zh-CN",
@@ -171,10 +178,14 @@ const voice: VoiceDetail = {
   actual_audio_duration: 10.5,
   voice_track_start: 2,
   actual_voice_end: 12.5,
+  total_video_duration: 18,
+  duration_difference_seconds: -1.5,
+  duration_difference_ratio: -0.125,
   timing_mode: "whole_track",
   cue_level_alignment: false,
   script_matches_storyboard: true,
   calibration_status: "OUT_OF_TOLERANCE",
+  timing_acceptance: null,
 };
 
 const subtitle: SubtitleDetail = {
@@ -255,6 +266,8 @@ describe("PostProductionStageContent", () => {
     mockGetProjectTasks.mockReset();
     mockGetTask.mockReset();
     mockGetVoice.mockReset();
+    mockGetVoiceHistory.mockReset();
+    mockGetVoiceOptions.mockReset();
     mockGetSubtitle.mockReset();
     mockGetMusic.mockReset();
     mockGetExport.mockReset();
@@ -269,6 +282,63 @@ describe("PostProductionStageContent", () => {
     });
     mockGetTask.mockResolvedValue({ data: assemblyTask, correlationId: "req_task" });
     mockGetVoice.mockResolvedValue({ data: voice, correlationId: "req_v" });
+    mockGetVoiceHistory.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        active_version: 1,
+        versions: [{
+          version: 1,
+          created_at: voice.created_at,
+          provider: voice.provider,
+          model: voice.model,
+          voice: voice.voice,
+          language: voice.language,
+          script_source: voice.script_source,
+          duration_seconds: voice.actual_audio_duration,
+          calibration_status: voice.calibration_status,
+          timing_acceptance: null,
+          audio_available: true,
+          is_active: true,
+        }],
+      },
+      correlationId: "req_vh",
+    });
+    mockGetVoiceOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        enabled: true,
+        has_active_voice: true,
+        active_version: 1,
+        next_version: 2,
+        script: {
+          source: "compiled_storyboard",
+          text: voice.script ?? "",
+          character_count: voice.script?.length ?? 0,
+          cue_count: 2,
+        },
+        planned_timing: {
+          first_start: 2,
+          last_end: 14,
+          span: 12,
+          narration_duration: 12,
+        },
+        providers: [{
+          provider_id: "xfyun_tts",
+          display_name: "讯飞 TTS",
+          model: "online-tts-v2",
+          default_voice: "xiaoyan",
+          language: "zh-CN",
+          supported_languages: ["zh-CN"],
+          allowed_voices: [],
+          available: true,
+        }],
+        default_provider: "xfyun_tts",
+        default_voice: "xiaoyan",
+        default_language: "zh-CN",
+        manual_script_required: false,
+      },
+      correlationId: "req_vo",
+    });
     mockGetSubtitle.mockResolvedValue({ data: subtitle, correlationId: "req_s" });
     mockGetMusic.mockResolvedValue({ data: music, correlationId: "req_m" });
     mockGetExport.mockResolvedValue({ data: finalExport, correlationId: "req_e" });

@@ -40,6 +40,14 @@ import {
   getVideoPrompts,
   getVoice,
   getVoiceAudioUrl,
+  getVoiceHistory,
+  getVoiceOptions,
+  getVoiceVersion,
+  getVoiceVersionAudioUrl,
+  acceptVoiceTiming,
+  generateVoice,
+  preflightVoice,
+  regenerateVoice,
   generateShotWithPromptVersion,
   regenerateCreative,
   regenerateShotGeneration,
@@ -1116,18 +1124,173 @@ describe("API client", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
       project_id: "LEE柠檬", status: "COMPLETED", version: 1,
       created_at: null, script: "正式配音脚本", script_source: "compiled_storyboard",
-      model: "online-tts-v2", voice: "xiaoyan", language: "zh-CN",
+      provider: "xfyun_tts", model: "online-tts-v2", voice: "xiaoyan", language: "zh-CN",
       audio_available: true, planned_narration_duration: 12,
       planned_first_voice_start: 2, planned_last_voice_end: 14,
       planned_voice_span: 12, actual_audio_duration: 10.5,
-      voice_track_start: 2, actual_voice_end: 12.5, timing_mode: "whole_track",
+      voice_track_start: 2, actual_voice_end: 12.5, total_video_duration: 18,
+      duration_difference_seconds: -1.5, duration_difference_ratio: -0.125,
+      timing_mode: "whole_track",
       cue_level_alignment: false, script_matches_storyboard: true,
-      calibration_status: "OUT_OF_TOLERANCE", provider_task_id: "hidden",
+      calibration_status: "OUT_OF_TOLERANCE", timing_acceptance: null,
+      provider_task_id: "hidden",
     })));
     const payload = (await getVoice("LEE柠檬")).data;
     expect(payload.calibration_status).toBe("OUT_OF_TOLERANCE");
     expect(payload.script).toBe("正式配音脚本");
     expect(payload).not.toHaveProperty("provider_task_id");
+  });
+
+  it("gets safe Voice options without provider internals", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", enabled: true, has_active_voice: false,
+      active_version: null, next_version: 1,
+      script: { source: "compiled_storyboard", text: "正式配音脚本", character_count: 6, cue_count: 1 },
+      planned_timing: { first_start: 2, last_end: 4, span: 2, narration_duration: 2 },
+      providers: [{ provider_id: "xfyun_tts", display_name: "讯飞 TTS",
+        model: "online-tts-v2", default_voice: "xiaoyan", language: "zh-CN",
+        supported_languages: ["zh-CN"], allowed_voices: [], available: true }],
+      default_provider: "xfyun_tts", default_voice: "xiaoyan",
+      default_language: "zh-CN", manual_script_required: false,
+      endpoint: "hidden", credential_env_name: "hidden",
+    })));
+    const payload = (await getVoiceOptions("LEE柠檬")).data;
+    expect(payload.next_version).toBe(1);
+    expect(payload.providers[0].display_name).toBe("讯飞 TTS");
+    expect(payload).not.toHaveProperty("endpoint");
+  });
+
+  it("posts and parses zero-call Voice preflight", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", ready: true, intent: "GENERATE", next_voice_version: 1,
+      script: { source: "compiled_storyboard", text: "正式配音脚本", character_count: 6, cue_count: 1 },
+      provider: { provider_id: "xfyun_tts", display_name: "讯飞 TTS",
+        model: "online-tts-v2", default_voice: "xiaoyan", language: "zh-CN",
+        supported_languages: ["zh-CN"], allowed_voices: [], available: true },
+      planned_timing: { first_start: 2, last_end: 4, span: 2, narration_duration: 2 },
+      issues: [], warnings: [{ code: "VOICE_EXTERNAL_COST_POSSIBLE", message: "可能产生费用。" }],
+      external_call_required: true, external_cost_possible: true,
+      preflight_fingerprint: `voice_pf_${"a".repeat(64)}`,
+    })));
+    const payload = (await preflightVoice("LEE柠檬", {
+      intent: "GENERATE", provider: "xfyun_tts", voice: "xiaoyan",
+      language: "zh-CN", script_override: null,
+    })).data;
+    expect(payload.ready).toBe(true);
+    expect(payload.external_cost_possible).toBe(true);
+  });
+
+  it("gets Voice history, version detail, timing acceptance, and encoded audio URL", async () => {
+    const voiceDetail = {
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, script: "正式配音脚本", script_source: "compiled_storyboard",
+      provider: "xfyun_tts", model: "online-tts-v2", voice: "xiaoyan", language: "zh-CN",
+      audio_available: true, planned_narration_duration: 12,
+      planned_first_voice_start: 2, planned_last_voice_end: 14,
+      planned_voice_span: 12, actual_audio_duration: 10.5,
+      voice_track_start: 2, actual_voice_end: 12.5, total_video_duration: 18,
+      duration_difference_seconds: -1.5, duration_difference_ratio: -0.125,
+      timing_mode: "whole_track", cue_level_alignment: false,
+      script_matches_storyboard: true, calibration_status: "OUT_OF_TOLERANCE",
+      timing_acceptance: { accepted: true, accepted_at: "2026-08-24T10:00:00Z" },
+    };
+    const history = {
+      project_id: "LEE柠檬", active_version: 1,
+      versions: [{ version: 1, created_at: null, provider: "xfyun_tts",
+        model: "online-tts-v2", voice: "xiaoyan", language: "zh-CN",
+        script_source: "compiled_storyboard", duration_seconds: 10.5,
+        calibration_status: "OUT_OF_TOLERANCE", timing_acceptance: null,
+        audio_available: true, is_active: true }],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(history))
+      .mockResolvedValueOnce(responseOf(voiceDetail))
+      .mockResolvedValueOnce(responseOf(voiceDetail));
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await getVoiceHistory("LEE柠檬")).data.active_version).toBe(1);
+    expect((await getVoiceVersion("LEE柠檬", 1)).data.script).toBe("正式配音脚本");
+    expect((await acceptVoiceTiming("LEE柠檬", 1)).data.timing_acceptance?.accepted).toBe(true);
+    expect(getVoiceVersionAudioUrl("LEE柠檬", 1)).toContain("/versions/1/audio");
+  });
+
+  it("submits Generate and Regenerate with canonical VOICE_GENERATE", async () => {
+    const voiceTask = { ...taskPayload, project_id: "LEE柠檬", operation: "VOICE_GENERATE", target_id: "voice_v001" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseOf(voiceTask, 202))
+      .mockResolvedValueOnce(responseOf({ ...voiceTask, target_id: "voice_v002" }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      intent: "GENERATE" as const, provider: "xfyun_tts", voice: "xiaoyan",
+      language: "zh-CN", script_override: "正式配音脚本",
+      preflight_fingerprint: `voice_pf_${"a".repeat(64)}`,
+      confirm_external_tts_call: true,
+    };
+    expect((await generateVoice("LEE柠檬", payload, 1)).data.operation).toBe("VOICE_GENERATE");
+    expect((await regenerateVoice("LEE柠檬", { ...payload, intent: "REGENERATE" }, 2)).data.operation).toBe("VOICE_GENERATE");
+  });
+
+  it("reconciles unreadable Voice 202 through Location without another POST", async () => {
+    const voiceTask = { ...taskPayload, project_id: "LEE柠檬", operation: "VOICE_GENERATE", target_id: "voice_v001" };
+    const unreadable202 = {
+      ok: true, status: 202,
+      headers: new Headers({ Location: `/api/tasks/${voiceTask.task_id}`, "X-Correlation-ID": voiceTask.correlation_id }),
+      json: vi.fn().mockRejectedValue(new SyntaxError("bad json")),
+    } as unknown as Response;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(unreadable202)
+      .mockResolvedValueOnce(responseOf(voiceTask));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateVoice("LEE柠檬", {
+      intent: "GENERATE", provider: "xfyun_tts", voice: "xiaoyan", language: "zh-CN",
+      script_override: "脚本", preflight_fingerprint: `voice_pf_${"a".repeat(64)}`,
+      confirm_external_tts_call: true,
+    }, 1);
+    expect(result.data.task_id).toBe(voiceTask.task_id);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("GET");
+  });
+
+  it("uses project task fallback for an accepted Voice 202 and never repeats POST", async () => {
+    const voiceTask = { ...taskPayload, project_id: "LEE柠檬", operation: "VOICE_GENERATE", target_id: "voice_v001" };
+    const unreadable202 = {
+      ok: true, status: 202,
+      headers: new Headers({ Location: `/api/tasks/${voiceTask.task_id}`, "X-Correlation-ID": voiceTask.correlation_id }),
+      json: vi.fn().mockRejectedValue(new SyntaxError("bad json")),
+    } as unknown as Response;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(unreadable202)
+      .mockRejectedValueOnce(new Error("GET failed"))
+      .mockResolvedValueOnce(responseOf({ project_id: "LEE柠檬", tasks: [voiceTask] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateVoice("LEE柠檬", {
+      intent: "GENERATE", provider: "xfyun_tts", voice: "xiaoyan", language: "zh-CN",
+      script_override: "脚本", preflight_fingerprint: `voice_pf_${"a".repeat(64)}`,
+      confirm_external_tts_call: true,
+    }, 1);
+    expect(result.data.task_id).toBe(voiceTask.task_id);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter((call) => (call[1] as RequestInit).method === "POST")).toHaveLength(1);
+  });
+
+  it("locks accepted Voice request when both reconciliation GET paths fail", async () => {
+    const taskId = "task_0123456789abcdef0123456789abcdef";
+    const unreadable202 = {
+      ok: true, status: 202,
+      headers: new Headers({ Location: `/api/tasks/${taskId}`, "X-Correlation-ID": "req_uncertain" }),
+      json: vi.fn().mockRejectedValue(new SyntaxError("bad json")),
+    } as unknown as Response;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(unreadable202)
+      .mockRejectedValueOnce(new Error("GET failed"))
+      .mockRejectedValueOnce(new Error("GET failed"));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateVoice("LEE柠檬", {
+      intent: "GENERATE", provider: "xfyun_tts", voice: "xiaoyan", language: "zh-CN",
+      script_override: "脚本", preflight_fingerprint: `voice_pf_${"a".repeat(64)}`,
+      confirm_external_tts_call: true,
+    }, 1)).rejects.toMatchObject({ code: "ACCEPTED_TASK_STATUS_UNREADABLE", requestAccepted: true });
+    expect(fetchMock.mock.calls.filter((call) => (call[1] as RequestInit).method === "POST")).toHaveLength(1);
   });
 
   it("gets and validates structured Subtitle cues", async () => {

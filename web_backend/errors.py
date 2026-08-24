@@ -247,6 +247,33 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "VOICE_MEDIA_NOT_FOUND": ErrorDefinition(
         404, "POST_PRODUCTION_ERROR", "VOICE_MEDIA_NOT_FOUND", "配音音频不可用。"
     ),
+    "VOICE_INPUT_INVALID": ErrorDefinition(
+        422, "VOICE_ERROR", "VOICE_INPUT_INVALID", "配音生成输入无效。"
+    ),
+    "VOICE_PREFLIGHT_STALE": ErrorDefinition(
+        409,
+        "VOICE_ERROR",
+        "VOICE_PREFLIGHT_STALE",
+        "配音生成条件已变化，请重新检查配置。",
+    ),
+    "VOICE_EXTERNAL_CONFIRMATION_REQUIRED": ErrorDefinition(
+        422,
+        "VOICE_ERROR",
+        "VOICE_EXTERNAL_CONFIRMATION_REQUIRED",
+        "必须明确确认外部 TTS 调用后才能生成配音。",
+    ),
+    "VOICE_PROVIDER_UNAVAILABLE": ErrorDefinition(
+        503,
+        "VOICE_ERROR",
+        "VOICE_PROVIDER_UNAVAILABLE",
+        "TTS Provider 配置或本次输入尚未就绪。",
+    ),
+    "VOICE_TIMING_ACCEPTANCE_NOT_ALLOWED": ErrorDefinition(
+        409,
+        "VOICE_ERROR",
+        "VOICE_TIMING_ACCEPTANCE_NOT_ALLOWED",
+        "当前配音校准状态不允许直接接受。",
+    ),
     "SUBTITLE_DATA_CORRUPT": ErrorDefinition(
         422, "POST_PRODUCTION_ERROR", "SUBTITLE_DATA_CORRUPT", "字幕数据无法读取。"
     ),

@@ -754,6 +754,7 @@ export interface VoiceDetail {
   created_at: string | null;
   script: string | null;
   script_source: string | null;
+  provider: string | null;
   model: string | null;
   voice: string | null;
   language: string | null;
@@ -765,10 +766,115 @@ export interface VoiceDetail {
   actual_audio_duration: number | null;
   voice_track_start: number | null;
   actual_voice_end: number | null;
+  total_video_duration: number | null;
+  duration_difference_seconds: number | null;
+  duration_difference_ratio: number | null;
   timing_mode: string | null;
   cue_level_alignment: boolean | null;
   script_matches_storyboard: boolean | null;
   calibration_status: VoiceCalibrationStatus;
+  timing_acceptance: VoiceTimingAcceptance | null;
+}
+
+export interface VoiceTimingAcceptance {
+  accepted: boolean;
+  accepted_at: string | null;
+}
+
+export type VoiceIntent = "GENERATE" | "REGENERATE";
+
+export interface VoiceIssue {
+  code: string;
+  message: string;
+}
+
+export interface VoicePlannedTiming {
+  first_start: number | null;
+  last_end: number | null;
+  span: number | null;
+  narration_duration: number | null;
+}
+
+export interface VoiceScriptSummary {
+  source: string;
+  text: string;
+  character_count: number;
+  cue_count: number;
+}
+
+export interface VoiceProviderOption {
+  provider_id: string;
+  display_name: string;
+  model: string;
+  default_voice: string | null;
+  language: string;
+  supported_languages: string[];
+  allowed_voices: string[];
+  available: boolean;
+}
+
+export interface VoiceOptionsResponse {
+  project_id: string;
+  enabled: boolean;
+  has_active_voice: boolean;
+  active_version: number | null;
+  next_version: number;
+  script: VoiceScriptSummary | null;
+  planned_timing: VoicePlannedTiming;
+  providers: VoiceProviderOption[];
+  default_provider: string | null;
+  default_voice: string | null;
+  default_language: string;
+  manual_script_required: boolean;
+}
+
+export interface VoicePreflightRequest {
+  intent: VoiceIntent;
+  provider: string | null;
+  voice: string;
+  language: string;
+  script_override: string | null;
+}
+
+export interface VoicePreflightResponse {
+  project_id: string;
+  ready: boolean;
+  intent: VoiceIntent;
+  next_voice_version: number;
+  script: VoiceScriptSummary | null;
+  provider: VoiceProviderOption | null;
+  planned_timing: VoicePlannedTiming;
+  issues: VoiceIssue[];
+  warnings: VoiceIssue[];
+  external_call_required: boolean;
+  external_cost_possible: boolean;
+  preflight_fingerprint: string | null;
+}
+
+export interface VoiceGenerateRequest extends VoicePreflightRequest {
+  preflight_fingerprint: string;
+  confirm_external_tts_call: boolean;
+}
+
+export interface VoiceVersionSummary {
+  version: number;
+  created_at: string | null;
+  provider: string | null;
+  model: string | null;
+  voice: string | null;
+  language: string | null;
+  script_source: string | null;
+  duration_seconds: number | null;
+  calibration_status: VoiceCalibrationStatus;
+  timing_acceptance: VoiceTimingAcceptance | null;
+  audio_available: boolean;
+  is_active: boolean;
+}
+
+export interface VoiceHistoryResponse {
+  project_id: string;
+  active_version: number | null;
+  versions: VoiceVersionSummary[];
 }
 
 export interface SubtitleCue {

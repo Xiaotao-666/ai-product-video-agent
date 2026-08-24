@@ -18,6 +18,11 @@ class VoiceCalibrationStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class VoiceTimingAcceptanceDetail(BaseModel):
+    accepted: bool
+    accepted_at: str | None = None
+
+
 class AssemblyShotVersion(BaseModel):
     shot_id: int = Field(ge=1)
     video_version: int = Field(ge=1)
@@ -61,6 +66,7 @@ class VoiceDetail(BaseModel):
     created_at: str | None = None
     script: str | None = None
     script_source: str | None = None
+    provider: str | None = None
     model: str | None = None
     voice: str | None = None
     language: str | None = None
@@ -72,10 +78,35 @@ class VoiceDetail(BaseModel):
     actual_audio_duration: float | None = Field(default=None, ge=0)
     voice_track_start: float | None = Field(default=None, ge=0)
     actual_voice_end: float | None = Field(default=None, ge=0)
+    total_video_duration: float | None = Field(default=None, ge=0)
+    duration_difference_seconds: float | None = None
+    duration_difference_ratio: float | None = None
     timing_mode: str | None = None
     cue_level_alignment: bool | None = None
     script_matches_storyboard: bool | None = None
     calibration_status: VoiceCalibrationStatus
+    timing_acceptance: VoiceTimingAcceptanceDetail | None = None
+
+
+class VoiceVersionSummary(BaseModel):
+    version: int = Field(ge=1)
+    created_at: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    voice: str | None = None
+    language: str | None = None
+    script_source: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    calibration_status: VoiceCalibrationStatus
+    timing_acceptance: VoiceTimingAcceptanceDetail | None = None
+    audio_available: bool
+    is_active: bool
+
+
+class VoiceHistoryResponse(BaseModel):
+    project_id: str
+    active_version: int | None = Field(default=None, ge=1)
+    versions: list[VoiceVersionSummary] = Field(default_factory=list)
 
 
 class SubtitleCue(BaseModel):

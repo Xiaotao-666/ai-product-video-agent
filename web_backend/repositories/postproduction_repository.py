@@ -23,6 +23,9 @@ from web_backend.models.postproduction import (
     SubtitleDetail,
     VoiceCalibrationStatus,
     VoiceDetail,
+    VoiceHistoryResponse,
+    VoiceTimingAcceptanceDetail,
+    VoiceVersionSummary,
 )
 from web_backend.repositories.project_repository import (
     ProjectDataCorrupt,
@@ -152,6 +155,16 @@ def _safe_nonnegative_number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) and number >= 0 else None
+
+
+def _safe_finite_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _safe_ratio(value: Any) -> float | None:
@@ -357,6 +370,98 @@ class PostProductionRepository:
         version, entry = self._active_entry(manifest, VoiceDataCorrupt)
         recorded = self._component_recorded(project_data, "voice")
         version = version or _safe_positive_int(recorded.get("active_version"))
+        return self._voice_detail(
+            api_id,
+            project_dir,
+            recorded,
+            version,
+            entry,
+            is_active=True,
+        )
+
+    def get_voice_version(self, project_id: str, version: int) -> VoiceDetail:
+        api_id, project_dir, project_data = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("voice", "voice_manifest.json"),
+            error_type=VoiceDataCorrupt,
+            schema_key="voice_schema_version",
+        )
+        active, _active_entry = self._active_entry(manifest, VoiceDataCorrupt)
+        entry = self._voice_entry(manifest, version)
+        return self._voice_detail(
+            api_id,
+            project_dir,
+            self._component_recorded(project_data, "voice"),
+            version,
+            entry,
+            is_active=version == active,
+        )
+
+    def get_voice_history(self, project_id: str) -> VoiceHistoryResponse:
+        api_id, project_dir, project_data = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("voice", "voice_manifest.json"),
+            error_type=VoiceDataCorrupt,
+            schema_key="voice_schema_version",
+        )
+        active, _entry = self._active_entry(manifest, VoiceDataCorrupt)
+        if manifest is None:
+            return VoiceHistoryResponse(project_id=api_id, active_version=None)
+        versions = manifest.get("versions")
+        if not isinstance(versions, list):
+            raise VoiceDataCorrupt("voice versions are invalid")
+        summaries: list[VoiceVersionSummary] = []
+        seen: set[int] = set()
+        recorded = self._component_recorded(project_data, "voice")
+        for raw in versions:
+            entry = _mapping(raw)
+            version = _safe_positive_int(entry.get("version"))
+            if version is None or version in seen:
+                raise VoiceDataCorrupt("voice version history is invalid")
+            seen.add(version)
+            detail = self._voice_detail(
+                api_id,
+                project_dir,
+                recorded,
+                version,
+                entry,
+                is_active=version == active,
+            )
+            summaries.append(
+                VoiceVersionSummary(
+                    version=version,
+                    created_at=detail.created_at,
+                    provider=detail.provider,
+                    model=detail.model,
+                    voice=detail.voice,
+                    language=detail.language,
+                    script_source=detail.script_source,
+                    duration_seconds=detail.actual_audio_duration,
+                    calibration_status=detail.calibration_status,
+                    timing_acceptance=detail.timing_acceptance,
+                    audio_available=detail.audio_available,
+                    is_active=version == active,
+                )
+            )
+        summaries.sort(key=lambda item: item.version, reverse=True)
+        return VoiceHistoryResponse(
+            project_id=api_id,
+            active_version=active,
+            versions=summaries,
+        )
+
+    def _voice_detail(
+        self,
+        api_id: str,
+        project_dir: Path,
+        recorded: Mapping[str, Any],
+        version: int | None,
+        entry: Mapping[str, Any],
+        *,
+        is_active: bool,
+    ) -> VoiceDetail:
         config = (
             self._read_json(
                 project_dir,
@@ -371,6 +476,8 @@ class PostProductionRepository:
         metadata.update(entry)
         calibration = dict(_mapping(_mapping(config).get("timing_calibration")))
         calibration.update(_mapping(entry.get("timing_calibration")))
+        acceptance = dict(_mapping(_mapping(config).get("timing_acceptance")))
+        acceptance.update(_mapping(entry.get("timing_acceptance")))
         script = (
             self._read_text(
                 project_dir,
@@ -380,7 +487,11 @@ class PostProductionRepository:
             if version is not None
             else None
         )
-        status = self._component_status(recorded, bool(entry), version)
+        status = (
+            self._component_status(recorded, bool(entry), version)
+            if is_active
+            else "COMPLETED"
+        )
         return VoiceDetail(
             project_id=api_id,
             status=status,
@@ -388,6 +499,7 @@ class PostProductionRepository:
             created_at=_safe_text(metadata.get("created_at")),
             script=_safe_text(script),
             script_source=_safe_text(metadata.get("script_source")),
+            provider=_safe_text(metadata.get("provider")),
             model=_safe_text(metadata.get("model")),
             voice=_safe_text(metadata.get("voice")),
             language=_safe_text(metadata.get("language")),
@@ -427,6 +539,15 @@ class PostProductionRepository:
             actual_voice_end=_safe_nonnegative_number(
                 calibration.get("actual_voice_end")
             ),
+            total_video_duration=_safe_nonnegative_number(
+                calibration.get("total_video_duration")
+            ),
+            duration_difference_seconds=_safe_finite_number(
+                calibration.get("duration_difference_seconds")
+            ),
+            duration_difference_ratio=_safe_finite_number(
+                calibration.get("duration_difference_ratio")
+            ),
             timing_mode=_safe_text(calibration.get("timing_mode")),
             cue_level_alignment=_optional_bool(
                 calibration.get("cue_level_alignment")
@@ -435,7 +556,32 @@ class PostProductionRepository:
                 calibration.get("script_matches_storyboard")
             ),
             calibration_status=_calibration_status(calibration.get("status")),
+            timing_acceptance=(
+                VoiceTimingAcceptanceDetail(
+                    accepted=acceptance["accepted"],
+                    accepted_at=_safe_text(acceptance.get("accepted_at")),
+                )
+                if isinstance(acceptance.get("accepted"), bool)
+                else None
+            ),
         )
+
+    @staticmethod
+    def _voice_entry(
+        manifest: Mapping[str, Any] | None, version: int
+    ) -> Mapping[str, Any]:
+        if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+            raise VoiceDataCorrupt("voice version is invalid")
+        if manifest is None or not isinstance(manifest.get("versions"), list):
+            raise VoiceDataCorrupt("voice version was not found")
+        matches = [
+            _mapping(raw)
+            for raw in manifest["versions"]
+            if _safe_positive_int(_mapping(raw).get("version")) == version
+        ]
+        if len(matches) != 1:
+            raise VoiceDataCorrupt("voice version was not found")
+        return matches[0]
 
     def resolve_voice_audio(self, project_id: str) -> ResolvedMedia:
         detail = self.get_voice(project_id)
@@ -445,6 +591,21 @@ class PostProductionRepository:
             ("voice", "versions", f"v{detail.version:03d}", "audio.wav")
             if detail.version is not None
             else None,
+            media_type="audio/wav",
+            required=True,
+            data_error=VoiceDataCorrupt,
+            missing_error=VoiceMediaNotFound,
+        )
+        assert media is not None
+        return media
+
+    def resolve_voice_version_audio(
+        self, project_id: str, version: int
+    ) -> ResolvedMedia:
+        detail = self.get_voice_version(project_id, version)
+        media = self._fixed_media(
+            self.project_repository.resolve_project_dir(project_id).resolve(),
+            ("voice", "versions", f"v{detail.version:03d}", "audio.wav"),
             media_type="audio/wav",
             required=True,
             data_error=VoiceDataCorrupt,

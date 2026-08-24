@@ -3002,6 +3002,40 @@
   margin: 0;
 }
 
+.voice-generation-action {
+  display: grid;
+  gap: 1rem;
+}
+
+.voice-generation-form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.voice-generation-form input,
+.voice-generation-form textarea,
+.voice-generation-form select {
+  width: 100%;
+}
+
+.voice-generation-form textarea {
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.voice-confirm-script {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.voice-confirm-script pre {
+  max-height: 14rem;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .assembly-confirmation h3,
 .assembly-task-status strong {
   color: #2f3b45;

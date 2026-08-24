@@ -91,6 +91,18 @@ import type {
   VideoPromptsContentResponse,
   VoiceCalibrationStatus,
   VoiceDetail,
+  VoiceGenerateRequest,
+  VoiceHistoryResponse,
+  VoiceIntent,
+  VoiceIssue,
+  VoiceOptionsResponse,
+  VoicePlannedTiming,
+  VoicePreflightRequest,
+  VoicePreflightResponse,
+  VoiceProviderOption,
+  VoiceScriptSummary,
+  VoiceTimingAcceptance,
+  VoiceVersionSummary,
   WorkflowPhase,
   WorkflowStages,
   WorkflowState,
@@ -139,6 +151,7 @@ const ASSEMBLY_PLANNING_STATUSES: ReadonlySet<string> = new Set([
   "READY",
   "OUTDATED",
 ]);
+const VOICE_INTENTS: ReadonlySet<string> = new Set(["GENERATE", "REGENERATE"]);
 const TASK_ID_PATTERN = /^task_[0-9a-f]{32}$/;
 const TASK_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const TASK_LOCATION_PATTERN = /^\/api\/tasks\/(task_[0-9a-f]{32})$/;
@@ -1933,6 +1946,7 @@ function parseVoiceDetail(
     !isNullableString(value.created_at) ||
     !isNullableString(value.script) ||
     !isNullableString(value.script_source) ||
+    !isNullableString(value.provider) ||
     !isNullableString(value.model) ||
     !isNullableString(value.voice) ||
     !isNullableString(value.language) ||
@@ -1944,6 +1958,9 @@ function parseVoiceDetail(
     !isNullableNonNegativeNumber(value.actual_audio_duration) ||
     !isNullableNonNegativeNumber(value.voice_track_start) ||
     !isNullableNonNegativeNumber(value.actual_voice_end) ||
+    !isNullableNonNegativeNumber(value.total_video_duration) ||
+    !isNullableNumber(value.duration_difference_seconds) ||
+    !isNullableNumber(value.duration_difference_ratio) ||
     !isNullableString(value.timing_mode) ||
     !isNullableBoolean(value.cue_level_alignment) ||
     !isNullableBoolean(value.script_matches_storyboard)
@@ -1957,6 +1974,7 @@ function parseVoiceDetail(
     created_at: parseContentText(value.created_at, correlationId),
     script: parseContentText(value.script, correlationId),
     script_source: parseContentText(value.script_source, correlationId),
+    provider: parseContentText(value.provider, correlationId),
     model: parseContentText(value.model, correlationId),
     voice: parseContentText(value.voice, correlationId),
     language: parseContentText(value.language, correlationId),
@@ -1968,6 +1986,9 @@ function parseVoiceDetail(
     actual_audio_duration: value.actual_audio_duration,
     voice_track_start: value.voice_track_start,
     actual_voice_end: value.actual_voice_end,
+    total_video_duration: value.total_video_duration,
+    duration_difference_seconds: value.duration_difference_seconds,
+    duration_difference_ratio: value.duration_difference_ratio,
     timing_mode: parseContentText(value.timing_mode, correlationId),
     cue_level_alignment: value.cue_level_alignment,
     script_matches_storyboard: value.script_matches_storyboard,
@@ -1975,6 +1996,246 @@ function parseVoiceDetail(
       value.calibration_status,
       correlationId,
     ),
+    timing_acceptance: parseVoiceTimingAcceptance(
+      value.timing_acceptance,
+      correlationId,
+    ),
+  };
+}
+
+function parseVoiceTimingAcceptance(
+  value: unknown,
+  correlationId: string | null,
+): VoiceTimingAcceptance | null {
+  if (value === null) return null;
+  if (
+    !isRecord(value)
+    || typeof value.accepted !== "boolean"
+    || !isNullableString(value.accepted_at)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音时间确认。", correlationId);
+  }
+  return {
+    accepted: value.accepted,
+    accepted_at: parseContentText(value.accepted_at, correlationId),
+  };
+}
+
+function parseVoiceIntent(
+  value: unknown,
+  correlationId: string | null,
+): VoiceIntent {
+  if (typeof value !== "string" || !VOICE_INTENTS.has(value)) {
+    return invalidResponse("Backend 返回了无法读取的配音操作。", correlationId);
+  }
+  return value as VoiceIntent;
+}
+
+function parseVoiceIssue(
+  value: unknown,
+  correlationId: string | null,
+): VoiceIssue {
+  return parseGenerationIssue(value, correlationId);
+}
+
+function parseVoicePlannedTiming(
+  value: unknown,
+  correlationId: string | null,
+): VoicePlannedTiming {
+  if (
+    !isRecord(value)
+    || !isNullableNonNegativeNumber(value.first_start)
+    || !isNullableNonNegativeNumber(value.last_end)
+    || !isNullableNonNegativeNumber(value.span)
+    || !isNullableNonNegativeNumber(value.narration_duration)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音计划时间。", correlationId);
+  }
+  return {
+    first_start: value.first_start,
+    last_end: value.last_end,
+    span: value.span,
+    narration_duration: value.narration_duration,
+  };
+}
+
+function parseVoiceScriptSummary(
+  value: unknown,
+  correlationId: string | null,
+): VoiceScriptSummary | null {
+  if (value === null) return null;
+  if (
+    !isRecord(value)
+    || typeof value.source !== "string"
+    || typeof value.text !== "string"
+    || !isNonNegativeInteger(value.character_count)
+    || !isNonNegativeInteger(value.cue_count)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音脚本摘要。", correlationId);
+  }
+  return {
+    source: parseRequiredSafeText(value.source, "配音脚本来源无效。", correlationId),
+    text: parseRequiredSafeText(value.text, "配音脚本无效。", correlationId),
+    character_count: value.character_count,
+    cue_count: value.cue_count,
+  };
+}
+
+function parseVoiceProviderOption(
+  value: unknown,
+  correlationId: string | null,
+): VoiceProviderOption {
+  if (
+    !isRecord(value)
+    || typeof value.provider_id !== "string"
+    || typeof value.display_name !== "string"
+    || typeof value.model !== "string"
+    || !isNullableString(value.default_voice)
+    || typeof value.language !== "string"
+    || !Array.isArray(value.supported_languages)
+    || !value.supported_languages.every((item) => typeof item === "string")
+    || !Array.isArray(value.allowed_voices)
+    || !value.allowed_voices.every((item) => typeof item === "string")
+    || typeof value.available !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的 TTS Provider。", correlationId);
+  }
+  return {
+    provider_id: parseRequiredSafeText(value.provider_id, "TTS Provider 无效。", correlationId),
+    display_name: parseRequiredSafeText(value.display_name, "TTS Provider 名称无效。", correlationId),
+    model: parseRequiredSafeText(value.model, "TTS Provider 模型无效。", correlationId),
+    default_voice: parseContentText(value.default_voice, correlationId),
+    language: parseRequiredSafeText(value.language, "TTS 语言无效。", correlationId),
+    supported_languages: value.supported_languages.map((item) =>
+      parseRequiredSafeText(item, "TTS 语言无效。", correlationId)),
+    allowed_voices: value.allowed_voices.map((item) =>
+      parseRequiredSafeText(item, "TTS Voice 无效。", correlationId)),
+    available: value.available,
+  };
+}
+
+function parseVoiceOptions(
+  value: unknown,
+  correlationId: string | null,
+): VoiceOptionsResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || typeof value.enabled !== "boolean"
+    || typeof value.has_active_voice !== "boolean"
+    || !isNullablePositiveInteger(value.active_version)
+    || !isPositiveInteger(value.next_version)
+    || !Array.isArray(value.providers)
+    || !isNullableString(value.default_provider)
+    || !isNullableString(value.default_voice)
+    || typeof value.default_language !== "string"
+    || typeof value.manual_script_required !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音选项。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    enabled: value.enabled,
+    has_active_voice: value.has_active_voice,
+    active_version: value.active_version,
+    next_version: value.next_version,
+    script: parseVoiceScriptSummary(value.script, correlationId),
+    planned_timing: parseVoicePlannedTiming(value.planned_timing, correlationId),
+    providers: value.providers.map((item) => parseVoiceProviderOption(item, correlationId)),
+    default_provider: parseContentText(value.default_provider, correlationId),
+    default_voice: parseContentText(value.default_voice, correlationId),
+    default_language: parseRequiredSafeText(value.default_language, "TTS 语言无效。", correlationId),
+    manual_script_required: value.manual_script_required,
+  };
+}
+
+function parseVoicePreflight(
+  value: unknown,
+  correlationId: string | null,
+): VoicePreflightResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || typeof value.ready !== "boolean"
+    || !isPositiveInteger(value.next_voice_version)
+    || !Array.isArray(value.issues)
+    || !Array.isArray(value.warnings)
+    || typeof value.external_call_required !== "boolean"
+    || typeof value.external_cost_possible !== "boolean"
+    || !isNullableString(value.preflight_fingerprint)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音预检。", correlationId);
+  }
+  const provider = value.provider === null
+    ? null
+    : parseVoiceProviderOption(value.provider, correlationId);
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    ready: value.ready,
+    intent: parseVoiceIntent(value.intent, correlationId),
+    next_voice_version: value.next_voice_version,
+    script: parseVoiceScriptSummary(value.script, correlationId),
+    provider,
+    planned_timing: parseVoicePlannedTiming(value.planned_timing, correlationId),
+    issues: value.issues.map((item) => parseVoiceIssue(item, correlationId)),
+    warnings: value.warnings.map((item) => parseVoiceIssue(item, correlationId)),
+    external_call_required: value.external_call_required,
+    external_cost_possible: value.external_cost_possible,
+    preflight_fingerprint: parseContentText(value.preflight_fingerprint, correlationId),
+  };
+}
+
+function parseVoiceVersionSummary(
+  value: unknown,
+  correlationId: string | null,
+): VoiceVersionSummary {
+  if (
+    !isRecord(value)
+    || !isPositiveInteger(value.version)
+    || !isNullableString(value.created_at)
+    || !isNullableString(value.provider)
+    || !isNullableString(value.model)
+    || !isNullableString(value.voice)
+    || !isNullableString(value.language)
+    || !isNullableString(value.script_source)
+    || !isNullableNonNegativeNumber(value.duration_seconds)
+    || typeof value.audio_available !== "boolean"
+    || typeof value.is_active !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音历史。", correlationId);
+  }
+  return {
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    provider: parseContentText(value.provider, correlationId),
+    model: parseContentText(value.model, correlationId),
+    voice: parseContentText(value.voice, correlationId),
+    language: parseContentText(value.language, correlationId),
+    script_source: parseContentText(value.script_source, correlationId),
+    duration_seconds: value.duration_seconds,
+    calibration_status: parseCalibrationStatus(value.calibration_status, correlationId),
+    timing_acceptance: parseVoiceTimingAcceptance(value.timing_acceptance, correlationId),
+    audio_available: value.audio_available,
+    is_active: value.is_active,
+  };
+}
+
+function parseVoiceHistory(
+  value: unknown,
+  correlationId: string | null,
+): VoiceHistoryResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || !isNullablePositiveInteger(value.active_version)
+    || !Array.isArray(value.versions)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的配音历史。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    active_version: value.active_version,
+    versions: value.versions.map((item) => parseVoiceVersionSummary(item, correlationId)),
   };
 }
 
@@ -2487,6 +2748,109 @@ async function submitPaidShotTask(
       correlationId: result.correlationId,
       location: result.location,
     });
+  }
+}
+
+interface AcceptedVoiceTaskExpectation {
+  projectId: string;
+  targetId: string;
+  submittedAt: number;
+  correlationId: string | null;
+  location: string | null;
+}
+
+function acceptedVoiceTaskMatches(
+  task: TaskRecord,
+  expectation: AcceptedVoiceTaskExpectation,
+): boolean {
+  return task.project_id === expectation.projectId
+    && task.operation === "VOICE_GENERATE"
+    && task.target_id === expectation.targetId
+    && (
+      expectation.correlationId === null
+      || task.correlation_id === expectation.correlationId
+    );
+}
+
+async function reconcileAcceptedVoiceTask(
+  expectation: AcceptedVoiceTaskExpectation,
+): Promise<ApiResult<TaskRecord>> {
+  const locationTaskId = taskIdFromLocation(expectation.location);
+  if (locationTaskId !== null) {
+    try {
+      const located = await getTask(locationTaskId);
+      if (acceptedVoiceTaskMatches(located.data, expectation)) return located;
+    } catch {
+      // A failed GET never authorizes another external TTS POST.
+    }
+  }
+  try {
+    const listed = await getProjectTasks(expectation.projectId);
+    const exact = listed.data.tasks.filter((task) =>
+      acceptedVoiceTaskMatches(task, expectation));
+    if (exact.length === 1) {
+      return { data: exact[0], correlationId: expectation.correlationId };
+    }
+    if (expectation.correlationId === null) {
+      const recent = listed.data.tasks.filter((task) => {
+        const createdAt = Date.parse(task.created_at);
+        return task.project_id === expectation.projectId
+          && task.operation === "VOICE_GENERATE"
+          && task.target_id === expectation.targetId
+          && Number.isFinite(createdAt)
+          && createdAt >= expectation.submittedAt - 60_000;
+      });
+      if (recent.length === 1) {
+        return { data: recent[0], correlationId: recent[0].correlation_id };
+      }
+    }
+  } catch {
+    // Preserve the accepted-but-unreadable state. Reconciliation is GET-only.
+  }
+  throw new ApiClientError({
+    message: "配音请求已被后端接受，但当前无法读取任务状态。请勿重复提交。",
+    status: 202,
+    code: "ACCEPTED_TASK_STATUS_UNREADABLE",
+    correlationId: expectation.correlationId,
+    requestAccepted: true,
+    taskLocation: expectation.location,
+  });
+}
+
+async function submitPaidVoiceTask(
+  path: string,
+  payload: VoiceGenerateRequest,
+  expectation: Omit<AcceptedVoiceTaskExpectation, "correlationId" | "location">,
+): Promise<ApiResult<TaskRecord>> {
+  let result: Awaited<ReturnType<typeof request>>;
+  try {
+    result = await request(path, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    if (!(error instanceof ApiClientError) || !error.requestAccepted) throw error;
+    return reconcileAcceptedVoiceTask({
+      ...expectation,
+      correlationId: error.correlationId,
+      location: error.taskLocation,
+    });
+  }
+  const acceptedExpectation: AcceptedVoiceTaskExpectation = {
+    ...expectation,
+    correlationId: result.correlationId,
+    location: result.location,
+  };
+  try {
+    const task = parseTaskRecord(result.data, result.correlationId);
+    if (!acceptedVoiceTaskMatches(task, acceptedExpectation)) {
+      return reconcileAcceptedVoiceTask(acceptedExpectation);
+    }
+    return { data: task, correlationId: result.correlationId };
+  } catch (error) {
+    if (result.status !== 202) throw error;
+    return reconcileAcceptedVoiceTask(acceptedExpectation);
   }
 }
 
@@ -3006,6 +3370,125 @@ export async function getVoice(
 ): Promise<ApiResult<VoiceDetail>> {
   const result = await get<unknown>(
     `/api/projects/${encodeURIComponent(projectId)}/post-production/voice`,
+  );
+  return {
+    data: parseVoiceDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getVoiceOptions(
+  projectId: string,
+): Promise<ApiResult<VoiceOptionsResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice/options`,
+  );
+  return {
+    data: parseVoiceOptions(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function preflightVoice(
+  projectId: string,
+  payload: VoicePreflightRequest,
+): Promise<ApiResult<VoicePreflightResponse>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice/preflight`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseVoicePreflight(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+async function submitVoice(
+  projectId: string,
+  payload: VoiceGenerateRequest,
+  expectedNextVersion: number,
+  action: "generate" | "regenerate",
+): Promise<ApiResult<TaskRecord>> {
+  if (!isPositiveInteger(expectedNextVersion)) {
+    throw new ApiClientError({ message: "Voice 版本无效。", code: "INVALID_VOICE_VERSION" });
+  }
+  const targetId = `voice_v${String(expectedNextVersion).padStart(3, "0")}`;
+  return submitPaidVoiceTask(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice/${action}`,
+    payload,
+    { projectId, targetId, submittedAt: Date.now() },
+  );
+}
+
+export function generateVoice(
+  projectId: string,
+  payload: VoiceGenerateRequest,
+  expectedNextVersion: number,
+): Promise<ApiResult<TaskRecord>> {
+  return submitVoice(projectId, payload, expectedNextVersion, "generate");
+}
+
+export function regenerateVoice(
+  projectId: string,
+  payload: VoiceGenerateRequest,
+  expectedNextVersion: number,
+): Promise<ApiResult<TaskRecord>> {
+  return submitVoice(projectId, payload, expectedNextVersion, "regenerate");
+}
+
+export async function getVoiceHistory(
+  projectId: string,
+): Promise<ApiResult<VoiceHistoryResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice/history`,
+  );
+  return {
+    data: parseVoiceHistory(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getVoiceVersion(
+  projectId: string,
+  version: number,
+): Promise<ApiResult<VoiceDetail>> {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({ message: "Voice 版本无效。", code: "INVALID_VOICE_VERSION" });
+  }
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice/versions/${version}`,
+  );
+  return {
+    data: parseVoiceDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getVoiceVersionAudioUrl(projectId: string, version: number): string {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({ message: "Voice 版本无效。", code: "INVALID_VOICE_VERSION" });
+  }
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/post-production/voice/versions/${version}/audio`;
+}
+
+export async function acceptVoiceTiming(
+  projectId: string,
+  expectedVoiceVersion: number,
+): Promise<ApiResult<VoiceDetail>> {
+  if (!isPositiveInteger(expectedVoiceVersion)) {
+    throw new ApiClientError({ message: "Voice 版本无效。", code: "INVALID_VOICE_VERSION" });
+  }
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/voice/timing-acceptance`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_voice_version: expectedVoiceVersion, accepted: true }),
+    },
   );
   return {
     data: parseVoiceDetail(result.data, result.correlationId),

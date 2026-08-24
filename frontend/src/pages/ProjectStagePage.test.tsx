@@ -26,6 +26,8 @@ import {
   getSubtitle,
   getVideoPrompts,
   getVoice,
+  getVoiceHistory,
+  getVoiceOptions,
   getTask,
   regenerateCreative,
   regenerateStoryboard,
@@ -58,6 +60,8 @@ vi.mock("../api/client", async (importOriginal) => {
     getSubtitle: vi.fn(),
     getVideoPrompts: vi.fn(),
     getVoice: vi.fn(),
+    getVoiceHistory: vi.fn(),
+    getVoiceOptions: vi.fn(),
     generateCreative: vi.fn(),
     generateStoryboard: vi.fn(),
     getTask: vi.fn(),
@@ -83,6 +87,8 @@ const mockGetStoryboardContent = vi.mocked(getStoryboardContent);
 const mockGetSubtitle = vi.mocked(getSubtitle);
 const mockGetVideoPrompts = vi.mocked(getVideoPrompts);
 const mockGetVoice = vi.mocked(getVoice);
+const mockGetVoiceHistory = vi.mocked(getVoiceHistory);
+const mockGetVoiceOptions = vi.mocked(getVoiceOptions);
 const mockGenerateCreative = vi.mocked(generateCreative);
 const mockGenerateStoryboard = vi.mocked(generateStoryboard);
 const mockGetTask = vi.mocked(getTask);
@@ -292,6 +298,8 @@ describe("ProjectStagePage", () => {
     mockGetSubtitle.mockReset();
     mockGetVideoPrompts.mockReset();
     mockGetVoice.mockReset();
+    mockGetVoiceHistory.mockReset();
+    mockGetVoiceOptions.mockReset();
     mockGenerateCreative.mockReset();
     mockGenerateStoryboard.mockReset();
     mockGetTask.mockReset();
@@ -325,15 +333,58 @@ describe("ProjectStagePage", () => {
     mockGetVoice.mockResolvedValue({
       data: {
         project_id: "LEE柠檬", status: "NOT_STARTED", version: null,
-        created_at: null, script: null, script_source: null, model: null,
+        created_at: null, script: null, script_source: null, provider: null, model: null,
         voice: null, language: null, audio_available: false,
         planned_narration_duration: null, planned_first_voice_start: null,
         planned_last_voice_end: null, planned_voice_span: null,
         actual_audio_duration: null, voice_track_start: null,
-        actual_voice_end: null, timing_mode: null, cue_level_alignment: null,
+        actual_voice_end: null, total_video_duration: null,
+        duration_difference_seconds: null, duration_difference_ratio: null,
+        timing_mode: null, cue_level_alignment: null,
         script_matches_storyboard: null, calibration_status: "NOT_APPLICABLE",
+        timing_acceptance: null,
       },
       correlationId: "req_voice",
+    });
+    mockGetVoiceHistory.mockResolvedValue({
+      data: { project_id: "LEE柠檬", active_version: null, versions: [] },
+      correlationId: "req_voice_history",
+    });
+    mockGetVoiceOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        enabled: true,
+        has_active_voice: false,
+        active_version: null,
+        next_version: 1,
+        script: {
+          source: "compiled_storyboard",
+          text: "新鲜看得见",
+          character_count: 6,
+          cue_count: 1,
+        },
+        planned_timing: {
+          first_start: 2,
+          last_end: 4,
+          span: 2,
+          narration_duration: 2,
+        },
+        providers: [{
+          provider_id: "xfyun_tts",
+          display_name: "讯飞 TTS",
+          model: "online-tts-v2",
+          default_voice: "xiaoyan",
+          language: "zh-CN",
+          supported_languages: ["zh-CN"],
+          allowed_voices: [],
+          available: true,
+        }],
+        default_provider: "xfyun_tts",
+        default_voice: "xiaoyan",
+        default_language: "zh-CN",
+        manual_script_required: false,
+      },
+      correlationId: "req_voice_options",
     });
     mockGetSubtitle.mockResolvedValue({
       data: {

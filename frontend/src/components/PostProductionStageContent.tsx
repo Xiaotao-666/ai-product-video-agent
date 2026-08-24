@@ -35,6 +35,7 @@ import {
 import { formatProjectDate, statusPresentation } from "../projectPresentation";
 import type { StageKey } from "../stageDefinitions";
 import { StatusBadge } from "./StatusBadge";
+import { VoiceGenerationAction } from "./VoiceGenerationAction";
 
 
 type DetailStageKey = "assembly" | "voice" | "subtitle" | "music" | "export";
@@ -548,33 +549,36 @@ function AssemblyContent({
 }
 
 function VoiceContent({ projectId, detail }: { projectId: string; detail: VoiceDetail }) {
-  const status = statusPresentation(detail.status);
+  const [current, setCurrent] = useState(detail);
+  useEffect(() => setCurrent(detail), [detail]);
+  const status = statusPresentation(current.status);
   return (
     <>
-      <DetailHeading title="配音详情" />
+      <DetailHeading title="配音详情" interactive />
       <div className="postproduction-title-row">
         <h3>当前正式配音</h3>
         <StatusBadge label={status.label} tone={status.tone} />
       </div>
-      {detail.version === null ? (
+      {current.version === null ? (
         <p className="postproduction-empty-copy">尚未生成配音。</p>
       ) : (
         <>
           <dl className="postproduction-facts">
-            <StateFact label="正式版本" value={versionLabel(detail.version)} />
-            <StateFact label="脚本来源" value={sourceLabel(detail.script_source)} />
-            <StateFact label="模型" value={detail.model ?? "未记录"} />
-            <StateFact label="发音人" value={detail.voice ?? "未记录"} />
-            <StateFact label="语言" value={detail.language ?? "未记录"} />
-            <StateFact label="创建时间" value={dateLabel(detail.created_at)} />
+            <StateFact label="正式版本" value={versionLabel(current.version)} />
+            <StateFact label="脚本来源" value={sourceLabel(current.script_source)} />
+            <StateFact label="Provider" value={current.provider ?? "未记录"} />
+            <StateFact label="模型" value={current.model ?? "未记录"} />
+            <StateFact label="发音人" value={current.voice ?? "未记录"} />
+            <StateFact label="语言" value={current.language ?? "未记录"} />
+            <StateFact label="创建时间" value={dateLabel(current.created_at)} />
           </dl>
           <div className="postproduction-script-card">
             <h3>配音脚本</h3>
-            <p>{detail.script ?? "未保存脚本内容。"}</p>
+            <p>{current.script ?? "未保存脚本内容。"}</p>
           </div>
           <div className="postproduction-media-card">
             <h3>配音音频</h3>
-            {detail.audio_available ? (
+            {current.audio_available ? (
               <audio controls preload="metadata" src={getVoiceAudioUrl(projectId)} />
             ) : (
               <MediaUnavailable kind="音频" />
@@ -583,21 +587,29 @@ function VoiceContent({ projectId, detail }: { projectId: string; detail: VoiceD
           <div className="postproduction-subsection">
             <h3>Timeline / Calibration</h3>
             <dl className="postproduction-facts">
-              <StateFact label="计划旁白时长" value={secondsLabel(detail.planned_narration_duration)} />
-              <StateFact label="计划开始" value={secondsLabel(detail.planned_first_voice_start)} />
-              <StateFact label="计划结束" value={secondsLabel(detail.planned_last_voice_end)} />
-              <StateFact label="计划 Voice Span" value={secondsLabel(detail.planned_voice_span)} />
-              <StateFact label="实际音频时长" value={secondsLabel(detail.actual_audio_duration)} />
-              <StateFact label="实际轨道开始" value={secondsLabel(detail.voice_track_start)} />
-              <StateFact label="实际结束" value={secondsLabel(detail.actual_voice_end)} />
-              <StateFact label="Timing Mode" value={detail.timing_mode ?? "未记录"} />
-              <StateFact label="Cue 对齐" value={booleanLabel(detail.cue_level_alignment)} />
-              <StateFact label="脚本匹配 Storyboard" value={booleanLabel(detail.script_matches_storyboard)} />
-              <StateFact label="校准状态" value={CALIBRATION_LABELS[detail.calibration_status]} />
+              <StateFact label="计划旁白时长" value={secondsLabel(current.planned_narration_duration)} />
+              <StateFact label="计划开始" value={secondsLabel(current.planned_first_voice_start)} />
+              <StateFact label="计划结束" value={secondsLabel(current.planned_last_voice_end)} />
+              <StateFact label="计划 Voice Span" value={secondsLabel(current.planned_voice_span)} />
+              <StateFact label="实际音频时长" value={secondsLabel(current.actual_audio_duration)} />
+              <StateFact label="实际轨道开始" value={secondsLabel(current.voice_track_start)} />
+              <StateFact label="实际结束" value={secondsLabel(current.actual_voice_end)} />
+              <StateFact label="视频总时长" value={secondsLabel(current.total_video_duration)} />
+              <StateFact label="时长差" value={secondsLabel(current.duration_difference_seconds)} />
+              <StateFact label="Timing Mode" value={current.timing_mode ?? "未记录"} />
+              <StateFact label="Cue 对齐" value={booleanLabel(current.cue_level_alignment)} />
+              <StateFact label="脚本匹配 Storyboard" value={booleanLabel(current.script_matches_storyboard)} />
+              <StateFact label="校准状态" value={CALIBRATION_LABELS[current.calibration_status]} />
+              <StateFact label="Timing Acceptance" value={current.timing_acceptance?.accepted ? "已接受" : "未接受"} />
             </dl>
           </div>
         </>
       )}
+      <VoiceGenerationAction
+        projectId={projectId}
+        detail={current}
+        onDetailChange={setCurrent}
+      />
     </>
   );
 }
@@ -829,6 +841,8 @@ export function PostProductionStageContent({
       <p className="stage-readonly-note">
         {loaded.kind === "assembly"
           ? "Assembly 执行只使用已确认的计划快照；不会修改 Shot 或 Prompt 版本。"
+          : loaded.kind === "voice"
+            ? "Voice 生成复用既有 Core；外部 TTS 只会在本地预检与明确确认后提交。"
           : "本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。"}
       </p>
     </section>

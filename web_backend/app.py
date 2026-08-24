@@ -36,6 +36,7 @@ from web_backend.routers.projects import router as projects_router
 from web_backend.routers.prompt_revision import router as prompt_revision_router
 from web_backend.routers.shot_generation import router as shot_generation_router
 from web_backend.routers.tasks import router as tasks_router
+from web_backend.routers.voice import router as voice_router
 from web_backend.routers.assembly_execution import router as assembly_execution_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.assembly_planning import AssemblyPlanningService
@@ -53,6 +54,7 @@ from web_backend.services.shot_approval import ShotApprovalService
 from web_backend.services.shot_versions import ShotVersionService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
+from web_backend.services.voice import VoiceWebService
 from web_backend.settings import BackendSettings
 
 
@@ -128,6 +130,13 @@ def _initialize_local_resources(application: FastAPI) -> None:
         lock_manager,
     )
     application.state.capability_service = CapabilityService()
+    application.state.voice_web_service = VoiceWebService(
+        application.state.project_repository,
+        application.state.postproduction_repository,
+        application.state.task_service,
+        application.state.capability_service,
+        lock_manager,
+    )
     application.state.prompt_revision_draft_service = PromptRevisionDraftService(
         application.state.project_repository,
         application.state.reference_asset_repository,
@@ -241,6 +250,7 @@ def create_app(
     application.include_router(planning_actions_router, prefix="/api")
     application.include_router(tasks_router, prefix="/api")
     application.include_router(assembly_execution_router, prefix="/api")
+    application.include_router(voice_router, prefix="/api")
     return application
 
 

@@ -36,6 +36,7 @@ from web_backend.services.shot_approval import ShotApprovalService
 from web_backend.services.shot_versions import ShotVersionService
 from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
+from web_backend.services.voice import VoiceWebService
 from web_backend.settings import BackendSettings
 
 
@@ -103,6 +104,10 @@ def get_task_runner(request: Request) -> TaskRunner:
 
 def get_task_service(request: Request) -> TaskService:
     return request.app.state.task_service
+
+
+def get_voice_web_service(request: Request) -> VoiceWebService:
+    return request.app.state.voice_web_service
 
 
 def get_prompt_revision_draft_service(
