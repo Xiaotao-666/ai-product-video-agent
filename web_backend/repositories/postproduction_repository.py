@@ -29,6 +29,7 @@ from web_backend.models.postproduction import (
     VoiceTimingAcceptanceDetail,
     VoiceVersionSummary,
 )
+from web_backend.models.music import MusicHistoryResponse, MusicVersionSummary
 from web_backend.repositories.project_repository import (
     ProjectDataCorrupt,
     ProjectRepository,
@@ -93,6 +94,10 @@ class SubtitleVersionNotFound(PostProductionRepositoryError):
 
 
 class MusicDataCorrupt(PostProductionRepositoryError):
+    pass
+
+
+class MusicVersionNotFound(PostProductionRepositoryError):
     pass
 
 
@@ -834,40 +839,77 @@ class PostProductionRepository:
         version, entry = self._active_entry(manifest, MusicDataCorrupt)
         recorded = self._component_recorded(project_data, "music")
         version = version or _safe_positive_int(recorded.get("active_version"))
-        config = (
-            self._read_json(
-                project_dir,
-                ("music", "versions", f"v{version:03d}", "music_config.json"),
-                required=False,
-                error_type=MusicDataCorrupt,
-            )
-            if version is not None
-            else None
-        )
-        metadata = dict(_mapping(config))
-        metadata.update(entry)
-        extension = self._music_extension(metadata) if version is not None else None
-        return MusicDetail(
-            project_id=api_id,
+        return self._music_detail(
+            api_id,
+            project_dir,
+            project_data,
+            version,
+            entry,
             status=self._component_status(recorded, bool(entry), version),
-            version=version,
-            created_at=_safe_text(metadata.get("created_at")),
-            audio_available=(
-                self._music_media(
-                    project_dir,
-                    version,
-                    extension,
-                    required=False,
+        )
+
+    def get_music_history(self, project_id: str) -> MusicHistoryResponse:
+        api_id, project_dir, _ = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("music", "music_manifest.json"),
+            error_type=MusicDataCorrupt,
+            schema_key="music_schema_version",
+        )
+        if manifest is None:
+            return MusicHistoryResponse(project_id=api_id, active_version=None)
+        active, _ = self._active_entry(manifest, MusicDataCorrupt)
+        raw_versions = manifest.get("versions")
+        if not isinstance(raw_versions, list):
+            raise MusicDataCorrupt("music versions are invalid")
+        summaries: list[MusicVersionSummary] = []
+        seen: set[int] = set()
+        for raw in raw_versions:
+            entry = _mapping(raw)
+            version = _safe_positive_int(entry.get("version"))
+            if version is None or version in seen:
+                raise MusicDataCorrupt("music version is invalid")
+            seen.add(version)
+            metadata = self._music_metadata(project_dir, version, entry)
+            extension = self._music_extension(metadata)
+            summaries.append(
+                MusicVersionSummary(
+                    version=version,
+                    created_at=_safe_text(metadata.get("created_at")),
+                    format=extension,
+                    duration_seconds=_safe_nonnegative_number(
+                        metadata.get("duration_seconds", metadata.get("duration"))
+                    ),
+                    audio_available=self._music_media(
+                        project_dir, version, extension, required=False
+                    )
+                    is not None,
+                    is_active=version == active,
                 )
-                is not None
-            ),
-            format=extension,
-            duration_seconds=_safe_nonnegative_number(
-                metadata.get("duration_seconds", metadata.get("duration"))
-            ),
-            music_mix=self._music_mix(
-                _mapping(_mapping(project_data.get("post_production")).get("music_mix"))
-            ),
+            )
+        summaries.sort(key=lambda item: item.version, reverse=True)
+        return MusicHistoryResponse(
+            project_id=api_id,
+            active_version=active,
+            versions=summaries,
+        )
+
+    def get_music_version(self, project_id: str, version: int) -> MusicDetail:
+        api_id, project_dir, project_data = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("music", "music_manifest.json"),
+            error_type=MusicDataCorrupt,
+            schema_key="music_schema_version",
+        )
+        entry = self._music_entry(manifest, version)
+        return self._music_detail(
+            api_id,
+            project_dir,
+            project_data,
+            version,
+            entry,
+            status="COMPLETED",
         )
 
     def resolve_music_audio(self, project_id: str) -> ResolvedMedia:
@@ -903,6 +945,94 @@ class PostProductionRepository:
         )
         assert media is not None
         return media
+
+    def resolve_music_version_audio(
+        self, project_id: str, version: int
+    ) -> ResolvedMedia:
+        _, project_dir, _ = self._project_context(project_id)
+        manifest = self._read_manifest(
+            project_dir,
+            ("music", "music_manifest.json"),
+            error_type=MusicDataCorrupt,
+            schema_key="music_schema_version",
+        )
+        entry = self._music_entry(manifest, version)
+        metadata = self._music_metadata(project_dir, version, entry)
+        media = self._music_media(
+            project_dir,
+            version,
+            self._music_extension(metadata),
+            required=True,
+        )
+        assert media is not None
+        return media
+
+    def _music_detail(
+        self,
+        api_id: str,
+        project_dir: Path,
+        project_data: Mapping[str, Any],
+        version: int | None,
+        entry: Mapping[str, Any],
+        *,
+        status: str,
+    ) -> MusicDetail:
+        metadata = (
+            self._music_metadata(project_dir, version, entry)
+            if version is not None
+            else {}
+        )
+        extension = self._music_extension(metadata) if version is not None else None
+        return MusicDetail(
+            project_id=api_id,
+            status=status,
+            version=version,
+            created_at=_safe_text(metadata.get("created_at")),
+            audio_available=self._music_media(
+                project_dir, version, extension, required=False
+            )
+            is not None,
+            format=extension,
+            duration_seconds=_safe_nonnegative_number(
+                metadata.get("duration_seconds", metadata.get("duration"))
+            ),
+            music_mix=self._music_mix(
+                _mapping(_mapping(project_data.get("post_production")).get("music_mix"))
+            ),
+        )
+
+    def _music_metadata(
+        self,
+        project_dir: Path,
+        version: int,
+        entry: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        config = self._read_json(
+            project_dir,
+            ("music", "versions", f"v{version:03d}", "music_config.json"),
+            required=False,
+            error_type=MusicDataCorrupt,
+        )
+        metadata = dict(_mapping(config))
+        metadata.update(entry)
+        return metadata
+
+    @staticmethod
+    def _music_entry(
+        manifest: Mapping[str, Any] | None, version: int
+    ) -> Mapping[str, Any]:
+        if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+            raise MusicVersionNotFound("music version was not found")
+        if manifest is None or not isinstance(manifest.get("versions"), list):
+            raise MusicVersionNotFound("music version was not found")
+        matches = [
+            _mapping(raw)
+            for raw in manifest["versions"]
+            if _safe_positive_int(_mapping(raw).get("version")) == version
+        ]
+        if len(matches) != 1:
+            raise MusicVersionNotFound("music version was not found")
+        return matches[0]
 
     def get_export(self, project_id: str) -> ExportDetail:
         api_id, project_dir, project_data = self._project_context(project_id)

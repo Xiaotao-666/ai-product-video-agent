@@ -9,6 +9,8 @@ import {
   getAssemblyReadiness,
   getExport,
   getMusic,
+  getMusicHistory,
+  getMusicOptions,
   getProjectTasks,
   getSubtitle,
   getSubtitleHistory,
@@ -21,6 +23,9 @@ import {
   getVoiceHistory,
   getVoiceOptions,
   resumeAssembly,
+  resetMusicMix,
+  updateMusicMix,
+  uploadMusic,
 } from "../api/client";
 import type {
   AssemblyDetail,
@@ -54,10 +59,15 @@ vi.mock("../api/client", async (importOriginal) => {
     generateSubtitle: vi.fn(),
     regenerateSubtitle: vi.fn(),
     getMusic: vi.fn(),
+    getMusicHistory: vi.fn(),
+    getMusicOptions: vi.fn(),
     getExport: vi.fn(),
     getProjectTasks: vi.fn(),
     getTask: vi.fn(),
     resumeAssembly: vi.fn(),
+    resetMusicMix: vi.fn(),
+    updateMusicMix: vi.fn(),
+    uploadMusic: vi.fn(),
   };
 });
 
@@ -78,6 +88,11 @@ const mockGetSubtitleVersion = vi.mocked(getSubtitleVersion);
 const mockGenerateSubtitle = vi.mocked(generateSubtitle);
 const mockRegenerateSubtitle = vi.mocked(regenerateSubtitle);
 const mockGetMusic = vi.mocked(getMusic);
+const mockGetMusicHistory = vi.mocked(getMusicHistory);
+const mockGetMusicOptions = vi.mocked(getMusicOptions);
+const mockResetMusicMix = vi.mocked(resetMusicMix);
+const mockUpdateMusicMix = vi.mocked(updateMusicMix);
+const mockUploadMusic = vi.mocked(uploadMusic);
 const mockGetExport = vi.mocked(getExport);
 
 const assembly: AssemblyDetail = {
@@ -300,6 +315,11 @@ describe("PostProductionStageContent", () => {
     mockGenerateSubtitle.mockReset();
     mockRegenerateSubtitle.mockReset();
     mockGetMusic.mockReset();
+    mockGetMusicHistory.mockReset();
+    mockGetMusicOptions.mockReset();
+    mockResetMusicMix.mockReset();
+    mockUpdateMusicMix.mockReset();
+    mockUploadMusic.mockReset();
     mockGetExport.mockReset();
     mockGetAssembly.mockResolvedValue({ data: assembly, correlationId: "req_a" });
     mockGetAssemblyReadiness.mockResolvedValue({ data: assemblyReadiness, correlationId: "req_ar" });
@@ -425,6 +445,37 @@ describe("PostProductionStageContent", () => {
     mockGenerateSubtitle.mockResolvedValue({ data: subtitle, correlationId: "req_sg" });
     mockRegenerateSubtitle.mockResolvedValue({ data: { ...subtitle, version: 2 }, correlationId: "req_sr" });
     mockGetMusic.mockResolvedValue({ data: music, correlationId: "req_m" });
+    mockGetMusicOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        has_music: true,
+        active_version: 1,
+        next_version: 2,
+        allowed_extensions: ["aac", "flac", "m4a", "mp3", "ogg", "wav"],
+        max_file_size_bytes: 500 * 1024 * 1024,
+        mix: music.music_mix!,
+        capabilities: { ducking: true, fade: true, loop: false },
+      },
+      correlationId: "req_mo",
+    });
+    mockGetMusicHistory.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        active_version: 1,
+        versions: [{
+          version: 1,
+          created_at: music.created_at,
+          format: music.format,
+          duration_seconds: music.duration_seconds,
+          audio_available: true,
+          is_active: true,
+        }],
+      },
+      correlationId: "req_mh",
+    });
+    mockResetMusicMix.mockResolvedValue({ data: music, correlationId: "req_mr" });
+    mockUpdateMusicMix.mockResolvedValue({ data: music, correlationId: "req_mu" });
+    mockUploadMusic.mockResolvedValue({ data: music, correlationId: "req_up" });
     mockGetExport.mockResolvedValue({ data: finalExport, correlationId: "req_e" });
   });
 
@@ -533,32 +584,49 @@ describe("PostProductionStageContent", () => {
 
   it("18 renders Music version and format", async () => {
     renderStage("music");
-    expect(await screen.findByText("v001")).toBeInTheDocument();
-    expect(screen.getByText("MP3")).toBeInTheDocument();
+    expect((await screen.findAllByText(/v001/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("MP3").length).toBeGreaterThan(0);
   });
 
   it("19 renders Music audio controls", async () => {
     const { container } = renderStage("music");
-    await screen.findByRole("heading", { name: "原始正式音乐" });
+    await screen.findByRole("heading", { name: "当前音乐" });
     expect(container.querySelector("audio")?.getAttribute("src")).toContain("/post-production/music/audio");
   });
 
   it("20 renders Music Mix config", async () => {
     renderStage("music");
     expect(await screen.findByText("25%")).toBeInTheDocument();
-    expect(screen.getByText("1.2s")).toBeInTheDocument();
+    expect(screen.getByLabelText("Fade Out")).toHaveValue(1.2);
   });
 
   it("21 renders Music ducking values", async () => {
     renderStage("music");
-    expect(await screen.findByText("40%")).toBeInTheDocument();
-    expect(screen.getByText("ENABLED")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Ducking Ratio")).toHaveValue("40");
+    expect(screen.getByText(/旁白期间背景音乐降低/)).toBeInTheDocument();
   });
 
   it("22 renders Music NOT_STARTED", async () => {
     mockGetMusic.mockResolvedValue({ data: { ...music, status: "NOT_STARTED", version: null, audio_available: false, format: null, music_mix: null }, correlationId: null });
+    mockGetMusicOptions.mockResolvedValue({
+      data: {
+        project_id: "LEE柠檬",
+        has_music: false,
+        active_version: null,
+        next_version: 1,
+        allowed_extensions: ["aac", "flac", "m4a", "mp3", "ogg", "wav"],
+        max_file_size_bytes: 500 * 1024 * 1024,
+        mix: music.music_mix!,
+        capabilities: { ducking: true, fade: true, loop: false },
+      },
+      correlationId: null,
+    });
+    mockGetMusicHistory.mockResolvedValue({
+      data: { project_id: "LEE柠檬", active_version: null, versions: [] },
+      correlationId: null,
+    });
     renderStage("music");
-    expect(await screen.findByText("尚未设置音乐。")).toBeInTheDocument();
+    expect(await screen.findByText("尚未添加背景音乐。")).toBeInTheDocument();
   });
 
   it("23 renders Export version", async () => {
@@ -652,7 +720,7 @@ describe("PostProductionStageContent", () => {
 
   it("37 safely encodes a Chinese project ID in media URLs", async () => {
     const { container } = renderStage("music", "正式项目 柠檬");
-    await screen.findByRole("heading", { name: "原始正式音乐" });
+    await screen.findByRole("heading", { name: "当前音乐" });
     expect(container.querySelector("audio")?.getAttribute("src")).toContain("%E6%AD%A3%E5%BC%8F%E9%A1%B9%E7%9B%AE%20%E6%9F%A0%E6%AA%AC");
   });
 

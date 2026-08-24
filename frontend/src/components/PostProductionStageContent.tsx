@@ -11,7 +11,6 @@ import {
   getExport,
   getExportVideoUrl,
   getMusic,
-  getMusicAudioUrl,
   getSubtitle,
   getVoice,
   getVoiceAudioUrl,
@@ -37,6 +36,7 @@ import type { StageKey } from "../stageDefinitions";
 import { StatusBadge } from "./StatusBadge";
 import { VoiceGenerationAction } from "./VoiceGenerationAction";
 import { SubtitleGenerationAction } from "./SubtitleGenerationAction";
+import { MusicManagementAction } from "./MusicManagementAction";
 
 
 type DetailStageKey = "assembly" | "voice" | "subtitle" | "music" | "export";
@@ -631,38 +631,16 @@ function SubtitleContent({ projectId, detail }: { projectId: string; detail: Sub
 }
 
 function MusicContent({ projectId, detail }: { projectId: string; detail: MusicDetail }) {
-  const status = statusPresentation(detail.status);
+  const [current, setCurrent] = useState(detail);
+  useEffect(() => setCurrent(detail), [detail]);
   return (
     <>
-      <DetailHeading title="音乐详情" />
-      <div className="postproduction-title-row">
-        <h3>当前正式音乐</h3>
-        <StatusBadge label={status.label} tone={status.tone} />
-      </div>
-      {detail.version === null ? (
-        <p className="postproduction-empty-copy">尚未设置音乐。</p>
-      ) : (
-        <>
-          <dl className="postproduction-facts">
-            <StateFact label="正式版本" value={versionLabel(detail.version)} />
-            <StateFact label="格式" value={detail.format?.toUpperCase() ?? "未记录"} />
-            <StateFact label="素材时长" value={secondsLabel(detail.duration_seconds)} />
-            <StateFact label="创建时间" value={dateLabel(detail.created_at)} />
-          </dl>
-          <div className="postproduction-media-card">
-            <h3>原始正式音乐</h3>
-            {detail.audio_available ? (
-              <audio controls preload="metadata" src={getMusicAudioUrl(projectId)} />
-            ) : (
-              <MediaUnavailable kind="音频" />
-            )}
-          </div>
-          <div className="postproduction-subsection">
-            <h3>Music Mix 配置</h3>
-            <MusicMix mix={detail.music_mix} />
-          </div>
-        </>
-      )}
+      <DetailHeading title="背景音乐" interactive />
+      <MusicManagementAction
+        projectId={projectId}
+        detail={current}
+        onDetailChange={setCurrent}
+      />
     </>
   );
 }
@@ -823,6 +801,8 @@ export function PostProductionStageContent({
             ? "Voice 生成复用既有 Core；外部 TTS 只会在本地预检与明确确认后提交。"
           : loaded.kind === "subtitle"
             ? "Subtitle 生成是本地确定性同步操作；不使用 Task、AI 或外部 Provider。"
+          : loaded.kind === "music"
+            ? "Music 上传与 Mix 是纯本地同步操作；不使用 Task、AI、外部 Provider 或 FFmpeg。"
           : "本页只读取已保存内容，不会生成、编辑、切换或删除任何版本。"}
       </p>
     </section>

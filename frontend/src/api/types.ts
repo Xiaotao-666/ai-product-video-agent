@@ -993,6 +993,54 @@ export interface MusicDetail {
   music_mix: MusicMixDetail | null;
 }
 
+export interface MusicCapabilities {
+  ducking: boolean;
+  fade: boolean;
+  loop: boolean;
+}
+
+export interface MusicOptionsResponse {
+  project_id: string;
+  has_music: boolean;
+  active_version: number | null;
+  next_version: number;
+  allowed_extensions: string[];
+  max_file_size_bytes: number;
+  mix: MusicMixDetail;
+  capabilities: MusicCapabilities;
+}
+
+export interface MusicUploadExpectation {
+  expected_active_version: number | null;
+  expected_next_version: number;
+}
+
+export interface MusicMixUpdateRequest {
+  base_volume?: number;
+  ducking_enabled?: boolean;
+  ducking_ratio?: number;
+  duck_attack_seconds?: number;
+  duck_release_seconds?: number;
+  fade_in_seconds?: number;
+  fade_out_seconds?: number;
+  loop_music?: boolean;
+}
+
+export interface MusicVersionSummary {
+  version: number;
+  created_at: string | null;
+  format: string | null;
+  duration_seconds: number | null;
+  audio_available: boolean;
+  is_active: boolean;
+}
+
+export interface MusicHistoryResponse {
+  project_id: string;
+  active_version: number | null;
+  versions: MusicVersionSummary[];
+}
+
 export interface ExportVoiceTimingSummary {
   timing_mode: string | null;
   voice_track_start: number | null;

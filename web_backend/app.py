@@ -38,6 +38,7 @@ from web_backend.routers.shot_generation import router as shot_generation_router
 from web_backend.routers.tasks import router as tasks_router
 from web_backend.routers.voice import router as voice_router
 from web_backend.routers.subtitle import router as subtitle_router
+from web_backend.routers.music import router as music_router
 from web_backend.routers.assembly_execution import router as assembly_execution_router
 from web_backend.services.capabilities import CapabilityService
 from web_backend.services.assembly_planning import AssemblyPlanningService
@@ -57,6 +58,7 @@ from web_backend.services.task_runner import TaskRunner
 from web_backend.services.tasks import TaskService
 from web_backend.services.voice import VoiceWebService
 from web_backend.services.subtitle import SubtitleWebService
+from web_backend.services.music import MusicWebService
 from web_backend.settings import BackendSettings
 
 
@@ -144,6 +146,13 @@ def _initialize_local_resources(application: FastAPI) -> None:
         application.state.postproduction_repository,
         application.state.task_service,
         lock_manager,
+    )
+    application.state.music_web_service = MusicWebService(
+        application.state.project_repository,
+        application.state.postproduction_repository,
+        application.state.task_service,
+        lock_manager,
+        settings.web_runtime_root,
     )
     application.state.prompt_revision_draft_service = PromptRevisionDraftService(
         application.state.project_repository,
@@ -243,7 +252,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(application.state.settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["Content-Type", "X-Correlation-ID"],
         expose_headers=["Location", "X-Correlation-ID"],
         max_age=600,
@@ -260,6 +269,7 @@ def create_app(
     application.include_router(assembly_execution_router, prefix="/api")
     application.include_router(voice_router, prefix="/api")
     application.include_router(subtitle_router, prefix="/api")
+    application.include_router(music_router, prefix="/api")
     return application
 
 

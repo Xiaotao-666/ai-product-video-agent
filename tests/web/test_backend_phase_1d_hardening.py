@@ -516,7 +516,7 @@ class WebBackendPhase1DHardeningTests(unittest.TestCase):
         for forbidden in ("credential_env_name", "local_path", "raw_error"):
             self.assertNotIn(forbidden, rendered)
 
-    def test_41_public_methods_are_limited_to_get_post_and_options(self):
+    def test_41_public_methods_are_limited_to_get_post_patch_and_options(self):
         schema = self.client_for().get("/openapi.json").json()
         methods = {
             method.upper()
@@ -524,12 +524,16 @@ class WebBackendPhase1DHardeningTests(unittest.TestCase):
             if path.startswith("/api/")
             for method in operations
         }
-        self.assertEqual(methods, {"GET", "POST"})
-        for method in ("PUT", "PATCH", "DELETE"):
+        self.assertEqual(methods, {"GET", "POST", "PATCH"})
+        for method in ("PUT", "DELETE"):
             self.assertEqual(
                 self.client_for().request(method, "/api/projects").status_code,
                 405,
             )
+        self.assertEqual(
+            self.client_for().patch("/api/projects").status_code,
+            405,
+        )
 
     def test_42_recursive_public_response_audit_covers_all_current_apis(self):
         client = self.client_for()

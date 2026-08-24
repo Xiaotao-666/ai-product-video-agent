@@ -325,6 +325,40 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
     "MUSIC_MEDIA_NOT_FOUND": ErrorDefinition(
         404, "POST_PRODUCTION_ERROR", "MUSIC_MEDIA_NOT_FOUND", "音乐音频不可用。"
     ),
+    "MUSIC_VERSION_NOT_FOUND": ErrorDefinition(
+        404, "MUSIC_ERROR", "MUSIC_VERSION_NOT_FOUND", "音乐版本不存在。"
+    ),
+    "MUSIC_FILE_REQUIRED": ErrorDefinition(
+        400, "MUSIC_ERROR", "MUSIC_FILE_REQUIRED", "请选择要上传的背景音乐。"
+    ),
+    "MUSIC_FORMAT_UNSUPPORTED": ErrorDefinition(
+        415,
+        "MUSIC_ERROR",
+        "MUSIC_FORMAT_UNSUPPORTED",
+        "仅支持 WAV、MP3、FLAC、OGG、M4A 和 AAC 音频。",
+    ),
+    "MUSIC_FILE_TOO_LARGE": ErrorDefinition(
+        413, "MUSIC_ERROR", "MUSIC_FILE_TOO_LARGE", "背景音乐超过当前允许的大小限制。"
+    ),
+    "MUSIC_FILE_INVALID": ErrorDefinition(
+        422, "MUSIC_ERROR", "MUSIC_FILE_INVALID", "背景音乐文件为空、已损坏或格式不匹配。"
+    ),
+    "MUSIC_UPLOAD_FAILED": ErrorDefinition(
+        500,
+        "MUSIC_ERROR",
+        "MUSIC_UPLOAD_FAILED",
+        "背景音乐上传失败，请稍后重试。",
+        retryable=True,
+    ),
+    "MUSIC_STATE_CHANGED": ErrorDefinition(
+        409,
+        "MUSIC_ERROR",
+        "MUSIC_STATE_CHANGED",
+        "音乐版本已发生变化，请刷新后重试。",
+    ),
+    "MUSIC_MIX_INVALID": ErrorDefinition(
+        422, "MUSIC_ERROR", "MUSIC_MIX_INVALID", "音乐混音设置无效。"
+    ),
     "EXPORT_DATA_CORRUPT": ErrorDefinition(
         422, "EXPORT_ERROR", "EXPORT_DATA_CORRUPT", "最终导出数据无法读取。"
     ),

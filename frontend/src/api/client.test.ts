@@ -22,6 +22,10 @@ import {
   getExportVideoUrl,
   getMusic,
   getMusicAudioUrl,
+  getMusicHistory,
+  getMusicOptions,
+  getMusicVersion,
+  getMusicVersionAudioUrl,
   getMultiShotGenerationOptions,
   getProject,
   getProjectTasks,
@@ -68,6 +72,9 @@ import {
   reviseStoryboard,
   reviseVideoPrompts,
   uploadReferenceAsset,
+  uploadMusic,
+  updateMusicMix,
+  resetMusicMix,
 } from "./client";
 import { TASK_OPERATIONS } from "./types";
 
@@ -1397,6 +1404,98 @@ describe("API client", () => {
     const payload = (await getMusic("LEE柠檬")).data;
     expect(payload.music_mix?.ducking_ratio).toBe(0.4);
     expect(payload.music_mix).not.toHaveProperty("raw_filtergraph");
+  });
+
+  it("gets path-free Music options from the Core capability projection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", has_music: true, active_version: 1, next_version: 2,
+      allowed_extensions: ["aac", "flac", "m4a", "mp3", "ogg", "wav"],
+      max_file_size_bytes: 524288000,
+      mix: { base_volume: 0.25, ducking_enabled: true, ducking_ratio: 0.4,
+        duck_attack_seconds: 0.25, duck_release_seconds: 0.35,
+        fade_in_seconds: 0.8, fade_out_seconds: 1.2, loop_music: false,
+        ducking_status: null },
+      capabilities: { ducking: true, fade: true, loop: false },
+      provider_config_path: "D:\\private\\music_provider_config.json",
+    })));
+    const payload = (await getMusicOptions("LEE柠檬")).data;
+    expect(payload.next_version).toBe(2);
+    expect(payload.capabilities.loop).toBe(false);
+    expect(payload).not.toHaveProperty("provider_config_path");
+  });
+
+  it("uploads Music with FormData and no browser-set Content-Type", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(responseOf({
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, audio_available: true, format: "wav", duration_seconds: 1,
+      music_mix: null,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["RIFF0000WAVE"], "bgm.wav", { type: "audio/wav" });
+    await uploadMusic("LEE柠檬", file, {
+      expected_active_version: null,
+      expected_next_version: 1,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/post-production/music/upload");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    expect((form.get("file") as File).name).toBe("bgm.wav");
+    expect(form.get("expected_active_version")).toBeNull();
+    expect(form.get("expected_next_version")).toBe("1");
+    expect(JSON.stringify(init.headers).toLowerCase()).not.toContain("content-type");
+  });
+
+  it("gets safe Music history and a historical detail", async () => {
+    const detail = {
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, audio_available: true, format: "wav", duration_seconds: 1,
+      music_mix: null, sha256: "hidden", music_path: "D:\\private\\music.wav",
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(responseOf({
+        project_id: "LEE柠檬", active_version: 1,
+        versions: [{ version: 1, created_at: null, format: "wav",
+          duration_seconds: 1, audio_available: true, is_active: true }],
+      }))
+      .mockResolvedValueOnce(responseOf(detail)));
+    expect((await getMusicHistory("LEE柠檬")).data.versions[0].is_active).toBe(true);
+    const parsed = (await getMusicVersion("LEE柠檬", 1)).data;
+    expect(parsed.version).toBe(1);
+    expect(parsed).not.toHaveProperty("sha256");
+    expect(parsed).not.toHaveProperty("music_path");
+  });
+
+  it("PATCHes only submitted Music Mix fields and resets synchronously", async () => {
+    const detail = {
+      project_id: "LEE柠檬", status: "COMPLETED", version: 1,
+      created_at: null, audio_available: true, format: "wav", duration_seconds: 1,
+      music_mix: { base_volume: 0.6, ducking_enabled: true, ducking_ratio: 0.4,
+        duck_attack_seconds: 0.25, duck_release_seconds: 0.35,
+        fade_in_seconds: 0.8, fade_out_seconds: 1.2, loop_music: false,
+        ducking_status: null },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(responseOf(detail));
+    vi.stubGlobal("fetch", fetchMock);
+    await updateMusicMix("LEE柠檬", { base_volume: 0.6 });
+    await resetMusicMix("LEE柠檬");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ base_volume: 0.6 }),
+    });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/music/mix");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/music/mix/reset");
+  });
+
+  it("builds a safe encoded Music history audio URL without fetch", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(getMusicVersionAudioUrl("LEE柠檬", 2)).toContain(
+      "/LEE%E6%9F%A0%E6%AA%AC/post-production/music/versions/2/audio",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("gets Export detail without fingerprint or render internals", async () => {

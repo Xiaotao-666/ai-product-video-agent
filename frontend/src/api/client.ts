@@ -42,7 +42,12 @@ import type {
   GenerationVisualInputOption,
   HealthResponse,
   MusicDetail,
+  MusicHistoryResponse,
+  MusicMixUpdateRequest,
   MusicMixDetail,
+  MusicOptionsResponse,
+  MusicUploadExpectation,
+  MusicVersionSummary,
   MultiShotGenerationAggregation,
   MultiShotGenerationOptionsResponse,
   MultiShotGenerationPlanResponse,
@@ -3566,6 +3571,92 @@ export async function getVoiceOptions(
   };
 }
 
+function parseMusicOptions(
+  value: unknown,
+  correlationId: string | null,
+): MusicOptionsResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || typeof value.has_music !== "boolean"
+    || !isNullablePositiveInteger(value.active_version)
+    || !isPositiveInteger(value.next_version)
+    || !Array.isArray(value.allowed_extensions)
+    || !value.allowed_extensions.every(
+      (item) => typeof item === "string" && /^[a-z0-9]{1,8}$/.test(item),
+    )
+    || !isPositiveInteger(value.max_file_size_bytes)
+    || !isRecord(value.capabilities)
+    || typeof value.capabilities.ducking !== "boolean"
+    || typeof value.capabilities.fade !== "boolean"
+    || typeof value.capabilities.loop !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的音乐选项。", correlationId);
+  }
+  const mix = parseMusicMix(value.mix, correlationId);
+  if (mix === null) {
+    return invalidResponse("Backend 未返回音乐 Mix 设置。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    has_music: value.has_music,
+    active_version: value.active_version,
+    next_version: value.next_version,
+    allowed_extensions: [...value.allowed_extensions],
+    max_file_size_bytes: value.max_file_size_bytes,
+    mix,
+    capabilities: {
+      ducking: value.capabilities.ducking,
+      fade: value.capabilities.fade,
+      loop: value.capabilities.loop,
+    },
+  };
+}
+
+function parseMusicVersionSummary(
+  value: unknown,
+  correlationId: string | null,
+): MusicVersionSummary {
+  if (
+    !isRecord(value)
+    || !isPositiveInteger(value.version)
+    || !isNullableString(value.created_at)
+    || !isNullableString(value.format)
+    || !isNullableNonNegativeNumber(value.duration_seconds)
+    || typeof value.audio_available !== "boolean"
+    || typeof value.is_active !== "boolean"
+  ) {
+    return invalidResponse("Backend 返回了无法读取的音乐历史。", correlationId);
+  }
+  return {
+    version: value.version,
+    created_at: parseContentText(value.created_at, correlationId),
+    format: parseContentText(value.format, correlationId),
+    duration_seconds: value.duration_seconds,
+    audio_available: value.audio_available,
+    is_active: value.is_active,
+  };
+}
+
+function parseMusicHistory(
+  value: unknown,
+  correlationId: string | null,
+): MusicHistoryResponse {
+  if (
+    !isRecord(value)
+    || typeof value.project_id !== "string"
+    || !isNullablePositiveInteger(value.active_version)
+    || !Array.isArray(value.versions)
+  ) {
+    return invalidResponse("Backend 返回了无法读取的音乐历史。", correlationId);
+  }
+  return {
+    project_id: parseRequiredSafeText(value.project_id, "项目标识无效。", correlationId),
+    active_version: value.active_version,
+    versions: value.versions.map((item) => parseMusicVersionSummary(item, correlationId)),
+  };
+}
+
 export async function preflightVoice(
   projectId: string,
   payload: VoicePreflightRequest,
@@ -3767,6 +3858,110 @@ export async function getMusic(
 ): Promise<ApiResult<MusicDetail>> {
   const result = await get<unknown>(
     `/api/projects/${encodeURIComponent(projectId)}/post-production/music`,
+  );
+  return {
+    data: parseMusicDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getMusicOptions(
+  projectId: string,
+): Promise<ApiResult<MusicOptionsResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music/options`,
+  );
+  return {
+    data: parseMusicOptions(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function uploadMusic(
+  projectId: string,
+  file: File,
+  expectation: MusicUploadExpectation,
+): Promise<ApiResult<MusicDetail>> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  if (expectation.expected_active_version !== null) {
+    form.append(
+      "expected_active_version",
+      String(expectation.expected_active_version),
+    );
+  }
+  form.append("expected_next_version", String(expectation.expected_next_version));
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music/upload`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: form,
+    },
+  );
+  return {
+    data: parseMusicDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getMusicHistory(
+  projectId: string,
+): Promise<ApiResult<MusicHistoryResponse>> {
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music/history`,
+  );
+  return {
+    data: parseMusicHistory(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function getMusicVersion(
+  projectId: string,
+  version: number,
+): Promise<ApiResult<MusicDetail>> {
+  if (!isPositiveInteger(version)) {
+    throw new ApiClientError({ message: "Music 版本无效。", code: "INVALID_MUSIC_VERSION" });
+  }
+  const result = await get<unknown>(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music/versions/${version}`,
+  );
+  return {
+    data: parseMusicDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export function getMusicVersionAudioUrl(projectId: string, version: number): string {
+  if (!isPositiveInteger(version)) return "";
+  return `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/post-production/music/versions/${version}/audio`;
+}
+
+export async function updateMusicMix(
+  projectId: string,
+  payload: MusicMixUpdateRequest,
+): Promise<ApiResult<MusicDetail>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music/mix`,
+    {
+      method: "PATCH",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    data: parseMusicDetail(result.data, result.correlationId),
+    correlationId: result.correlationId,
+  };
+}
+
+export async function resetMusicMix(
+  projectId: string,
+): Promise<ApiResult<MusicDetail>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/post-production/music/mix/reset`,
+    { method: "POST", headers: { Accept: "application/json" } },
   );
   return {
     data: parseMusicDetail(result.data, result.correlationId),
