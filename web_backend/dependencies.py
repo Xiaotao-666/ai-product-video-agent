@@ -147,6 +147,15 @@ def get_shot_generation_action_service(
     return request.app.state.shot_generation_action_service
 
 
+def get_shot_failure_recovery_service(request: Request):
+    from web_backend.services.shot_failure_recovery import ShotFailureRecoveryService
+    return ShotFailureRecoveryService(
+        request.app.state.project_repository, request.app.state.shot_repository,
+        request.app.state.shot_generation_preflight_service,
+        request.app.state.shot_generation_action_service, request.app.state.task_service,
+    )
+
+
 def get_multishot_generation_service(
     request: Request,
 ) -> MultiShotGenerationService:

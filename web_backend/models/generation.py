@@ -20,6 +20,7 @@ class ModelSelectionMode(StrEnum):
 
 class GenerationIntent(StrEnum):
     INITIAL = "INITIAL"
+    FAILED_RETRY = "FAILED_RETRY"
     REGENERATE_CURRENT_PROMPT = "REGENERATE_CURRENT_PROMPT"
     REGENERATE_MANUAL_PROMPT = "REGENERATE_MANUAL_PROMPT"
     GENERATE_WITH_PROMPT_VERSION = "GENERATE_WITH_PROMPT_VERSION"
@@ -153,6 +154,8 @@ class GenerationPreflightRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_selection(self) -> "GenerationPreflightRequest":
+        if self.intent is GenerationIntent.FAILED_RETRY:
+            raise ValueError("failed retry requires its dedicated action")
         if self.model_selection is ModelSelectionMode.MANUAL:
             if not self.requested_model:
                 raise ValueError("requested_model is required for MANUAL selection")

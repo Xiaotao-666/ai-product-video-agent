@@ -108,7 +108,7 @@ export function ShotsStageContent({
                       <h3>{shot.shot_id.replace("shot_", "Shot ")}</h3>
                       <p className="shot-summary-title">{shot.title}</p>
                     </div>
-                    <StatusBadge label={status.label} tone={status.tone} />
+                    <StatusBadge label={shot.status === "FAILED" ? "生成失败" : status.label} tone={status.tone} />
                   </div>
                   <dl className="shot-summary-facts">
                     <div><dt>Prompt</dt><dd>{statusPresentation(shot.prompt_status).label}</dd></div>
@@ -136,7 +136,7 @@ export function ShotsStageContent({
                     className="secondary-button shot-detail-link"
                     to={projectShotPath(projectId, shot.shot_id)}
                   >
-                    查看镜头
+                    {shot.status === "FAILED" ? "查看镜头 / 调整配置后重试" : "查看镜头"}
                   </Link>
                 </article>
               );

@@ -485,6 +485,7 @@ export interface ShotDetail {
   active_prompt_version?: number | null;
   approved_prompt_version?: number | null;
   prompt_versions?: ShotPromptVersionSummary[];
+  failure_recovery?: FailureRecovery | null;
   versions: ShotVersion[];
 }
 
@@ -539,6 +540,7 @@ export interface GenerationShotContext {
 
 export type GenerationIntent =
   | "INITIAL"
+  | "FAILED_RETRY"
   | "REGENERATE_CURRENT_PROMPT"
   | "REGENERATE_MANUAL_PROMPT"
   | "GENERATE_WITH_PROMPT_VERSION";
@@ -632,6 +634,41 @@ export interface GenerationPreflightResponse {
 export interface GenerationStartRequest extends GenerationPreflightRequest {
   preflight_fingerprint: string;
   confirm_paid_call: boolean;
+}
+
+export interface FailureRecovery {
+  state: "RETRY_ALLOWED" | "RETRY_BLOCKED_SUBMISSION_UNKNOWN" | "RESUME_AVAILABLE"
+    | "BUSINESS_ALREADY_COMPLETE" | "ACTIVE_TASK" | "BLOCKED" | "NOT_APPLICABLE";
+  reason_code: string;
+  can_retry: boolean;
+  requires_new_preflight: boolean;
+  requires_external_cost_confirmation: boolean;
+  safe_message: string;
+  last_attempt_version: number | null;
+  active_task_id: string | null;
+}
+
+export interface FailedRetryPreflightRequest {
+  intent: "FAILED_RETRY";
+  model_selection: GenerationModelSelection;
+  requested_model: string | null;
+  duration: number;
+  resolution: string;
+  visual_input: GenerationPreflightRequest["visual_input"];
+}
+
+export interface FailedRetryRequest extends FailedRetryPreflightRequest {
+  preflight_fingerprint: string;
+  confirm_external_video_call: boolean;
+}
+
+export interface FailedRetryOptions extends GenerationOptionsResponse {
+  failure_recovery: FailureRecovery;
+}
+
+export interface FailedRetryPreflight extends GenerationPreflightResponse {
+  intent: "FAILED_RETRY";
+  failure_recovery: FailureRecovery;
 }
 
 export type ShotGenerationState =

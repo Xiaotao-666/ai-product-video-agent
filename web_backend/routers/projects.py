@@ -14,6 +14,7 @@ from web_backend.dependencies import (
     get_project_repository,
     get_project_service,
     get_shot_repository,
+    get_shot_failure_recovery_service,
     get_task_service,
 )
 from web_backend.models.assembly_planning import AssemblyPlan, AssemblyReadiness
@@ -45,6 +46,7 @@ from web_backend.services.assembly_planning import (
     AssemblyPlanningService,
 )
 from web_backend.models.shots import ShotDetail, ShotListResponse
+from web_backend.services.shot_failure_recovery import ShotFailureRecoveryService
 from web_backend.services.projects import (
     InvalidProjectName,
     InvalidProjectRequest,
@@ -296,9 +298,13 @@ async def get_project_shot(
     project_id: str,
     shot_id: str,
     repository: Annotated[ShotRepository, Depends(get_shot_repository)],
+    recovery: Annotated[ShotFailureRecoveryService, Depends(get_shot_failure_recovery_service)],
 ) -> ShotDetail:
     try:
-        return repository.get_shot(project_id, shot_id)
+        detail = repository.get_shot(project_id, shot_id)
+        return detail.model_copy(update={
+            "failure_recovery": recovery.classify(project_id, shot_id),
+        })
     except ProjectRepositoryError as error:
         _raise_mapped_error(error)
 

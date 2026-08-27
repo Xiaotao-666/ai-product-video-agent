@@ -40,6 +40,11 @@ import type {
   FinalExportState,
   GenerationIssue,
   GenerationIntent,
+  FailureRecovery,
+  FailedRetryOptions,
+  FailedRetryPreflight,
+  FailedRetryPreflightRequest,
+  FailedRetryRequest,
   GenerationModelOption,
   GenerationModelSelection,
   GenerationOptionsResponse,
@@ -1256,6 +1261,34 @@ function parseShotPromptVersionSummary(
   };
 }
 
+function parseFailureRecovery(value: unknown, correlationId: string | null): FailureRecovery {
+  const states = new Set([
+    "RETRY_ALLOWED", "RETRY_BLOCKED_SUBMISSION_UNKNOWN", "RESUME_AVAILABLE",
+    "BUSINESS_ALREADY_COMPLETE", "ACTIVE_TASK", "BLOCKED", "NOT_APPLICABLE",
+  ]);
+  if (!isRecord(value) || typeof value.state !== "string" || !states.has(value.state)
+    || typeof value.can_retry !== "boolean"
+    || typeof value.requires_new_preflight !== "boolean"
+    || typeof value.requires_external_cost_confirmation !== "boolean"
+    || !isNullablePositiveInteger(value.last_attempt_version)
+    || !isNullableString(value.active_task_id)
+    || (value.can_retry && (value.state !== "RETRY_ALLOWED"
+      || !value.requires_new_preflight || !value.requires_external_cost_confirmation))) {
+    return invalidResponse("Backend 返回了无法读取的失败恢复状态。", correlationId);
+  }
+  return {
+    state: value.state as FailureRecovery["state"],
+    reason_code: parseRequiredSafeText(value.reason_code, "恢复原因无效。", correlationId),
+    can_retry: value.can_retry,
+    requires_new_preflight: value.requires_new_preflight,
+    requires_external_cost_confirmation: value.requires_external_cost_confirmation,
+    safe_message: parseRequiredSafeText(value.safe_message, "恢复说明无效。", correlationId),
+    last_attempt_version: value.last_attempt_version,
+    active_task_id: value.active_task_id === null ? null
+      : parseRequiredSafeText(value.active_task_id, "任务标识无效。", correlationId),
+  };
+}
+
 function parseShotDetailResponse(
   value: unknown,
   correlationId: string | null,
@@ -1297,6 +1330,8 @@ function parseShotDetailResponse(
     active_prompt_version: value.active_prompt_version ?? null,
     approved_prompt_version: value.approved_prompt_version ?? null,
     prompt_versions: promptVersions,
+    failure_recovery: value.failure_recovery == null ? null
+      : parseFailureRecovery(value.failure_recovery, correlationId),
     versions,
   };
 }
@@ -1691,6 +1726,7 @@ function parseShotGenerationStatus(
     provider_submission_known: value.provider_submission_known,
     generation_intent:
       value.generation_intent === "INITIAL"
+      || value.generation_intent === "FAILED_RETRY"
       || value.generation_intent === "REGENERATE_CURRENT_PROMPT"
       || value.generation_intent === "REGENERATE_MANUAL_PROMPT"
       || value.generation_intent === "GENERATE_WITH_PROMPT_VERSION"
@@ -3452,6 +3488,50 @@ export async function preflightShotGeneration(
     data: parseGenerationPreflight(result.data, result.correlationId),
     correlationId: result.correlationId,
   };
+}
+
+export async function getFailedRetryOptions(
+  projectId: string, shotId: string,
+): Promise<ApiResult<FailedRetryOptions>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/failed-retry/options`,
+    { method: "GET", headers: { Accept: "application/json" } },
+  );
+  return { ...result, data: {
+    ...parseGenerationOptions(result.data, result.correlationId),
+    failure_recovery: parseFailureRecovery(
+      isRecord(result.data) ? result.data.failure_recovery : null, result.correlationId,
+    ),
+  } };
+}
+
+export async function preflightFailedRetry(
+  projectId: string, shotId: string, payload: FailedRetryPreflightRequest,
+): Promise<ApiResult<FailedRetryPreflight>> {
+  const result = await request(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/failed-retry/preflight`,
+    { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload) },
+  );
+  if (!isRecord(result.data) || result.data.intent !== "FAILED_RETRY") {
+    return invalidResponse("Backend 返回了不一致的重试预检。", result.correlationId);
+  }
+  return { ...result, data: {
+    ...parseGenerationPreflight(result.data, result.correlationId),
+    intent: "FAILED_RETRY",
+    failure_recovery: parseFailureRecovery(result.data.failure_recovery, result.correlationId),
+  } };
+}
+
+export async function retryFailedShotGeneration(
+  projectId: string, shotId: string, payload: FailedRetryRequest,
+): Promise<ApiResult<TaskRecord>> {
+  return submitPaidShotTask(
+    `/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/generation/failed-retry`,
+    { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload) },
+    { projectId, shotId, operation: "SHOT_GENERATE", submittedAt: Date.now() },
+  );
 }
 
 export async function startShotGeneration(

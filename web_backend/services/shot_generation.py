@@ -945,6 +945,15 @@ class ShotGenerationActionService:
 
     @staticmethod
     def _provider_failure(error: VideoProviderError) -> tuple[str, str, bool]:
+        if (
+            error.code is ProviderErrorCode.INVALID_REQUEST
+            and str(_mapping(_mapping(error.raw_error).get("base_resp")).get("status_code")) == "2061"
+        ):
+            return (
+                "VIDEO_PROVIDER_INVALID_REQUEST",
+                "当前套餐不支持所选模型配置，请调整模型、时长或分辨率后重新尝试。",
+                False,
+            )
         mapping = {
             ProviderErrorCode.AUTH_ERROR: (
                 "VIDEO_PROVIDER_AUTH_ERROR",

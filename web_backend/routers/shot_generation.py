@@ -13,6 +13,7 @@ from web_backend.dependencies import (
     get_shot_approval_service,
     get_shot_generation_action_service,
     get_shot_generation_preflight_service,
+    get_shot_failure_recovery_service,
     get_multishot_generation_service,
     get_shot_version_service,
 )
@@ -28,6 +29,10 @@ from web_backend.models.generation import (
     ShotGenerationStatusResponse,
 )
 from web_backend.models.tasks import TaskOperation, TaskRecord
+from web_backend.models.shot_failure_recovery import (
+    FailedRetryOptions, FailedRetryPreflight, FailedRetryPreflightRequest, FailedRetryRequest,
+)
+from web_backend.services.shot_failure_recovery import FailedRetryStale, ShotFailureRecoveryService
 from web_backend.models.multishot_generation import (
     MultiShotGenerationOptionsResponse,
     MultiShotGenerationPlanResponse,
@@ -90,6 +95,54 @@ from web_backend.services.reference_assets import (
 
 
 router = APIRouter(tags=["shot-generation"])
+
+
+@router.get("/projects/{project_id}/shots/{shot_id}/generation/failed-retry/options", response_model=FailedRetryOptions)
+def failed_retry_options(
+    project_id: str, shot_id: str,
+    service: Annotated[ShotFailureRecoveryService, Depends(get_shot_failure_recovery_service)],
+) -> FailedRetryOptions:
+    try:
+        return service.options(project_id, shot_id)
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+
+
+@router.post("/projects/{project_id}/shots/{shot_id}/generation/failed-retry/preflight", response_model=FailedRetryPreflight)
+def failed_retry_preflight(
+    project_id: str, shot_id: str, payload: FailedRetryPreflightRequest,
+    service: Annotated[ShotFailureRecoveryService, Depends(get_shot_failure_recovery_service)],
+) -> FailedRetryPreflight:
+    try:
+        return service.preflight(project_id, shot_id, payload)
+    except FailedRetryStale as error:
+        raise registered_api_error("FAILED_RETRY_STALE") from error
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+
+
+@router.post("/projects/{project_id}/shots/{shot_id}/generation/failed-retry", response_model=TaskRecord, status_code=202)
+def failed_retry_execute(
+    project_id: str, shot_id: str, payload: FailedRetryRequest, request: Request, response: Response,
+    service: Annotated[ShotFailureRecoveryService, Depends(get_shot_failure_recovery_service)],
+) -> TaskRecord:
+    try:
+        task = service.submit(
+            project_id, shot_id, payload,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except FailedRetryStale as error:
+        raise registered_api_error("FAILED_RETRY_STALE") from error
+    except PaidCallConfirmationRequired as error:
+        raise registered_api_error("PAID_CALL_CONFIRMATION_REQUIRED") from error
+    except ProjectBusy as error:
+        raise registered_api_error("PROJECT_BUSY") from error
+    except TaskRunnerClosed as error:
+        raise registered_api_error("TASK_RUNNER_UNAVAILABLE") from error
+    except ProjectRepositoryError as error:
+        _raise_mapped(error)
+    response.headers["Location"] = f"/api/tasks/{task.task_id}"
+    return task
 
 
 _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], str] = {

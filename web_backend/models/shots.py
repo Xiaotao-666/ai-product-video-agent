@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from web_backend.models.projects import ResponseModel
+from web_backend.models.shot_failure_recovery import FailureRecovery
 
 
 class ShotVersionRole(StrEnum):
@@ -90,6 +91,7 @@ class ShotVersion(ResponseModel):
 
 
 class ShotDetail(ResponseModel):
+    failure_recovery: FailureRecovery | None = None
     project_id: str
     shot_id: str
     status: str

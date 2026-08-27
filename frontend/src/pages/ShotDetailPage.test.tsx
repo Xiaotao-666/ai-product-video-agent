@@ -342,6 +342,44 @@ describe("ShotDetailPage", () => {
     expect(mockGetShot).toHaveBeenCalledWith("LEE柠檬", "shot_01");
   });
 
+  it("shows dedicated failed recovery and preserves the failed attempt in history", async () => {
+    mockGetShot.mockResolvedValue({ data: {
+      ...shot, status: "FAILED", official_version: null, pending_review_version: null,
+      version_count: 1, generation_count: 1, versions: [{
+        ...shot.versions[2], review_status: "FAILED", history_reason: null,
+      }],
+      failure_recovery: {
+        state: "RETRY_ALLOWED", reason_code: "VIDEO_PROVIDER_INVALID_REQUEST", can_retry: true,
+        requires_new_preflight: true, requires_external_cost_confirmation: true,
+        safe_message: "当前套餐不支持所选模型配置，请调整模型、时长或分辨率后重新尝试。",
+        last_attempt_version: 1, active_task_id: null,
+      },
+    }, correlationId: null });
+    renderPage();
+    expect(await screen.findByRole("button", { name: "调整配置并重新尝试" })).toBeInTheDocument();
+    expect(screen.getByText("未生成可用视频")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+    expect(screen.getByText("生成失败")).toBeInTheDocument();
+    expect(mockGetShotGenerationOptions).not.toHaveBeenCalled();
+    expect(mockApproveShot).not.toHaveBeenCalled();
+  });
+
+  it("keeps failed v1 as history while a successful retry v2 awaits approval", async () => {
+    mockGetShot.mockResolvedValue({ data: {
+      ...shot, status: "WAITING_REVIEW", official_version: null, pending_review_version: 2,
+      version_count: 2, generation_count: 2, versions: [
+        { ...shot.versions[0], version: 2 },
+        { ...shot.versions[2], review_status: "FAILED", history_reason: null },
+      ],
+    }, correlationId: null });
+    renderPage();
+    const pending = (await screen.findByRole("heading", { name: "待审核新版本", level: 2 })).closest("section")!;
+    expect(within(pending).getByRole("heading", { name: "Video v2 / Prompt v4" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Video v1 / Prompt v1" })).toBeInTheDocument();
+    expect(screen.getByText("生成失败")).toBeInTheDocument();
+    expect(mockApproveShot).not.toHaveBeenCalled();
+  });
+
   it("visually separates the current official version", async () => {
     renderPage();
     const heading = await screen.findByRole("heading", { name: "当前正式版本", level: 2 });

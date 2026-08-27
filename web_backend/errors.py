@@ -121,6 +121,10 @@ ERROR_DEFINITIONS: dict[str, ErrorDefinition] = {
         "GENERATION_NOT_RESUMABLE",
         "当前镜头没有可安全继续的生成进度。",
     ),
+    "FAILED_RETRY_STALE": ErrorDefinition(
+        409, "GENERATION_ERROR", "FAILED_RETRY_STALE",
+        "失败恢复状态或生成配置已变化，请重新检查配置。",
+    ),
     "PROJECT_CREATE_FAILED": ErrorDefinition(
         500, "PROJECT_ERROR", "PROJECT_CREATE_FAILED", "项目创建失败。"
     ),

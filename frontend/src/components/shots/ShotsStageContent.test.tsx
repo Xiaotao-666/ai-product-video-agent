@@ -180,6 +180,28 @@ describe("ShotsStageContent", () => {
     expect(within(section!).getByText("展示核心卖点")).toBeInTheDocument();
   });
 
+  it("keeps failed attempts out of initial batch and links to explicit recovery", async () => {
+    mockGetShots.mockResolvedValue({ data: { ...shotList, shots: [{
+      ...shotList.shots[2], status: "FAILED", video_status: "FAILED", review_status: "FAILED",
+      generation_count: 1, version_count: 1,
+    }] }, correlationId: null });
+    mockGenerationOptions.mockResolvedValue({ data: { ...generationOptions, shots: [{
+      ...generationOptions.shots[2], status: "FAILED", video_status: "FAILED", available: false,
+    }] }, correlationId: null });
+    renderContent();
+    const heading = await screen.findByRole("heading", { name: "Shot 03" });
+    const card = heading.closest("article")!;
+    expect(within(card).getByText("生成失败")).toBeInTheDocument();
+    expect(within(card).getByText("Video").parentElement).toHaveTextContent("执行失败");
+    expect(within(card).getByText("Prompt").parentElement).toHaveTextContent("已就绪");
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "查看镜头 / 调整配置后重试" })).toHaveLength(2));
+    const links = screen.getAllByRole("link", { name: "查看镜头 / 调整配置后重试" });
+    expect(links[0].getAttribute("href")).toContain("/stages/shots/shot_03");
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始生成所选镜头" })).toBeDisabled();
+    expect(mockStartGeneration).not.toHaveBeenCalled();
+  });
+
   it("preserves the Backend-provided Shot order", async () => {
     mockGetShots.mockResolvedValue({
       data: {

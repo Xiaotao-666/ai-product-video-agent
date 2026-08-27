@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from web_backend.repositories.shot_bundle_readiness import video_bundle_complete
+
 from web_backend.models.shots import (
     ShotDetail,
     ShotGenerationSummary,
@@ -448,7 +450,11 @@ class ShotRepository:
             or bool(checkpoint.get("prompt_versions"))
             else "NOT_STARTED"
         )
-        video_status = self._video_status(core_status, versions)
+        usable_video = any(
+            video_bundle_complete(shot_dir.parent.parent, int(shot_id[5:]), version)
+            for version in versions
+        )
+        video_status = self._video_status(core_status, usable_video)
         review_status = self._review_status(core_status, official, pending)
         status = (
             self._shot_collection_status(core_status, video_status, review_status)
@@ -472,12 +478,12 @@ class ShotRepository:
         )
 
     @staticmethod
-    def _video_status(core_status: str, versions: set[int]) -> str:
+    def _video_status(core_status: str, usable_video: bool) -> str:
         if core_status in {"RUNNING", "GENERATING"}:
             return "GENERATING"
-        if core_status == "FAILED" and not versions:
+        if core_status == "FAILED":
             return "FAILED"
-        return "READY" if versions else "NOT_STARTED"
+        return "READY" if usable_video else "NOT_STARTED"
 
     @staticmethod
     def _review_status(
@@ -664,6 +670,7 @@ class ShotRepository:
             or _safe_text(merged_generation.get("submitted_at"))
         )
         review_status = _safe_status(
+            "FAILED" if merged_generation.get("status") == "FAILED" else
             review.get("review_result")
             or checkpoint_generation.get("review_result")
             or merged_generation.get("status")

@@ -17,6 +17,7 @@ import type {
 } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ShotGenerationPreparation } from "../components/shots/ShotGenerationPreparation";
+import { FailedShotRetryAction } from "../components/shots/FailedShotRetryAction";
 import { ShotApproveAction } from "../components/shots/ShotApproveAction";
 import { ShotSetOfficialAction } from "../components/shots/ShotSetOfficialAction";
 import { ShotPromptRevisionDraftAction } from "../components/shots/ShotPromptRevisionDraftAction";
@@ -50,6 +51,7 @@ const REVIEW_LABELS: Record<string, string> = {
 };
 
 function reviewLabel(version: ShotVersion): string {
+  if (version.review_status === "FAILED") return "生成失败";
   if (version.role !== "HISTORY") {
     return REVIEW_LABELS[version.review_status] ?? "未记录";
   }
@@ -327,7 +329,11 @@ export function ShotDetailPage() {
   ].includes(generationStatus.state);
   const workspacePath = projectWorkspacePath(project.project_id);
   const canonicalShotsPath = projectStagePath(project.project_id, "shots");
+  const showFailedRecovery = Boolean(shot.failure_recovery
+    && (shot.status === "FAILED" || generationStatus.generation_intent === "FAILED_RETRY")
+    && !official && !pending);
   const showInitialGenerationPreparation =
+    !showFailedRecovery &&
     !official &&
     !pending &&
     ["NOT_STARTED", "GENERATING", "FAILED"].includes(shot.status);
@@ -370,6 +376,12 @@ export function ShotDetailPage() {
           <div><dt>累计生成</dt><dd>{shot.generation_count}</dd></div>
         </dl>
       </header>
+
+      {showFailedRecovery && shot.failure_recovery && (
+        <FailedShotRetryAction key={`${project.project_id}:${shot.shot_id}`}
+          projectId={project.project_id} shotId={shot.shot_id}
+          recovery={shot.failure_recovery} onCompleted={loadShot} />
+      )}
 
       {showInitialGenerationPreparation && (
         <ShotGenerationPreparation

@@ -125,6 +125,7 @@ def continue_shot_generation(
     safety_review: SafetyReview = review_prompt_safety,
     video_generate: VideoGenerate = generate_video,
     candidate_lane: bool = False,
+    resolution: str = "768P",
 ) -> Path:
     """Run or resume the provider-neutral Core path without any review action."""
 
@@ -156,6 +157,14 @@ def continue_shot_generation(
     )
     resuming = resume_task is not None
     generation_record = _generation_record(entry, version)
+    # A resumed attempt owns its configuration. Caller/UI defaults must never
+    # change the request that was already submitted; legacy attempts used 768P.
+    generation_duration = (
+        int(generation_record.get("duration") or shot.duration) if resuming else shot.duration
+    )
+    generation_resolution = (
+        str(generation_record.get("resolution") or "768P") if resuming else resolution
+    )
     if resuming and isinstance(generation_record.get("prompt_snapshot"), Mapping):
         prompt_payload = dict(generation_record["prompt_snapshot"])
     recorded_prompt_version = generation_record.get("prompt_version")
@@ -230,8 +239,8 @@ def continue_shot_generation(
         generated_path = video_generate(
             provider_credentials=provider_credentials,
             prompt=safety.reviewed_video_prompt,
-            duration=shot.duration,
-            resolution="768P",
+            duration=generation_duration,
+            resolution=generation_resolution,
             project=paths,
             output_path=output_path,
             task_logger=task_logger,
@@ -249,8 +258,8 @@ def continue_shot_generation(
                 lambda metadata: checkpoint.mark_candidate_submission_started(
                     shot_id,
                     metadata,
-                    duration=shot.duration,
-                    resolution="768P",
+                    duration=generation_duration,
+                    resolution=generation_resolution,
                     visual_input=generation_visual,
                     prompt_snapshot=dict(prompt_payload),
                 )
@@ -258,8 +267,8 @@ def continue_shot_generation(
                 else checkpoint.mark_shot_submission_started(
                     shot_id,
                     metadata,
-                    duration=shot.duration,
-                    resolution="768P",
+                    duration=generation_duration,
+                    resolution=generation_resolution,
                     visual_input=generation_visual,
                 )
             ),

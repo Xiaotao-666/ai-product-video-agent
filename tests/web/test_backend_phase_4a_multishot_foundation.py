@@ -139,7 +139,8 @@ class WebBackendPhase4AMultiShotFoundationTests(unittest.TestCase):
                 "title": "Shot 01",
                 "status": "APPROVED",
                 "prompt_status": "READY",
-                "video_status": "READY",
+                # A legacy version pointer without an actual bundle is not a video.
+                "video_status": "NOT_STARTED",
                 "review_status": "APPROVED",
                 "official_version": 1,
                 "pending_review_version": None,

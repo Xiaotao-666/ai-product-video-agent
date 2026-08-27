@@ -216,6 +216,12 @@ class ShotGenerationPreflightService:
             payload.intent,
             target_prompt_version=payload.target_prompt_version,
         )
+        return self._preflight_context(project_id, context, payload)
+
+    def _preflight_context(
+        self, project_id: str, context: _ShotContext, payload: GenerationPreflightRequest,
+    ) -> GenerationPreflightResponse:
+        """Shared zero-write capability checks; callers own action eligibility."""
         issues = list(context.state_issues)
         effective_prompt = context.prompt
         if payload.intent is GenerationIntent.REGENERATE_MANUAL_PROMPT:

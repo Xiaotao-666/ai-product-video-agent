@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { projectShotPath } from "../../stageDefinitions";
 
 import {
   ApiClientError,
@@ -150,9 +152,10 @@ export function MultiShotGenerationPanel({
                   <small>{shot.title}</small>
                 </span>
                 <StatusBadge
-                  label={statusPresentation(shot.status).label}
+                  label={shot.status === "FAILED" ? "生成失败" : statusPresentation(shot.status).label}
                   tone={statusPresentation(shot.status).tone}
                 />
+                {shot.status === "FAILED" && <Link to={projectShotPath(projectId, shot.shot_id)}>查看镜头 / 调整配置后重试</Link>}
               </label>
             ))}
           </div>
