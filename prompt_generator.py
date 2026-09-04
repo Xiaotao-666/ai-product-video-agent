@@ -56,8 +56,8 @@ class DeepSeekJSONFormatError(ValueError):
     """Raised only when DeepSeek content cannot be parsed as JSON locally."""
 
 
-class StructuredOutputError(DeepSeekJSONFormatError):
-    """Raised when syntactically valid JSON violates the required structure."""
+class StructuredOutputError(ValueError):
+    """Raised when syntactically valid JSON violates the required schema."""
 
     def __init__(
         self,
@@ -71,7 +71,22 @@ class StructuredOutputError(DeepSeekJSONFormatError):
         self.actual_ids = actual_ids
 
 
-class JSONDuplicateKeyError(StructuredOutputError):
+class CreativeBusinessValidationError(ValueError):
+    """Raised when a schema-valid Creative result violates business rules."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_feedback: str = "",
+        duration_candidate: Mapping[str, float] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_feedback = retry_feedback
+        self.duration_candidate = dict(duration_candidate or {})
+
+
+class JSONDuplicateKeyError(DeepSeekJSONFormatError):
     """Raised when any JSON object contains the same key more than once."""
 
     def __init__(self, duplicate_key: str) -> None:
@@ -211,13 +226,16 @@ def deepseek_json_request(
     retry_instruction: str | None = None,
     log_fields: Mapping[str, Any] | None = None,
     retry_preamble: str | None = None,
+    creative_best_effort_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if not api_key.strip():
         raise PromptGenerationError("DEEPSEEK_API_KEY 不能为空。")
     json_system_prompt = system_prompt + JSON_ONLY_SUFFIX
-    last_format_error: Exception | None = None
+    last_validation_error: Exception | None = None
+    last_validation_category = "Unknown Validation Error"
     retry_feedback = ""
     context_fields = dict(log_fields or {})
+    duration_candidates: list[dict[str, Any]] = []
     for attempt in range(1, MAX_JSON_REQUEST_ATTEMPTS + 1):
         raw_content: str | None = None
         raw_path = None
@@ -271,12 +289,44 @@ def deepseek_json_request(
                     **context_fields,
                 )
             return parsed
-        except DeepSeekJSONFormatError as exc:
-            last_format_error = exc
+        except (
+            DeepSeekJSONFormatError,
+            StructuredOutputError,
+            CreativeBusinessValidationError,
+        ) as exc:
+            last_validation_error = exc
+            if isinstance(exc, CreativeBusinessValidationError):
+                last_validation_category = "Creative Business Validation Error"
+                log_event = "LLM_CREATIVE_BUSINESS_VALIDATION_ERROR"
+                warning_label = "Creative 业务校验异常"
+                retry_message = (
+                    "你刚才的 JSON 已成功解析并通过 Schema 校验，但未通过 "
+                    "Creative 业务校验。"
+                )
+                if creative_best_effort_callback is not None and exc.duration_candidate:
+                    duration_candidates.append(
+                        {
+                            "data": parsed,
+                            "attempt": attempt,
+                            **exc.duration_candidate,
+                        }
+                    )
+            elif isinstance(exc, StructuredOutputError):
+                last_validation_category = "Schema Validation Error"
+                log_event = "LLM_SCHEMA_VALIDATION_ERROR"
+                warning_label = "Schema 校验异常"
+                retry_message = (
+                    "你刚才的 JSON 已成功解析，但未通过 Schema 校验，请重新生成完整结果。"
+                )
+            else:
+                last_validation_category = "JSON Parse Error"
+                log_event = "LLM_JSON_PARSE_ERROR"
+                warning_label = "JSON 解析异常"
+                retry_message = "你刚才的内容无法解析为合法 JSON，请重新生成完整结果。"
             if task_logger:
                 task_logger.error(exc, stage=raw_stage)
                 task_logger.api(
-                    "LLM_FORMAT_ERROR",
+                    log_event,
                     "DeepSeek",
                     stage=raw_stage,
                     attempt=attempt,
@@ -301,13 +351,14 @@ def deepseek_json_request(
                         **context_fields,
                     )
             logger.warning(
-                "DeepSeek JSON 格式异常（第 %s/%s 次）：%s",
+                "DeepSeek %s（第 %s/%s 次）：%s",
+                warning_label,
                 attempt,
                 MAX_JSON_REQUEST_ATTEMPTS,
                 exc,
             )
             if attempt < MAX_JSON_REQUEST_ATTEMPTS:
-                print("AI返回格式异常，正在重新请求结构化输出")
+                print(f"AI返回{warning_label}，正在重新请求结构化输出")
                 if task_logger and raw_stage.startswith("video_prompt"):
                     task_logger.event(
                         "VIDEO_PROMPT_RETRY",
@@ -316,11 +367,12 @@ def deepseek_json_request(
                         reason=exc,
                         **context_fields,
                     )
-                retry_feedback = (
-                    "\n\n你刚才的 JSON 结构无效，请重新生成完整结果。"
-                    f"\n失败原因：{exc}"
-                    "\n"
-                    + (
+                retry_feedback = f"\n\n{retry_message}\n失败原因：{exc}"
+                if isinstance(exc, CreativeBusinessValidationError):
+                    if exc.retry_feedback:
+                        retry_feedback += f"\n{exc.retry_feedback.strip()}"
+                else:
+                    retry_feedback += "\n" + (
                         retry_preamble.strip()
                         if retry_preamble is not None
                         else (
@@ -328,7 +380,6 @@ def deepseek_json_request(
                             "每个数组元素必须是独立对象。"
                         )
                     )
-                )
                 if retry_instruction:
                     retry_feedback += f"\n{retry_instruction.strip()}"
                 continue
@@ -353,9 +404,67 @@ def deepseek_json_request(
             if task_logger:
                 task_logger.error(exc, stage=raw_stage)
             raise PromptGenerationError(f"DeepSeek API 响应结构无效：{exc}") from exc
+    if (
+        creative_best_effort_callback is not None
+        and len(duration_candidates) == MAX_JSON_REQUEST_ATTEMPTS
+    ):
+        selected = min(
+            duration_candidates,
+            key=lambda candidate: (
+                candidate["duration_gap_seconds"],
+                candidate["attempt"],
+            ),
+        )
+        metadata = {
+            key: selected[key]
+            for key in (
+                "attempt",
+                "target_duration_seconds",
+                "estimated_duration_seconds",
+                "duration_gap_seconds",
+            )
+        }
+        creative_best_effort_callback(metadata)
+        message = (
+            "Creative旁白时长连续3次未达到严格匹配要求，"
+            "已选择最接近目标且不超出允许时长的合法候选。"
+        )
+        logger.warning(
+            "%s selected_attempt=%s target=%.2fs estimated=%.2fs gap=%.2fs",
+            message,
+            metadata["attempt"],
+            metadata["target_duration_seconds"],
+            metadata["estimated_duration_seconds"],
+            metadata["duration_gap_seconds"],
+        )
+        if task_logger:
+            task_logger.event(
+                "CREATIVE_NARRATION_DURATION_STRICT_VALIDATION_FAILED",
+                "Creative Narration Duration strict validation: FAILED after 3 attempts",
+                attempts=MAX_JSON_REQUEST_ATTEMPTS,
+                **context_fields,
+            )
+            task_logger.event(
+                "CREATIVE_NARRATION_BEST_EFFORT_FALLBACK_USED",
+                "Best-effort fallback: USED",
+                selected_attempt=metadata["attempt"],
+                target_duration_seconds=metadata["target_duration_seconds"],
+                estimated_duration_seconds=metadata["estimated_duration_seconds"],
+                duration_gap_seconds=metadata["duration_gap_seconds"],
+                **context_fields,
+            )
+            task_logger.api(
+                "LLM_COMPLETED_BEST_EFFORT",
+                "DeepSeek",
+                stage=raw_stage,
+                selected_attempt=metadata["attempt"],
+                **context_fields,
+            )
+        return selected["data"]
     raise StructuredOutputExhaustedError(
-        f"DeepSeek 连续 {MAX_JSON_REQUEST_ATTEMPTS} 次返回无效结构化 JSON：{last_format_error}"
-    ) from last_format_error
+        f"DeepSeek 连续 {MAX_JSON_REQUEST_ATTEMPTS} 次未返回可用结构化结果；"
+        f"最后失败类型：{last_validation_category}；原因：{last_validation_error}"
+    ) from last_validation_error
 
 
 SAFETY_REVIEW_INSTRUCTION = """

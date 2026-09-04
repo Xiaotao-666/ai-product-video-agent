@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -20,6 +21,7 @@ from pydantic import (
 )
 
 from prompt_generator import (
+    CreativeBusinessValidationError,
     ProductVideoRequest,
     StructuredOutputError,
     deepseek_json_request,
@@ -1018,6 +1020,8 @@ def _validate_creative_brief(
     brief: CreativeBrief,
     request: ProductVideoRequest,
     expected_av_constraints: AVTimelineConstraints | None = None,
+    *,
+    allow_narration_duration_mismatch: bool = False,
 ) -> CreativeBrief:
     narration = brief.narration_plan
     if narration.target_duration_seconds > request.duration_seconds:
@@ -1031,8 +1035,12 @@ def _validate_creative_brief(
                 f"旁白目标时长必须位于用户要求的 {requested_range[0]:g}-"
                 f"{requested_range[1]:g} 秒范围内。"
             )
-    if narration.enabled and not narration_duration_is_consistent(
-        narration.full_script, narration.target_duration_seconds
+    if (
+        narration.enabled
+        and not allow_narration_duration_mismatch
+        and not narration_duration_is_consistent(
+            narration.full_script, narration.target_duration_seconds
+        )
     ):
         estimated = estimate_narration_duration(narration.full_script)
         raise StoryboardError(
@@ -1062,6 +1070,8 @@ def _validate_creative_revision(
     request: ProductVideoRequest,
     current: CreativeBrief,
     comment: str,
+    *,
+    allow_narration_duration_mismatch: bool = False,
 ) -> CreativeBrief:
     expected_av = merge_av_timeline_constraints(
         extract_av_timeline_constraints(
@@ -1070,7 +1080,12 @@ def _validate_creative_revision(
         current.av_timeline_constraints,
         extract_av_timeline_constraints(comment, request.duration_seconds),
     )
-    _validate_creative_brief(brief, request, expected_av)
+    _validate_creative_brief(
+        brief,
+        request,
+        expected_av,
+        allow_narration_duration_mismatch=allow_narration_duration_mismatch,
+    )
     requested_range = _requested_narration_range(comment)
     if requested_range is not None:
         narration = brief.narration_plan
@@ -1088,6 +1103,66 @@ def _validate_creative_revision(
     return brief
 
 
+def _creative_narration_target_is_within_bounds(
+    brief: CreativeBrief,
+    request: ProductVideoRequest,
+) -> bool:
+    """Return whether the declared narration target satisfies existing bounds."""
+
+    narration = brief.narration_plan
+    if not narration.enabled or narration.target_duration_seconds <= 0:
+        return False
+    if narration.target_duration_seconds > request.duration_seconds:
+        return False
+    requested_range = _requested_narration_range(request.user_notes)
+    return requested_range is None or (
+        requested_range[0]
+        <= narration.target_duration_seconds
+        <= requested_range[1]
+    )
+
+
+def _creative_duration_retry_feedback(
+    brief: CreativeBrief,
+    *,
+    planned_target_seconds: float | None = None,
+) -> str:
+    """Build deterministic correction guidance using the existing estimator."""
+
+    narration = brief.narration_plan
+    current_target = narration.target_duration_seconds
+    correction_target = (
+        planned_target_seconds
+        if planned_target_seconds is not None
+        else current_target
+    )
+    estimated = estimate_narration_duration(narration.full_script)
+    delta = estimated - correction_target
+    direction_code = "EXPAND" if delta < 0 else "COMPRESS"
+    direction_zh = "扩写" if delta < 0 else "压缩"
+    target_rule = ""
+    if planned_target_seconds is not None and current_target != planned_target_seconds:
+        target_rule = (
+            f"\n本轮已确定的 planned target_duration_seconds="
+            f"{planned_target_seconds:g}；必须恢复该目标，不能把目标改成 "
+            f"{current_target:g} 来迁就当前文案。"
+        )
+    return (
+        "旁白时长修正数据："
+        f"\ncurrent target_duration_seconds={current_target:g}"
+        f"\ncurrent full_script={narration.full_script}"
+        f"\ncurrent estimated_duration={estimated:g} 秒"
+        f"\ndelta_seconds(estimated-target)={delta:+g} 秒"
+        f"\nrequired_direction={direction_code}（{direction_zh} full_script）"
+        f"{target_rule}"
+        f"\n请通过{direction_zh} full_script 使真实文案量匹配目标；"
+        "不要只修改 target_duration_seconds。"
+        "保持 creative_concept、target_audience、key_message、visual_direction、"
+        "narrative_arc、narration_plan.tone、subtitle_strategy、global_constraints、"
+        "av_timeline_constraints 以及其他 Creative 字段不变。"
+    )
+
+
 def _structured_model_validator(
     model_type: type[BaseModel],
     label: str,
@@ -1095,13 +1170,14 @@ def _structured_model_validator(
 ):
     """Return a validator compatible with DeepSeek's structured-output retry."""
 
-    def validate(data: dict[str, Any]) -> None:
+    def validate(data: dict[str, Any]) -> BaseModel:
         try:
             value = model_type.model_validate(data)
             if after_validate is not None:
                 after_validate(value)
         except (ValidationError, StoryboardError) as exc:
             raise StructuredOutputError(f"{label}结构无效：{exc}") from exc
+        return value
 
     return validate
 
@@ -1129,6 +1205,7 @@ def _creative_output_validator(
     current: CreativeBrief | None = None,
     comment: str = "",
 ):
+    planned_narration_target: float | None = None
     required = {
         "creative_concept",
         "target_audience",
@@ -1142,6 +1219,7 @@ def _creative_output_validator(
     }
 
     def validate(data: dict[str, Any]) -> None:
+        nonlocal planned_narration_target
         _require_exact_fields(data, required, "Creative Brief")
         _require_exact_fields(
             data["narration_plan"],
@@ -1181,18 +1259,74 @@ def _creative_output_validator(
                 {"start", "end", "tracks"},
                 f"forbidden_window {index}",
             )
-        after_validate = (
-            (lambda value: _validate_creative_revision(
-                value, request, current, comment
-            ))
-            if current is not None
-            else (lambda value: _validate_creative_brief(value, request))
+        brief = _structured_model_validator(CreativeBrief, "创意方案")(data)
+        assert isinstance(brief, CreativeBrief)
+        narration = brief.narration_plan
+        target_within_bounds = _creative_narration_target_is_within_bounds(
+            brief, request
         )
-        _structured_model_validator(
-            CreativeBrief,
-            "创意方案",
-            after_validate,
-        )(data)
+        if target_within_bounds and planned_narration_target is None:
+            planned_narration_target = narration.target_duration_seconds
+        if planned_narration_target is not None and (
+            not narration.enabled
+            or narration.target_duration_seconds != planned_narration_target
+        ):
+            raise CreativeBusinessValidationError(
+                "Creative 重试改变了已确定且满足业务边界的旁白目标。",
+                retry_feedback=_creative_duration_retry_feedback(
+                    brief,
+                    planned_target_seconds=planned_narration_target,
+                ),
+            )
+        try:
+            if current is not None:
+                _validate_creative_revision(brief, request, current, comment)
+            else:
+                _validate_creative_brief(brief, request)
+        except StoryboardError as exc:
+            retry_feedback = ""
+            duration_candidate: dict[str, float] | None = None
+            if target_within_bounds and not narration_duration_is_consistent(
+                narration.full_script,
+                narration.target_duration_seconds,
+            ):
+                retry_feedback = _creative_duration_retry_feedback(brief)
+                estimated = estimate_narration_duration(narration.full_script)
+                if (
+                    math.isfinite(estimated)
+                    and 0 < estimated <= request.duration_seconds
+                ):
+                    try:
+                        if current is not None:
+                            _validate_creative_revision(
+                                brief,
+                                request,
+                                current,
+                                comment,
+                                allow_narration_duration_mismatch=True,
+                            )
+                        else:
+                            _validate_creative_brief(
+                                brief,
+                                request,
+                                allow_narration_duration_mismatch=True,
+                            )
+                    except StoryboardError:
+                        pass
+                    else:
+                        duration_candidate = {
+                            "target_duration_seconds": narration.target_duration_seconds,
+                            "estimated_duration_seconds": estimated,
+                            "duration_gap_seconds": round(
+                                abs(estimated - narration.target_duration_seconds),
+                                2,
+                            ),
+                        }
+            raise CreativeBusinessValidationError(
+                f"创意方案业务校验失败：{exc}",
+                retry_feedback=retry_feedback,
+                duration_candidate=duration_candidate,
+            ) from exc
 
     return validate
 
@@ -1335,6 +1469,7 @@ density 只能是 low、medium、high；preferred_position 只能是 bottom_cent
         f"{json.dumps(extracted_av_constraints.model_dump(), ensure_ascii=False)}\n"
         "请生成 Creative Brief JSON。"
     )
+    best_effort: dict[str, Any] = {}
     data = deepseek_json_request(
         api_key,
         system,
@@ -1348,6 +1483,7 @@ density 只能是 low、medium、high；preferred_position 只能是 bottom_cent
             "类型、枚举和字段必须符合模板。旁白文本量必须与 target_duration_seconds 匹配，"
             "且时长不得超过视频总时长。两个 constraints 对象都必须原样复制。"
         ),
+        creative_best_effort_callback=best_effort.update,
     )
     brief = _parse(CreativeBrief, data, "创意方案").model_copy(
         update={
@@ -1355,7 +1491,12 @@ density 只能是 low、medium、high；preferred_position 只能是 bottom_cent
             "av_timeline_constraints": extracted_av_constraints,
         }
     )
-    return _validate_creative_brief(brief, request, extracted_av_constraints)
+    return _validate_creative_brief(
+        brief,
+        request,
+        extracted_av_constraints,
+        allow_narration_duration_mismatch=bool(best_effort),
+    )
 
 
 def revise_creative_brief(
@@ -1392,6 +1533,7 @@ def revise_creative_brief(
         f"{json.dumps(extracted_av_constraints.model_dump(), ensure_ascii=False)}\n"
         f"{_planning_context(request, visual_analysis_result, visual_constraints, reference_asset_context)}"
     )
+    best_effort: dict[str, Any] = {}
     data = deepseek_json_request(
         api_key,
         system,
@@ -1407,6 +1549,7 @@ def revise_creative_brief(
             "旁白预计时长不得超过视频总时长，文本量必须匹配目标时长。"
             "若用户修改旁白时长，full_script 必须同步改写。"
         ),
+        creative_best_effort_callback=best_effort.update,
     )
     revised = _parse(CreativeBrief, data, "修改后创意方案").model_copy(
         update={
@@ -1419,6 +1562,7 @@ def revise_creative_brief(
         request,
         current,
         comment,
+        allow_narration_duration_mismatch=bool(best_effort),
     )
 
 
