@@ -2,7 +2,7 @@
 
 ## A. Git/Baseline
 
-- 正式仓库：`D:\desktop\AI项目\codex\视频生成agent`
+- 正式仓库：`<repo-root>`
 - 分支：`web-v1`
 - 基线 HEAD：`6ffc51e feat: add AI prompt revision workflow`
 - 本轮是既有未提交 `Creative Narration Duration Retry Hotfix` 的继续实施；开始时已有该 Hotfix 的两处代码变更、专项测试和本报告，未覆盖其他用户改动。

@@ -14,6 +14,13 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:5173",
     "http://localhost:5173",
 )
+DEFAULT_PROJECTS_DIRECTORY_NAME = "AIProductVideoAgentProjects"
+
+
+def default_projects_root() -> Path:
+    """Return the per-user project root without depending on the checkout path."""
+
+    return Path.home() / DEFAULT_PROJECTS_DIRECTORY_NAME
 
 
 class BackendSettings(BaseModel):
@@ -23,7 +30,7 @@ class BackendSettings(BaseModel):
 
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=8000, ge=1, le=65535)
-    projects_root: Path = Path(r"D:\desktop\视频生成Agent产出")
+    projects_root: Path = Field(default_factory=default_projects_root)
     runtime_root: Path | None = None
     task_workers: int = Field(default=2, ge=1, le=8)
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
@@ -66,6 +73,7 @@ class BackendSettings(BaseModel):
         """Read only Web-specific environment variables without loading secrets."""
 
         raw_origins = os.getenv("WEB_CORS_ORIGINS")
+        raw_projects_root = os.getenv("WEB_PROJECTS_ROOT")
         raw_runtime_root = os.getenv("WEB_RUNTIME_ROOT")
         cors_origins = (
             tuple(part for part in raw_origins.split(","))
@@ -75,11 +83,16 @@ class BackendSettings(BaseModel):
         return cls(
             host=os.getenv("WEB_HOST", "127.0.0.1"),
             port=os.getenv("WEB_PORT", "8000"),
-            projects_root=os.getenv(
-                "WEB_PROJECTS_ROOT",
-                r"D:\desktop\视频生成Agent产出",
+            projects_root=(
+                Path(raw_projects_root).expanduser()
+                if raw_projects_root and raw_projects_root.strip()
+                else default_projects_root()
             ),
-            runtime_root=raw_runtime_root or None,
+            runtime_root=(
+                Path(raw_runtime_root).expanduser()
+                if raw_runtime_root and raw_runtime_root.strip()
+                else None
+            ),
             task_workers=os.getenv("WEB_TASK_WORKERS", "2"),
             cors_origins=cors_origins,
         )

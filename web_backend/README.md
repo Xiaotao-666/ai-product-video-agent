@@ -1,162 +1,36 @@
-# Web Backend Phase 1
+# Web Backend
 
-This directory contains the local FastAPI backend for the AI Product Video
-Agent. Creative, Storyboard, and Video Prompt generation, approval, targeted
-revision, and full regeneration are the currently executable planning actions.
-Shot generation, assembly, and export actions remain unavailable.
+本目录是 AI Product Video Agent 的本地 FastAPI Backend，负责安全 DTO、项目读写、Durable Task、Planning、Shot、Assembly 与 PostProduction Web 操作。业务语义继续复用根目录 Core。
 
-## Local start
+完整安装、Provider 配置和 clone-to-run 步骤见根目录 [README](../README.md)。
 
-From the repository root, use the existing virtual environment:
+## Local Development
+
+从仓库根目录启动：
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn web_backend.app:app --host 127.0.0.1 --port 8000
 ```
 
-The supported Web V1 binding is local loopback only:
+- API：`http://127.0.0.1:8000`
+- API docs：`http://127.0.0.1:8000/docs`
+- Health：`http://127.0.0.1:8000/api/health`
 
-```text
-http://127.0.0.1:8000
+Backend 在没有 Provider Key 时仍可启动；能力接口会把对应 Provider 标记为 unavailable，不会在启动时调用 Provider。
+
+## Local Runtime
+
+- `WEB_PROJECTS_ROOT` 默认：`%USERPROFILE%\AIProductVideoAgentProjects`
+- `WEB_RUNTIME_ROOT` 默认：`{WEB_PROJECTS_ROOT}/.web_runtime`
+- `WEB_TASK_WORKERS` 默认：`2`
+- CORS 默认允许 `127.0.0.1:5173` 与 `localhost:5173`
+
+当前只支持一个 Uvicorn worker。不要同时使用 CLI 与 Web Backend 写入同一项目。
+
+## Tests
+
+从仓库根目录运行 Web Backend 测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests\web -p "test_*.py"
 ```
-
-Interactive API documentation is available at:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## Phase 1 API
-
-```text
-GET  /api/health
-GET  /api/capabilities
-GET  /api/projects
-POST /api/projects
-GET  /api/projects/{project_id}
-GET  /api/projects/{project_id}/workflow
-POST /api/projects/{project_id}/planning/creative/generate
-POST /api/projects/{project_id}/planning/creative/retry
-POST /api/projects/{project_id}/planning/creative/approve
-POST /api/projects/{project_id}/planning/creative/revise
-POST /api/projects/{project_id}/planning/creative/regenerate
-POST /api/projects/{project_id}/planning/storyboard/generate
-POST /api/projects/{project_id}/planning/storyboard/revise
-POST /api/projects/{project_id}/planning/storyboard/regenerate
-POST /api/projects/{project_id}/planning/storyboard/approve
-POST /api/projects/{project_id}/planning/video-prompts/generate
-POST /api/projects/{project_id}/planning/video-prompts/revise
-POST /api/projects/{project_id}/planning/video-prompts/regenerate
-GET /api/projects/{project_id}/references
-POST /api/projects/{project_id}/references
-GET /api/projects/{project_id}/references/{asset_id}/image
-GET /api/projects/{project_id}/shots/{shot_id}/generation/options
-POST /api/projects/{project_id}/shots/{shot_id}/generation/preflight
-POST /api/projects/{project_id}/planning/video-prompts/approve
-```
-
-The workflow endpoint reports deterministic `available_actions`. The Creative
-generate endpoint accepts only projects whose current actions include
-`GENERATE_CREATIVE`, returns a durable task with HTTP 202, and performs the
-same check again after the worker acquires the project write lock. Capabilities
-contain only availability booleans and never return credential material or
-local paths.
-
-The default development CORS origins are:
-
-```text
-http://127.0.0.1:5173
-http://localhost:5173
-```
-
-## Concurrency limit
-
-Web writes are serialized only inside one backend process. Use one Uvicorn
-worker, and do not let the CLI and Web backend write the same project at the
-same time. Cross-process task recovery and locking are not part of Phase 1.
-
-## Durable local task foundation
-
-Phase 3A-1 adds durable Web execution tracking without exposing a task submit
-endpoint or connecting any business action. Task records are atomically stored
-under `WEB_RUNTIME_ROOT/tasks` (by default the `.web_runtime` directory beside
-the Agent projects), never inside an Agent project.
-
-```text
-GET /api/tasks/{task_id}
-GET /api/projects/{project_id}/tasks
-```
-
-`WEB_TASK_WORKERS` defaults to `2`. Reads do not create the runtime directory;
-the first future internal task submission creates it lazily. On startup,
-abandoned `QUEUED` or `RUNNING` records become `INTERRUPTED` and are never
-automatically replayed. The runner does not retry business callables.
-
-The current implementation remains limited to one Uvicorn worker. The CLI and
-Web backend must not write the same project concurrently.
-
-## Creative tasks and approval
-
-Generate, revise, and regenerate use distinct durable task operations and the
-shared Core Creative callables, so Core remains responsible for DeepSeek
-prompts, structured-output retry, atomic canonical replacement, evaluation
-history, and `project.json` review state. Revise feedback is captured only by
-the in-process worker and Core evaluation history; it is never copied into a
-Web task record. The Web runner does not retry provider calls. A successful
-task stores only a small Creative resource reference; clients reload Creative
-and Workflow through the GET APIs. Approval remains a short synchronous action
-and never starts Storyboard automatically.
-
-## Storyboard generation task
-
-Storyboard generation is available only after Creative approval and uses the
-durable `STORYBOARD_GENERATE` operation. The endpoint returns HTTP 202, and the
-worker revalidates workflow state after acquiring the project lock. Shared Core
-logic remains responsible for the DeepSeek prompt, structured-output checks,
-deterministic A/V scheduling, canonical atomic save, evaluation history, and
-transition to Storyboard review. A successful task returns only a small
-Storyboard resource reference; clients reload Project, Workflow, and
-Storyboard through GET APIs. Generation never auto-approves Storyboard or
-starts Video Prompt generation.
-
-Storyboard approval is a short synchronous HTTP 200 action. It rejects active
-project tasks, validates `APPROVE_STORYBOARD` before and after acquiring the
-existing project write lock, then calls the shared Core approval transition.
-It creates no durable task, does not modify the Storyboard canonical, and does
-not generate Video Prompts or call any provider.
-
-Storyboard revise and regenerate are distinct durable operations. Revise uses
-the current canonical Storyboard plus bounded feedback; regenerate deliberately
-does not pass the old Storyboard or feedback to Core. Both reuse Core provider
-validation and deterministic Timeline Scheduler behavior, atomically replace
-the canonical only after validation, and return to `WAITING_REVIEW`. Feedback
-is not stored in Web task JSON, and neither action starts Video Prompt work.
-
-Video Prompt revise and regenerate are distinct per-Shot durable operations.
-Revise sends each Shot only its own current visual core plus bounded global
-feedback; regenerate sends no old Prompt or feedback to DeepSeek. Their
-operation-aware progress fingerprints cannot reuse initial generation cache,
-while a failed round can resume already completed Shots. Python recompiles all
-deterministic control blocks, then publishes the complete canonical Prompt set
-and advances each Shot's independent active Prompt version. The approved Prompt
-pointer is untouched, review remains `WAITING_REVIEW`, and no Shot video starts.
-
-The Backend loads the same repository `.env` file as the CLI during server
-startup. Capability preflight checks only whether DeepSeek is configured and
-never returns the credential. Automated tests mock the Core Provider call.
-
-## Project Reference Asset Library
-
-Reference images are project-level, provider-neutral assets stored by the
-existing Core `ReferenceAssetManager`. The synchronous multipart upload accepts
-one file per request, runs the Core format, size, dimension, integrity,
-SHA-256 deduplication, and stable `ref_###` allocation rules under the existing
-per-project write lock, and returns only a path-free public DTO. GET list and
-preview remain strictly read-only.
-
-Uploading an asset does not choose `reference_asset` or `first_frame`, does not
-advance workflow state, and does not create a durable task. The same stable
-`asset_id` can later be selected explicitly for either Shot visual-input mode.
-The manifest remains purpose- and provider-neutral. This phase creates no
-analysis resource or status and performs no Vision, LLM, image-model, video,
-TTS, or FFmpeg call; any future multimodal analysis must remain a separate
-resource keyed by the existing `asset_id`.

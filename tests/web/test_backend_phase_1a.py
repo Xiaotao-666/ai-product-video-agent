@@ -208,19 +208,18 @@ class WebBackendPhase1ATests(unittest.TestCase):
     def test_14_settings_defaults_are_local_and_do_not_touch_disk(self):
         from web_backend.settings import BackendSettings
 
-        with patch.dict(
-            os.environ,
-            {"WEB_HOST": "", "WEB_PORT": "", "WEB_PROJECTS_ROOT": ""},
-            clear=False,
-        ):
-            for name in ("WEB_HOST", "WEB_PORT", "WEB_PROJECTS_ROOT"):
-                os.environ.pop(name, None)
-            settings = BackendSettings.from_environment()
+        with TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir) / "portable-home"
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("web_backend.settings.Path.home", return_value=home),
+            ):
+                settings = BackendSettings.from_environment()
         self.assertEqual(settings.host, "127.0.0.1")
         self.assertEqual(settings.port, 8000)
         self.assertEqual(
             settings.projects_root,
-            Path(r"D:\desktop\视频生成Agent产出"),
+            home / "AIProductVideoAgentProjects",
         )
 
     def test_15_settings_accept_web_specific_environment_overrides(self):

@@ -10,7 +10,7 @@
 
 | 项目 | 结果与证据 |
 | --- | --- |
-| A. Git / Baseline | 正式仓库：D:\desktop\AI项目\codex\视频生成agent。开始时 web-v1 / c1c81d8，工作树 clean。结束时分支、HEAD 未变；HEAD 与本地 origin/web-v1 引用 ahead/behind = 0/0。未 fetch，未声称远端实时状态。 |
+| A. Git / Baseline | 正式仓库：<repo-root>。开始时 web-v1 / c1c81d8，工作树 clean。结束时分支、HEAD 未变；HEAD 与本地 origin/web-v1 引用 ahead/behind = 0/0。未 fetch，未声称远端实时状态。 |
 | B. Root Cause Preserved | 保留审计结论：2061 是当前账户套餐拒绝所选组合，不等于产品能力不支持。未修改能力表、套餐逻辑或默认路由。 |
 | C. Video Readiness Fix | 版本记录不再等于 Video READY。要求现有 Bundle 校验通过、实际 video.mp4 非空且相关文件完整；拒绝越界/符号链接。失败记录无视频显示 FAILED；损坏 Bundle 返回未就绪，不使只读页面报错。Prompt READY 保持。 |
 | D. Failure Recovery Classification | 后端安全 DTO 区分 RETRY_ALLOWED、RETRY_BLOCKED_SUBMISSION_UNKNOWN、RESUME_AVAILABLE、BUSINESS_ALREADY_COMPLETE、ACTIVE_TASK、BLOCKED、NOT_APPLICABLE。前端不从错误文字推断资格。 |

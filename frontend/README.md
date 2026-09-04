@@ -1,19 +1,22 @@
-# Web Frontend Phase 2C
+# Web Frontend
 
-This is the local React/Vite interface for the AI Product Video Agent. Phase 2C
-adds local project creation while preserving the Projects and System pages.
+本目录是 AI Product Video Agent 的本地 React/Vite 界面。完整的系统要求、环境配置和 clone-to-run 步骤见根目录 [README](../README.md)。
+
+## Development
 
 ```powershell
-npm install
+npm ci
 npm run dev
 ```
 
-The development server binds to `http://127.0.0.1:5173`. The default backend
-is `http://127.0.0.1:8000`; it can be changed with `VITE_API_BASE_URL`.
+- 开发服务器：`http://127.0.0.1:5173`
+- 默认 Backend：`http://127.0.0.1:8000`
 
-- `/projects` reads the safe project summaries from `GET /api/projects`.
-- `/projects/new` creates a standard Agent project with `POST /api/projects`.
-- `/system` reads backend health and capability status.
-- `/` redirects to `/projects`.
+测试与构建：
 
-Frontend environment variables must never contain provider credentials.
+```powershell
+npm test
+npm run build
+```
+
+需要修改 Backend 地址时，复制 `.env.example` 为 `.env` 并设置 `VITE_API_BASE_URL`。Frontend 环境只能包含公开的 API 地址，禁止放置 DeepSeek、MiniMax 或 TTS Secret。
