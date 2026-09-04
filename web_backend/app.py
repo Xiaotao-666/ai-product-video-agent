@@ -5,9 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
-from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -61,11 +59,10 @@ from web_backend.services.voice import VoiceWebService
 from web_backend.services.subtitle import SubtitleWebService
 from web_backend.services.music import MusicWebService
 from web_backend.services.final_export import FinalExportWebService
-from web_backend.settings import BackendSettings
+from web_backend.settings import BackendSettings, load_root_environment
 
 
 lifecycle_logger = logging.getLogger("uvicorn.error.web_lifecycle")
-REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -213,9 +210,6 @@ def _initialize_local_resources(application: FastAPI) -> None:
 
 @asynccontextmanager
 async def backend_lifespan(application: FastAPI):
-    # Match the CLI credential source without exposing values through settings
-    # or capability responses. Loading configuration performs no provider call.
-    load_dotenv(REPOSITORY_ROOT / ".env")
     _initialize_local_resources(application)
     interrupted = application.state.task_service.recover_interrupted_tasks()
     if interrupted:
@@ -242,6 +236,9 @@ def create_app(
     settings: BackendSettings | None = None,
     lock_manager: ProjectLockManager | None = None,
 ) -> FastAPI:
+    # Bootstrap configuration before settings and capability services are built.
+    # The explicit path is CWD-independent; process values retain precedence.
+    load_root_environment()
     application = FastAPI(
         title="AI Product Video Agent API",
         version="v1",

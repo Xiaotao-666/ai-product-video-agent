@@ -7,6 +7,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -15,6 +16,17 @@ DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
 )
 DEFAULT_PROJECTS_DIRECTORY_NAME = "AIProductVideoAgentProjects"
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+ROOT_ENV_PATH = REPOSITORY_ROOT / ".env"
+
+
+def load_root_environment(env_path: Path | None = None) -> bool:
+    """Load the repository-root dotenv file without overriding process values."""
+
+    return load_dotenv(
+        dotenv_path=env_path if env_path is not None else ROOT_ENV_PATH,
+        override=False,
+    )
 
 
 def default_projects_root() -> Path:
